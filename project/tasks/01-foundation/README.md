@@ -17,13 +17,24 @@ Linux — with the local gate green on both.
 
 ## Outstanding before the phase is genuinely closed
 
-- **Closing a dirty tab discards it without prompting.** The only outstanding
-  item with data-loss consequences.
-- **No keyboard shortcuts.** Ctrl+S is table stakes for a text editor; it
-  currently exists only as a label in the File menu.
 - **Configuration loading** (task 04) has not started. Logging is wired and
-  reads `BACHELORPAD_LOG`.
-- **Time to first interaction is unmeasurable** under the default renderer,
-  so half of the ADR-0017 target is unverified.
+  reads `BACHELORPAD_LOG`. This is the last unstarted task in the phase.
+- **Keyboard shortcut delivery is unverified.** The bindings are wired and the
+  Slint compiler validates them, but no key has actually been pressed — this
+  environment has no interactive desktop. Worth 30 seconds of manual checking.
+- **Time to first interaction is unmeasurable** under the default renderer, so
+  half of the ADR-0017 target is unverified. Slint's software renderer exposes
+  no rendering notifier.
+- **Scroll smoothness** under CPU rasterisation is unmeasured; it needs a
+  capture rig. This is the standing revert condition on ADR-0017.
 - **Comparative Linux timing** needs a native machine; WSLg is not
   representative.
+- **Real cursor position** in the status bar needs `bp-editor`.
+
+## Closed since the last review
+
+Unsaved-changes prompting (tab close, Ctrl+W, and window close), keyboard
+shortcuts, the per-keystroke gutter rebuild, and typing-latency measurement.
+The gate also gained a `launch` stage, because the one bug that reached a
+"green" state was a binary that could not start — something neither
+`cargo build` nor `cargo test` ever checks.

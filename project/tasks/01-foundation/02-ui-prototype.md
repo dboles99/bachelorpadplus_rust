@@ -45,18 +45,28 @@ window, menu bar, tab strip, editor pane, status bar and four themes.
       back that way.
 - [x] Builds and runs on Windows and Linux.
 - [x] Both spikes deleted; instrumentation moved into the real application.
-- [ ] **Keyboard shortcuts.** Ctrl+N/O/S/Shift+S exist as menu labels only.
-      A `TextInput` with focus consumes key events before an ancestor
-      `FocusScope` sees them, so this needs a deliberate solution rather than
-      a wrapper.
+- [x] **Keyboard shortcuts.** Ctrl+N/O/S/Shift+S/W via Slint `KeyBinding`
+      elements in a `FocusScope` that wraps the content. Bindings match during
+      the capture phase, from the Window down toward the focused element, so
+      the editor no longer swallows Ctrl+S. **Delivery is unverified** — this
+      environment has no interactive desktop to send keystrokes from, so the
+      wiring is correct by construction and by the compiler's validation of
+      `@keys`, but has not been pressed.
+- [x] **Unsaved-changes prompt on close.** Closing a dirty tab, closing the
+      active tab with Ctrl+W, and closing the window all prompt Save / Discard
+      / Cancel. A save that fails or is abandoned keeps the tab open rather
+      than discarding the work.
+- [x] **Typing latency measured.** `--latency-probe`; see ADR-0017. 376 µs p50
+      at 1 MB against a 16 ms frame budget.
+- [x] **Gutter no longer rebuilt on every keystroke** — only when the line
+      count changes.
 - [ ] **Real cursor position.** The status bar reports a line count, not
       Ln/Col. Needs editor state from `bp-editor`.
-- [ ] **Unsaved-changes prompt on close.** Closing a dirty tab currently
-      discards it. `Workspace::close` returns the document so the caller can
-      prompt; the caller does not yet.
-- [ ] **Rope buffer.** Text lives in a `HashMap<DocumentId, String>` and the
-      gutter is rebuilt on every keystroke. Correct for notes, wrong for the
-      large files specs.md section 5 promises. `bp-buffer`, phase 2.
+- [ ] **Rope buffer.** Text lives in a `HashMap<DocumentId, String>`, and
+      Slint hands the whole buffer back on every edit, so a keystroke copies
+      the document. Measured: linear, reaching the frame budget near 40 MB.
+      That makes `bp-buffer` a phase-4 large-file concern rather than a
+      phase-1 correctness one.
 
 ## Artifacts
 
@@ -68,5 +78,8 @@ window, menu bar, tab strip, editor pane, status bar and four themes.
 
 ## Notes
 
-The unsaved-changes prompt is the one gap here with data-loss consequences.
-Everything else on the outstanding list is an inconvenience.
+Enabling rfd's `common-controls-v6` feature made the binary fail to start with
+`STATUS_ENTRYPOINT_NOT_FOUND` before `main`. Neither `cargo build` nor
+`cargo test` catches that, because neither loads the linked executable. Any
+change to link-time features or manifests needs a launch check, not just a
+green gate.
