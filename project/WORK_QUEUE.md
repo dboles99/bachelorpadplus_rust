@@ -19,13 +19,15 @@ which is not the same list.
 
 ## Collision rules
 
-> **One agent in `crates/bp-ui/` at a time.** `lib.rs` is ~2,400 lines and
-> every wiring item touches it. Two agents in there produce a merge, not a
-> feature.
+`bp-ui/src/lib.rs` has been split, so `state.rs`, `editor_view.rs` and
+`dispatch.rs` can take different agents. **`ui/app.slint` cannot** — it is one
+1,100-line file and remains the real bottleneck. Every remaining wiring item
+except W12 touches it, so:
 
-**T0 below exists to remove that bottleneck.** Until it is done, wiring items
-must be taken one at a time, or batched by menu so one agent does several
-related rows in a single pass — which is usually faster than queueing anyway.
+> **One agent in `crates/bp-ui/ui/app.slint` at a time.**
+
+Batching by menu so one agent does several related rows in a pass is usually
+faster than queueing anyway.
 
 Library items are one crate each and parallel-safe with everything.
 
@@ -35,26 +37,29 @@ so whoever finishes an item updates them as part of it.
 
 ---
 
-## T0 — do this first if more than one agent is working
+## Done
 
-| # | Item | Where |
+| # | Item | Landed as |
 | --- | --- | --- |
-| T0 | **Split `bp-ui/src/lib.rs` into modules.** Suggested seams, which the file already has as comment banners: `state.rs` (`AppState` and its methods), `editor_view.rs` (the `EditorSurface` handlers, `push_editor_view`, `draw_editor_view`, `place_caret`, `apply_editor_command`, `translate_key`), `dispatch.rs` (the menu-action match), leaving `lib.rs` as `run_with` and the callback wiring. Tests move with the code they cover. **Pure refactor — no behaviour change, no test deleted, no test added.** The gate passing is the whole acceptance criterion. | `bp-ui` |
+| T0 | Split `bp-ui/src/lib.rs` into `state` / `editor_view` / `dispatch` | `b6e2544` |
+| W1 | Duplicate Line, Move Line Up / Down | Edit menu, Ctrl+D / Alt+Up / Alt+Down |
+| W2 | Paste transformations | Edit menu, per clipboard entry |
+| W3 | CSV to JSON / JSON Lines / Column Types | Data menu, Csv and Tsv only |
+| W5 (library half) | `Editor::go_to_line`, `go_to_position` | `bp-editor` |
+| W8 (library half) | `bp_naming::{Stamp, render}` | `bp-naming` |
+| W10 (library half) | `bp_semantic::statistics` | `bp-semantic` |
+| W14 (library half) | `tab_width`, `indent_spaces` | `bp-config` |
 
-Afterwards, most wiring items below touch different modules and can run in
-parallel.
-
----
+The library halves have no menu rows yet: W5, W8, W10 and W14 each still
+need their wiring item below.
 
 ## Tier 1 — pure wiring (the capability exists and is tested)
 
-Nothing here needs a new library function. Each is `bp-ui` + `app.slint` only.
+Nothing here needs a new library function. Each is `bp-ui` + `app.slint` only,
+so each needs the `app.slint` lock.
 
 | # | Item | Capability already in | Notes |
 | --- | --- | --- | --- |
-| W1 | **Duplicate Line, Move Line Up / Down** | `bp_editor::Editor::{duplicate_line, move_line_up, move_line_down}` | The rows exist greyed in `menus.rs`. Shortcuts: Ctrl+D, Alt+Up, Alt+Down. **Caret-dependent** — enable only under `--editor-view`, grey otherwise with the reason, exactly as the menu already does for planned rows. Free id block: 95–99. |
-| W2 | **Paste transformations** | `bp_clipboard::{Transform, apply, transforms_for}` | specs §14. Offer only `transforms_for(entry.kind)`, and only when `apply` returns `Some` — a row that does nothing is worse than no row. **`PrettyJson`/`MinifyJson` return `None` on purpose**: route those two to `bp_data::json_format` / `json_minify`, which is the one JSON implementation. The doc comment on `apply` explains why. |
-| W3 | **CSV → JSON, CSV → JSON Lines, Column Types** | `bp_data::{delimited_to_json, delimited_to_jsonl, column_types}` | Add to the `Format::Csv \| Format::Tsv` arm of `menus::data()`. The first two are `apply_to_active`; `column_types` reports into the status bar like `DATA_REPORT` does. The `DATA_*` id block has room. |
 | W4 | **Find-box options** | `bp_search::Query{case_sensitive, whole_word, regex}` | Three toggles in the find bar, feeding fields that already exist and are already tested. Everything currently builds `Query::literal`, so regex search is implemented and unreachable. The find bar is a collapsed `Rectangle`, not an `if` — keep it that way. |
 | W6 | **Zoom** | `bp_config::Config::font_size` (6–96, default 14) | The size is hard-coded as `14px` in several places in `app.slint`; make it one property fed from config **first**, then add Ctrl+= / Ctrl+- / Ctrl+0 and the View menu row. The editor surface already derives its character advance from the font size, so zoom should just work there — verify it does. |
 | W7 | **Double- and triple-click selection** | `bp_editor::Editor::{select_word_at, select_line_at}` | `TouchArea` has `double-clicked`; triple needs counting clicks yourself. **`EditorSurface` only** — `TextInput` already does this natively, so do not touch that path. |
@@ -62,18 +67,18 @@ Nothing here needs a new library function. Each is `bp-ui` + `app.slint` only.
 ## Tier 2 — a small library addition, then wire
 
 Each needs one function in a library crate (with tests) before the wiring.
-The library half is parallel-safe; the wiring half obeys the T0 rule.
+The library half is parallel-safe; the wiring half needs the `app.slint` lock.
 
 | # | Item | Library work | Wiring |
 | --- | --- | --- | --- |
-| W5 | **Go to Line** | `bp-editor`: line number → caret offset, clamped. `Buffer::line_start` already does the arithmetic. | Reuse the find-bar pattern rather than inventing a dialog. Caret-dependent, so `--editor-view` only. |
-| W8 | **Insert Date / Time** | `bp-naming` already formats `DDMMMYYYY`; add the display formats specs §4 wants for insertion. Keep it clock-free — take the time as a parameter, as that crate does throughout. | The Insert menu is currently all planned rows. Three of them become real. |
+| W5 | **Go to Line** | **done** — `Editor::go_to_line` returns whether the line existed, so the caller can say "there are only 42 lines" and still move somewhere sensible | Reuse the find-bar pattern rather than inventing a dialog. Caret-dependent, so `--editor-view` only. |
+| W8 | **Insert Date / Time** | **done** — `Stamp::all()` gives the menu order and its labels | The Insert menu is currently all planned rows. `Stamp::all()` turns five of them real; the shell supplies the clock, since `bp-naming` never reads one. |
 | W9 | **Save Copy** | none — `bp_files::atomic_write` is enough | File menu. **The subtle part**: a copy must not change the document's path, must not clear its dirty flag, and must not touch the recent-files list. Getting that wrong turns Save Copy into Save As. Test those three. |
-| W10 | **Document statistics** | a small `bp-semantic` or `bp-core` function: characters, words, lines, and the same for the selection | Status bar, plus Tools ▸ Document Inspector (specs §18). Must not be recomputed on every keystroke over a whole document — see the `active_text()` trap in R011. |
+| W10 | **Document statistics** | **done** — `bp_semantic::statistics`, single pass | Status bar, plus Tools ▸ Document Inspector (specs §18). Must not be recomputed on every keystroke over a whole document — see the `active_text()` trap in R011. |
 | W11 | **Drag and drop to open** | none | specs §4 requires it. Slint has `DropArea`. Wire to `AppState::open`; multiple files open multiple tabs, as the command line already does. |
 | W12 | **Tab context menu** | none | Close Others, Close All, Copy Full Path. Reuse `close_with_prompt` so unsaved work still prompts — that is the whole risk in this item. |
 | W13 | **Follow System theme** | `bp-theme`: resolve a system preference to a `ThemeId` | specs §16 lists it as a built-in. Slint exposes the colour scheme; ADR-0009 says themes are data, so this resolves to an existing palette rather than adding a new one. |
-| W14 | **Indentation settings** | `bp-config`: tab width, and spaces-vs-tabs | `TAB_WIDTH` is currently a `const` in `bp-ui`, and the Tab key inserts a literal `\t`. Both should follow the setting. `bp_editor::view` already takes `tab_width` as a parameter throughout, so the library side is ready. |
+| W14 | **Indentation settings** | **done** — `Config::{tab_width, indent_spaces}` | `TAB_WIDTH` is still a `const` in `bp-ui/src/editor_view.rs`, and the Tab key still inserts a literal tab. Both should follow the setting now that it exists. |
 
 ## Blocked, and by what
 
