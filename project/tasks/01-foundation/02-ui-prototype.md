@@ -1,59 +1,72 @@
 # Task: ui-prototype
 
 **Phase:** 01-foundation
-**Status:** Spike complete; integration blocked on BP-ADR-0015 sign-off
+**Status:** Shell running on both platforms; keyboard shortcuts and buffer outstanding
 
 ## Objective
 
 Choose the UI toolkit on evidence, then build the BachelorPad+ shell on it:
 window, menu bar, tab strip, editor pane, status bar and four themes.
 
-`PROJECT_MEMORY.md` requires the toolkit be benchmarked and prototyped before
-an irreversible commitment, so this task splits in two: decide, then build.
-
 ## Acceptance criteria
 
 ### Part A — toolkit decision (done)
 
-- [x] The same shell implemented on at least two candidate toolkits, with
-      identical release profiles so the numbers are comparable.
-- [x] Both instrumented to report readiness at the same point (first frame
-      rendered), verified rather than assumed.
+- [x] The same shell implemented on two candidate toolkits, identical release
+      profiles.
+- [x] Both instrumented to report readiness at the same point, verified rather
+      than assumed.
 - [x] Startup, idle memory and binary size measured by a repeatable harness,
-      with raw data recorded under `artifacts/benchmarks/`.
-- [x] Results compared against the specs.md section 22 targets, including
-      where they are missed.
-- [x] Written up as an ADR with the caveats stated.
-- [ ] ADR-0015 accepted by the owner.
-- [ ] Linux measurements taken (needs a Rust toolchain in WSL; see
-      `docs/governance/LOCAL_CI.md`).
+      raw data under `artifacts/benchmarks/`.
+- [x] Results compared against specs.md section 22, including where missed.
+- [x] Written up as ADR-0015, accepted.
+- [x] Startup targets resolved separately as ADR-0017, with the software
+      renderer adopted as the default.
+- [x] Linux viability confirmed — builds, links and runs.
+- [ ] Comparative Linux *timing*. WSLg is not representative; needs a native
+      machine.
 
-### Part B — the real shell (not started)
+### Part B — the real shell
 
-- [ ] Window, menu bar (all 14 menus from `docs/product/MENU_MAP.md`), tab
-      strip, editor pane and two-line status bar, built in `bp-ui`.
-- [ ] Four themes from ADR-0009, defined as data, switchable at runtime,
-      restyling every surface including text input.
-- [ ] Status bar renders from `bp-core`'s `Document`, and a recovery
-      checkpoint is never displayed as a disk save (ADR-0005).
-- [ ] New / Open / Save / Save As wired to `bp-files`, with error states
-      surfaced to the user rather than logged.
-- [ ] Multiple documents open as tabs, backed by `bp-core::Workspace`.
-- [ ] Builds and runs on Windows and Linux.
-- [ ] The losing spike deleted and the winner folded into `bp-ui`.
+- [x] Window, 14-menu bar, tab strip, editor pane and two-line status bar,
+      built in `bp-ui`.
+- [x] Four themes from ADR-0009 supplied as data from `bp-theme`.
+      `app.slint` contains no colour literals.
+- [x] Status bar renders from `bp-core`'s `Document`; a recovery checkpoint is
+      never displayed as a disk save (ADR-0005).
+- [x] New / Open / Save / Save As wired to `bp-files`, with errors shown in
+      the status bar rather than logged and swallowed.
+- [x] Save on a never-saved document escalates to Save As instead of silently
+      doing nothing.
+- [x] Save As suggests a filename in the ADR-0003 grammar.
+- [x] Multiple documents open as tabs, backed by `bp-core::Workspace`;
+      closing the last tab opens a fresh one.
+- [x] Encoding and line endings round-trip: a CRLF file with a BOM is written
+      back that way.
+- [x] Builds and runs on Windows and Linux.
+- [x] Both spikes deleted; instrumentation moved into the real application.
+- [ ] **Keyboard shortcuts.** Ctrl+N/O/S/Shift+S exist as menu labels only.
+      A `TextInput` with focus consumes key events before an ancestor
+      `FocusScope` sees them, so this needs a deliberate solution rather than
+      a wrapper.
+- [ ] **Real cursor position.** The status bar reports a line count, not
+      Ln/Col. Needs editor state from `bp-editor`.
+- [ ] **Unsaved-changes prompt on close.** Closing a dirty tab currently
+      discards it. `Workspace::close` returns the document so the caller can
+      prompt; the caller does not yet.
+- [ ] **Rope buffer.** Text lives in a `HashMap<DocumentId, String>` and the
+      gutter is rebuilt on every keystroke. Correct for notes, wrong for the
+      large files specs.md section 5 promises. `bp-buffer`, phase 2.
 
 ## Artifacts
 
-- `spikes/ui-toolkit/` — the two candidate shells
-- `scripts/Measure-UiSpike.ps1` — measurement harness
-- `artifacts/ui/ui-toolkit-spike-17AUG2026.md` — findings
-- `artifacts/benchmarks/ui-toolkit-*.json` — raw measurements
-- `docs/decisions/ADR-0015.md` — the decision
+- `crates/bp-ui`, `crates/bp-theme`
+- `scripts/Measure-Startup.ps1`
+- `artifacts/ui/ui-toolkit-spike-17AUG2026.md`
+- `artifacts/benchmarks/*.json`
+- `docs/decisions/ADR-0015.md`, `docs/decisions/ADR-0017.md`
 
 ## Notes
 
-Neither candidate met the specs.md section 22 startup targets, missing cold
-start by roughly 6-8x. That is tracked as an open item in `DECISIONS.md` and
-needs its own decision — a software-renderer spike, revised targets, or a
-split between time-to-window and time-to-interactive. Do not start Part B
-assuming the targets are reachable as written.
+The unsaved-changes prompt is the one gap here with data-loss consequences.
+Everything else on the outstanding list is an inconvenience.
