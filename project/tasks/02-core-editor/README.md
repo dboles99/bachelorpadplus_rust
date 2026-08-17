@@ -1,43 +1,54 @@
 # 02-core-editor
 
+Roadmap phase 2. **Crates built and tested; wiring blocked.**
+
 | Task | Status |
 | --- | --- |
-| [rope-buffer](01-rope-buffer.md) | Crate done and tested; not yet the editor's storage |
-| [tabs](02-tabs.md) | Delivered in phase 1 (`bp-core::Workspace` + the tab strip) |
-| [file-io](03-file-io.md) | Delivered in phase 1 (`bp-files`: atomic save, load, encodings) |
-| [status-bar](04-status-bar.md) | Delivered in phase 1 except Ln/Col |
-| [undo-redo](05-undo-redo.md) | Crate done and tested; not yet wired |
+| [rope-buffer](01-rope-buffer.md) | Crate done; not yet the editor's storage |
+| [tabs](02-tabs.md) | Done in phase 1 (`bp-core::Workspace` + tab strip) |
+| [file-io](03-file-io.md) | Done in phase 1 (`bp-files`) |
+| [status-bar](04-status-bar.md) | Done except Ln/Col |
+| [undo-redo](05-undo-redo.md) | Crate done; not yet the authority |
 
 ## The one thing blocking this phase
 
-**Slint's `TextInput` owns the text and the caret.** It hands back the whole
-buffer on every edit, keeps its own undo stack, and exposes the caret only
-through a property marked "internal, undocumented, only exposed for tests".
+**Slint's `TextInput` owns the text and the caret.** It hands the whole buffer
+back on every edit, keeps its own undo stack, and exposes the caret only
+through a property marked *"internal, undocumented, only exposed for tests"*.
 
-That single fact blocks three separate items: the rope cannot become the
-storage, our undo cannot become the authority, and the status bar cannot show
-Ln/Col. All three unblock together, and only together, when the editor view
-owns its own text.
+That single fact blocks three separate items:
 
-So `bp-buffer` and `bp-editor` are built, tested and idle — which is the right
-order. The semantics are pinned down and provable now; the widget that
-consumes them is the risky part.
+- the rope cannot become the storage — a rope behind that widget means
+  converting to `String` on every push, which is worse than the `String` it
+  would replace;
+- `bp-editor`'s undo cannot become the authority — two undo stacks over one
+  document is worse than one;
+- the status bar cannot show Ln/Col.
 
-## Next: the editor view
+All three unblock together, with a custom virtualised editor view that owns
+its own text and routes keys itself.
 
-A custom, virtualised text view — we render the visible lines, own the caret,
-and route keys ourselves. It is the largest single piece of work in the
-project so far and it is almost entirely keyboard-driven, so it needs an
-environment where a key can actually be pressed to verify it. That is the
-gating constraint, not the code.
+Building the libraries first was the right order: their semantics are provable
+without a window, and the widget is the risky part. `bp-editor` has 19 tests
+pinning undo behaviour — typing coalesces into one step, newlines and caret
+moves end the run, replacing a selection undoes as one — none of which needed
+a window to establish.
 
-Evidence that it is worth doing, from `--latency-probe`:
+## Evidence that the switch is worth making
 
-| Document | via `String` (today) | via rope |
+`bachelorpad --latency-probe`, release, Windows:
+
+| Document | insert via `String` | insert via rope |
 | ---: | ---: | ---: |
 | 100 KB | 55.8 µs | 0.3 µs |
 | 1 MB | 563.7 µs | 0.3 µs |
 
-Linear versus flat. The current path stays under a frame budget to roughly
-40 MB, so this is not urgent for notes — it is the prerequisite for the
-large-file work in phase 4.
+Linear versus flat — roughly 1900× at 1 MB. The current path stays inside a
+16 ms frame budget to about **40 MB**, so this is not urgent for notes. It is
+the prerequisite for the large-file work in phase 4.
+
+## Also outstanding
+
+Multi-cursor, column selection, folding, indentation guides, line operations
+(duplicate/move/sort/remove-duplicates), go-to-line and zoom — specs.md
+section 4. All of them want the custom view too, since they need the caret.
