@@ -53,6 +53,7 @@ so whoever finishes an item updates them as part of it.
 | # | Item | Landed as |
 | --- | --- | --- |
 | T0 | Split `bp-ui/src/lib.rs` into `state` / `editor_view` / `dispatch` | `b6e2544` |
+| T1 | Split `bp-ui/ui/app.slint` into seven component files | `0215d29` |
 | W1 | Duplicate Line, Move Line Up / Down | Edit menu, Ctrl+D / Alt+Up / Alt+Down |
 | W2 | Paste transformations | Edit menu, per clipboard entry |
 | W3 | CSV to JSON / JSON Lines / Column Types | Data menu, Csv and Tsv only |
