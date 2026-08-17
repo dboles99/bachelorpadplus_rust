@@ -48,10 +48,22 @@ window, menu bar, tab strip, editor pane, status bar and four themes.
 - [x] **Keyboard shortcuts.** Ctrl+N/O/S/Shift+S/W via Slint `KeyBinding`
       elements in a `FocusScope` that wraps the content. Bindings match during
       the capture phase, from the Window down toward the focused element, so
-      the editor no longer swallows Ctrl+S. **Delivery is unverified** — this
-      environment has no interactive desktop to send keystrokes from, so the
-      wiring is correct by construction and by the compiler's validation of
-      `@keys`, but has not been pressed.
+      the editor no longer swallows Ctrl+S. **Confirmed working by manual
+      test, 2026-08-17.**
+- [x] **All 14 menus open.** File, Edit, View, Format and Help do real work;
+      the other nine list their intended contents as disabled rows naming the
+      phase they arrive in. A label that swallows a click reads as broken —
+      which is how the previous version was reported.
+- [x] Edit menu is genuinely functional: undo, redo, cut, copy, paste and
+      select-all are public functions on Slint's `TextInput`, so they are not
+      stubs even though our own `bp-editor` is not yet the authority.
+- [x] View: theme selection with the active one ticked, line-number and
+      word-wrap toggles.
+- [x] Format: line endings and encoding, ticked to the document's real
+      settings. Changing either marks the document unsaved, because the bytes
+      that would be written no longer match disk.
+- [x] File: Save All (disabled when nothing is unsaved) and Reload from Disk
+      (disabled without a file, and prompts before discarding edits).
 - [x] **Unsaved-changes prompt on close.** Closing a dirty tab, closing the
       active tab with Ctrl+W, and closing the window all prompt Save / Discard
       / Cancel. A save that fails or is abandoned keeps the tab open rather

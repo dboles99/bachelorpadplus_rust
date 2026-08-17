@@ -3,7 +3,7 @@
 | Task | Status |
 | --- | --- |
 | [workspace-scaffold](01-workspace-scaffold.md) | Done |
-| [ui-prototype](02-ui-prototype.md) | Shell runs on both platforms; shortcuts, cursor, close-prompt outstanding |
+| [ui-prototype](02-ui-prototype.md) | Done except Ln/Col; shell verified by manual test |
 | [ci-baseline](03-ci-baseline.md) | Done, both platforms |
 | [config-logging](04-config-logging.md) | Done |
 
@@ -20,9 +20,6 @@ environment cannot perform, plus work that belongs to later phases.
 
 ## Outstanding before the phase is genuinely closed
 
-- **Keyboard shortcut delivery is unverified.** The bindings are wired and the
-  Slint compiler validates them, but no key has actually been pressed — this
-  environment has no interactive desktop. Worth 30 seconds of manual checking.
 - **Time to first interaction is unmeasurable** under the default renderer, so
   half of the ADR-0017 target is unverified. Slint's software renderer exposes
   no rendering notifier.
@@ -35,8 +32,14 @@ environment cannot perform, plus work that belongs to later phases.
 ## Closed since the last review
 
 Unsaved-changes prompting (tab close, Ctrl+W, window close), keyboard
-shortcuts, the per-keystroke gutter rebuild, typing-latency measurement, and
-configuration loading.
+shortcuts, the per-keystroke gutter rebuild, typing-latency measurement,
+configuration loading, and a working menu bar.
+
+**Verified by manual test on 2026-08-17:** keyboard shortcuts, the
+unsaved-changes prompts, the gutter's trailing-newline fix, theme cycling,
+Save As naming, and status-bar save state. That test also found the menu bar's
+real defect — twelve labels that swallowed a click, which reads as broken.
+All fourteen menus now open.
 
 The gate gained two stages. `launch` exists because the one bug that reached a
 "green" state was a binary that could not start — something neither
