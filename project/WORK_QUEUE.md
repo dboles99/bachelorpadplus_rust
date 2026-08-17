@@ -20,11 +20,22 @@ which is not the same list.
 ## Collision rules
 
 `bp-ui/src/lib.rs` has been split, so `state.rs`, `editor_view.rs` and
-`dispatch.rs` can take different agents. **`ui/app.slint` cannot** — it is one
-1,100-line file and remains the real bottleneck. Every remaining wiring item
-except W12 touches it, so:
+`dispatch.rs` can take different agents. `ui/app.slint` has now been split too
+— seven files, listed in `docs/architecture/ARCHITECTURE.md`. So the find
+bar, the editor surface, the status bar, the results panel and the tab are
+each somebody's own file.
 
-> **One agent in `crates/bp-ui/ui/app.slint` at a time.**
+**That is a smaller win than it looks, and the reason is worth knowing.**
+`AppWindow`'s properties and callbacks all still live in `app.slint`, because
+that is the API Rust binds to. Any item that adds a property or a callback
+still edits that file — it just edits twenty lines of declaration rather than
+twenty lines buried in twelve hundred. So:
+
+> **Two agents may work in different `ui/*.slint` component files at once.
+> Only one may add to `AppWindow` in `app.slint` at a time.**
+
+Still wholly inside `app.slint`, and so still fully serialised: the menu bar,
+the menu popups, both editor views and the tab strip.
 
 Batching by menu so one agent does several related rows in a pass is usually
 faster than queueing anyway.
@@ -55,14 +66,14 @@ need their wiring item below.
 
 ## Tier 1 — pure wiring (the capability exists and is tested)
 
-Nothing here needs a new library function. Each is `bp-ui` + `app.slint` only,
-so each needs the `app.slint` lock.
+Nothing here needs a new library function. Each is `bp-ui` plus one or two of
+the `ui/*.slint` files.
 
 | # | Item | Capability already in | Notes |
 | --- | --- | --- | --- |
-| W4 | **Find-box options** | `bp_search::Query{case_sensitive, whole_word, regex}` | Three toggles in the find bar, feeding fields that already exist and are already tested. Everything currently builds `Query::literal`, so regex search is implemented and unreachable. The find bar is a collapsed `Rectangle`, not an `if` — keep it that way. |
-| W6 | **Zoom** | `bp_config::Config::font_size` (6–96, default 14) | The size is hard-coded as `14px` in several places in `app.slint`; make it one property fed from config **first**, then add Ctrl+= / Ctrl+- / Ctrl+0 and the View menu row. The editor surface already derives its character advance from the font size, so zoom should just work there — verify it does. |
-| W7 | **Double- and triple-click selection** | `bp_editor::Editor::{select_word_at, select_line_at}` | `TouchArea` has `double-clicked`; triple needs counting clicks yourself. **`EditorSurface` only** — `TextInput` already does this natively, so do not touch that path. |
+| W4 | **Find-box options** | `bp_search::Query{case_sensitive, whole_word, regex}` | Three toggles in `find_bar.slint`, feeding fields that already exist and are already tested. Everything currently builds `Query::literal`, so regex search is implemented and unreachable. The find bar is a collapsed `Rectangle`, not an `if` — keep it that way. |
+| W6 | **Zoom** | `bp_config::Config::font_size` (6–96, default 14) | Three hard-coded `14px`: the gutter and the `TextInput` in `app.slint`, and `EditorSurface`'s own default. Make it one property fed from config **first**, then add Ctrl+= / Ctrl+- / Ctrl+0 and the View menu row. `EditorSurface` already derives its character advance from `font-size` and `AppWindow` never sets it, so passing one down should just work — verify it does. |
+| W7 | **Double- and triple-click selection** | `bp_editor::Editor::{select_word_at, select_line_at}` | `TouchArea` has `double-clicked`; triple needs counting clicks yourself. **`editor_surface.slint` only** — `TextInput` already does this natively, so do not touch that path. |
 
 ## Tier 2 — a small library addition, then wire
 

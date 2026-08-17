@@ -68,11 +68,16 @@ Two more Tier 1 items need no library work at all: the find box's
 case-sensitive / whole-word / **regex** toggles (regex search is fully
 implemented and unreachable), and double- and triple-click selection.
 
-**They all queue behind one file.** `ui/app.slint` is ~1,200 lines and is now
-the serialisation point that `lib.rs` used to be. One agent in it at a time.
-Splitting it the way `lib.rs` was split is worth doing before a big parallel
-push — components are already separable (`EditorSurface`, the menu bar, the
-find bar, the status bar).
+**They no longer all queue behind one file.** `ui/app.slint` has been split
+the way `lib.rs` was — seven files, listed in
+`docs/architecture/ARCHITECTURE.md` — so the find bar, the editor surface, the
+status bar, the results panel and the tab are each somebody's own file.
+
+What still serialises is narrower but real: `AppWindow`'s properties and
+callbacks stay in `app.slint`, because that is the API Rust binds to, and so
+do the menu bar, the popups, both editor views and the tab strip. An item that
+adds a property still edits that file; it just no longer edits twelve hundred
+lines to do it. `project/WORK_QUEUE.md` has the rule.
 
 ### 2. Parity, or retire the flag
 
@@ -146,7 +151,12 @@ Three sessions of evidence, worth reading before dispatching any:
 
 ## Housekeeping
 
-- **`ui/app.slint` wants splitting**, as above. It is the current bottleneck.
+- ~~**`ui/app.slint` wants splitting.**~~ **Done** — seven files. What is left
+  in it, and why each thing stayed, is in `docs/architecture/ARCHITECTURE.md`.
+  The popups were the one piece deliberately not moved: a `PopupWindow` is
+  positioned relative to its parent element, so moving them would change the
+  coordinate parent, and nothing in the gate can see a menu opening in the
+  wrong place.
 - **Native Linux timing.** WSLg's compositor makes startup numbers
   unrepresentative, so ADR-0015's evidence remains Windows-only.
 - **Scroll smoothness under CPU rasterisation** is the standing revert
