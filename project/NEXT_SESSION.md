@@ -66,6 +66,9 @@ already unconditional.
 
 ## Also available
 
+`project/WORK_QUEUE.md` has these broken into individually takeable items,
+with the collision rules for running more than one agent at once.
+
 | Work | Phase | Notes |
 | --- | --- | --- |
 | Wire `bp-storage` in | 9 | The crate exists and is tested. **Read ADR-0019 first**: recording extracted titles puts a plaintext index of what the user writes about on disk, which wants phase 14, not a quiet default. |
