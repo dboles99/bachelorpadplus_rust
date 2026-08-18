@@ -61,20 +61,29 @@ so whoever finishes an item updates them as part of it.
 | W8 (library half) | `bp_naming::{Stamp, render}` | `bp-naming` |
 | W10 (library half) | `bp_semantic::statistics` | `bp-semantic` |
 | W14 (library half) | `tab_width`, `indent_spaces` | `bp-config` |
+| W4 | Find-box case / whole-word / regex toggles | Find bar |
+| W6 | Zoom | View menu, Ctrl+= / Ctrl+- / Ctrl+0 |
+| W7 | Double- and triple-click selection | `editor_surface.slint` |
 
 The library halves have no menu rows yet: W5, W8, W10 and W14 each still
 need their wiring item below.
 
 ## Tier 1 — pure wiring (the capability exists and is tested)
 
-Nothing here needs a new library function. Each is `bp-ui` plus one or two of
-the `ui/*.slint` files.
+**All three original Tier 1 items are done** (W4, W6, W7 — see the table
+above). What was learned doing them, for whoever wires the next row:
 
-| # | Item | Capability already in | Notes |
-| --- | --- | --- | --- |
-| W4 | **Find-box options** | `bp_search::Query{case_sensitive, whole_word, regex}` | Three toggles in `find_bar.slint`, feeding fields that already exist and are already tested. Everything currently builds `Query::literal`, so regex search is implemented and unreachable. The find bar is a collapsed `Rectangle`, not an `if` — keep it that way. |
-| W6 | **Zoom** | `bp_config::Config::font_size` (6–96, default 14) | Three hard-coded `14px`: the gutter and the `TextInput` in `app.slint`, and `EditorSurface`'s own default. Make it one property fed from config **first**, then add Ctrl+= / Ctrl+- / Ctrl+0 and the View menu row. `EditorSurface` already derives its character advance from `font-size` and `AppWindow` never sets it, so passing one down should just work — verify it does. |
-| W7 | **Double- and triple-click selection** | `bp_editor::Editor::{select_word_at, select_line_at}` | `TouchArea` has `double-clicked`; triple needs counting clicks yourself. **`editor_surface.slint` only** — `TextInput` already does this natively, so do not touch that path. |
+- `EditorSurface` had **two** constants that had to start following
+  `font-size`, not one: `line-height` and `gutter-width`. Both feed
+  `row-at` / `column-at`, so a constant left behind does not merely look
+  wrong — it moves the caret away from the pointer, and further the further
+  down or across the click is. Anything else that scales has the same trap.
+- `menus::view` now takes the font size, so **every menu builder whose rows
+  depend on a value must be handed that value**; there is no ambient state
+  in `menus.rs` and there should not be.
+- A row that exists but cannot act right now uses `row_enabled(.., false)`,
+  which is deliberately *not* `planned()`. `planned` means "does not exist
+  yet"; greying for a reason the user can act on is a different statement.
 
 ## Tier 2 — a small library addition, then wire
 
