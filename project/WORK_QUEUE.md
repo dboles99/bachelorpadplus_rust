@@ -64,9 +64,15 @@ so whoever finishes an item updates them as part of it.
 | W4 | Find-box case / whole-word / regex toggles | Find bar |
 | W6 | Zoom | View menu, Ctrl+= / Ctrl+- / Ctrl+0 |
 | W7 | Double- and triple-click selection | `editor_surface.slint` |
+| W5 | Go to Line | Edit menu, Ctrl+G, `ui/goto_bar.slint` |
+| W8 | Insert Date / Time | Insert menu, five rows from `Stamp::all()` |
+| W9 | Save a Copy | File menu |
+| W10 | Document statistics | Note menu, into the status bar |
+| W12 | Tab context menu | Right-click a tab |
+| W13 | Follow System theme | View menu, `ThemeId::for_system` |
+| W14 | Indentation settings | Format menu, `bp_editor::Indent` |
 
-The library halves have no menu rows yet: W5, W8, W10 and W14 each still
-need their wiring item below.
+Every library half now has its row.
 
 ## Tier 1 — pure wiring (the capability exists and is tested)
 
@@ -85,21 +91,28 @@ above). What was learned doing them, for whoever wires the next row:
   which is deliberately *not* `planned()`. `planned` means "does not exist
   yet"; greying for a reason the user can act on is a different statement.
 
-## Tier 2 — a small library addition, then wire
+## Tier 2 — done
 
-Each needs one function in a library crate (with tests) before the wiring.
-The library half is parallel-safe; the wiring half needs the `app.slint` lock.
+All of it, in one pass. What is worth carrying forward:
 
-| # | Item | Library work | Wiring |
-| --- | --- | --- | --- |
-| W5 | **Go to Line** | **done** — `Editor::go_to_line` returns whether the line existed, so the caller can say "there are only 42 lines" and still move somewhere sensible | Reuse the find-bar pattern rather than inventing a dialog. Caret-dependent, so `--editor-view` only. |
-| W8 | **Insert Date / Time** | **done** — `Stamp::all()` gives the menu order and its labels | The Insert menu is currently all planned rows. `Stamp::all()` turns five of them real; the shell supplies the clock, since `bp-naming` never reads one. |
-| W9 | **Save Copy** | none — `bp_files::atomic_write` is enough | File menu. **The subtle part**: a copy must not change the document's path, must not clear its dirty flag, and must not touch the recent-files list. Getting that wrong turns Save Copy into Save As. Test those three. |
-| W10 | **Document statistics** | **done** — `bp_semantic::statistics`, single pass | Status bar, plus Tools ▸ Document Inspector (specs §18). Must not be recomputed on every keystroke over a whole document — see the `active_text()` trap in R011. |
-| W11 | **Drag and drop to open** | none | specs §4 requires it. Slint has `DropArea`. Wire to `AppState::open`; multiple files open multiple tabs, as the command line already does. |
-| W12 | **Tab context menu** | none | Close Others, Close All, Copy Full Path. Reuse `close_with_prompt` so unsaved work still prompts — that is the whole risk in this item. |
-| W13 | **Follow System theme** | `bp-theme`: resolve a system preference to a `ThemeId` | specs §16 lists it as a built-in. Slint exposes the colour scheme; ADR-0009 says themes are data, so this resolves to an existing palette rather than adding a new one. |
-| W14 | **Indentation settings** | **done** — `Config::{tab_width, indent_spaces}` | `TAB_WIDTH` is still a `const` in `bp-ui/src/editor_view.rs`, and the Tab key still inserts a literal tab. Both should follow the setting now that it exists. |
+- **`Command::Indent` is not `Command::Insert("	")`.** What a soft tab
+  inserts depends on the caret's visual column -- at column 3 with width 4 it
+  is one space, not four -- so `command_for` cannot decide it and
+  `Editor::apply` expands it instead. Any future key whose text depends on
+  where the caret is has the same shape.
+- **Save Copy shares nothing with `save_document` except the encoder.** The
+  three things it must not do -- move the path, clear the dirty flag, touch
+  Open Recent -- are the three that one does. Calling it and subtracting three
+  behaviours is how Save Copy becomes Save As; there is a test for each.
+- **A `PopupWindow`'s `x` cannot be assigned from outside it.** The tab
+  context menu positions itself through a property the popup binds to. The
+  compiler catches this, but only once you try.
+- **`menus::insert` is rebuilt on every refresh**, because its row hints are
+  rendered from the clock. A menu built once at startup would offer this
+  morning's time all afternoon.
+- **The tab menu's target is stored, not passed.** Opening the menu and
+  clicking a row are separate events, and by the second one the pointer has
+  moved.
 
 ## Blocked, and by what
 
@@ -113,6 +126,7 @@ The library half is parallel-safe; the wiring half needs the `app.slint` lock.
 | Markdown preview | Slint has no HTML view. Needs a rendering decision first. |
 | `.bpadx` encryption | ADR-0011 forbids custom cryptography; envelope format, crate and versioning want agreement before code. |
 | Print | Platform work with no cross-platform story yet. |
+| **W11, drag and drop to open** | **Slint 1.17.1**, and this was checked rather than assumed. `DropArea` exists and compiles, and the item is implemented in `i-slint-core/items/drag_n_drop.rs` -- but the winit backend has no file-drop plumbing, and `DataTransfer` exposes only `plain_text` and `image`. There is no channel a dropped file's path could arrive through. Revisit on a Slint upgrade; do not spend an afternoon on it before checking that changed. |
 
 ## Not a queue item
 
