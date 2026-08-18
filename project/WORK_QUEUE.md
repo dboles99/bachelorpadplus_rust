@@ -118,8 +118,8 @@ All of it, in one pass. What is worth carrying forward:
 
 | Item | Blocked on |
 | --- | --- |
-| Word wrap in the editor surface | Design, not effort. It makes a visual line differ from a document line, which every function in `bp_editor::view` assumes away, and it changes what Up and Down mean. Not a small-agent item. |
-| Input-method composition | Slint delivers pre-edit text through `KeyEventType::UpdateComposition`, which a bare `FocusScope` does not see. Needs investigation before it needs code. |
+| ~~Word wrap in the editor surface~~ | **Done.** `bp_editor::wrap` owns the breaking rule; `view`'s wrapped half maps rows to characters; `Editor` moves Up and Down by visual row. The shell anchors scrolling to a line *and* a row within it, and Slint reports the column count because it owns the font. |
+| **Input-method composition** | **Slint 1.17.1, and this was checked rather than assumed.** `FocusScope` returns `EventResult::Reject` for `UpdateComposition` and `CommitComposition` in *both* `capture_key_event` and `key_event` (`i-slint-core/items/input_items.rs`), and exposes no callback for either. `TextInput` is the only item in the whole toolkit that consumes them, and `input_method_request` is a backend-internal trait, not an application hook. There is no route to pre-edit text from a `FocusScope`. Revisit on a Slint upgrade. |
 | Anything writing to `bp-storage` | **A decision, not a task.** Recording a document's extracted title puts a plaintext index of what the user writes about on disk. ADR-0019 explains why it is deliberately unwired; ADR-0011 says the security profile governs it, and phase 14 does not exist. Do not "just wire it up". |
 | `bp-organize` | The above, plus a design pass. |
 | YAML support | `serde_yaml` is deprecated; the replacement is a long-lived dependency choice and wants a human. |
