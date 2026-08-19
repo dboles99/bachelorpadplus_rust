@@ -112,7 +112,7 @@ Two of the four are fixed. What is left:
 | `bp-search` and `bp-buffer` disagree what a line is | **An ADR, not a patch — D6.** Either `bp-search` adopts ropey's break set or `bp-buffer` drops `unicode_lines`. One definition has to win, and `bp-ui` uses both today, in different views. Pinned by the only `#[ignore]`d test in the tree |
 | The shell still has its own encoder | `bp-files` now owns `encode` and `LineEndingPolicy`, and `bp_ui::state::encode` still exists beside it and still normalises. Adopting it is three call sites and deletes a `Result`; it is a **visible behaviour change** — saving stops rewriting minority line breaks — so it wants doing deliberately rather than as a tidy-up |
 | `Profile::is_data` is true for `Ini` and `Xml` | Latent. Harmless until somebody gates a menu on it, at which point every row fails |
-| `bp-config` and `bp-platform` disagree about the config directory | `bp_config::config_path` has its own `cfg!(windows)` and honours a relative `$XDG_CONFIG_HOME`; `bp_platform::dirs` treats that as invalid, which is what XDG requires. `bp-config` should delegate |
+| The recent-files list and the recovery directory both roam on Windows | `recent.toml` and `bp-ui`'s `recovery_dir` both hang off the config directory, which is `%APPDATA%` and roams. Both hold machine-specific absolute paths; `bp-platform` calls this `DirKind::State`. Needs one change owning `bp-config` **and** `bp-ui`, so it cannot be split between agents |
 
 ## Tier 1 — pure wiring (the capability exists and is tested)
 
