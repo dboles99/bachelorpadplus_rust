@@ -78,39 +78,41 @@ so whoever finishes an item updates them as part of it.
 | — | Notebooks, research, redaction, audit, integrity | ADR-0024/0025/0026/0028 |
 | — | Scan for Secrets, Hash, Verify Signature | Security menu, ids 200-203 |
 | — | Cross-crate tests, and the four defects they found | `tests/integration` |
+| — | JSONL sniffing: a pretty-printed array is not JSON Lines | `bp-formats` |
+| — | The encoder returns to a library; UTF-16 loads and saves | `bp-files` |
+| — | The audit log's sealed destination gets an implementor | `bp-audit` |
+| — | The platform seam, with ADR-0012 mechanised | `bp-platform` |
+| — | Data ▸ YAML, Security ▸ Redact, Security ▸ Inspect Metadata | ids 204-205, 210-211 |
 
 Every library half now has its row.
 
-## Tier 0 — six crates with no way in
+## Tier 0 — five crates with no way in
 
-This is the largest block of ready work in the repository, and every item is
-the same shape: a tested library and a missing menu row. Read
+Still the largest block of ready work, and every item is the same shape: a
+tested library and a missing menu row. Read
 `prompts/rosettas/R011_WIRE_CAPABILITY_INTO_SHELL.md` before taking any of
 them. **Only one agent may add to `AppWindow` in `app.slint` at a time**, so
 batch by menu.
 
 | Item | What exists |
 | --- | --- |
-| Data ▸ YAML validate / format / minify / convert | `bp_data::{yaml_validate, yaml_format, yaml_minify, yaml_to_json, json_to_yaml}` (ADR-0023). The cheapest item here: the Data menu already has the shape for it, next to JSON |
-| The open path uses the large-file engine | `bp_buffer::{LargeFile, SizeClass, Access}` (ADR-0027). Opening a 2 GB file currently loads 2 GB. Needs a read-only-because-huge state in the shell, which is a real UI decision |
-| Security ▸ Redact | `bp_redaction::{redact, verify}` (ADR-0028). Needs spans, so it pairs naturally with Scan for Secrets, which already produces them |
-| Security ▸ Metadata inspector | `bp_redaction::metadata::inspect` |
-| Security ▸ Audit history | `bp-audit` (ADR-0024). **Also needs a `Sealer` implementor**, or `Destination::Sealed` refuses every time; wrapping the `.bpadx` envelope is the intended wiring |
-| Security ▸ Sign, and verify against a sidecar | `bp-integrity` (ADR-0026). Blocked on the signing-key decision in `DECISIONS.md`; the *verify against a sidecar* half is not |
-| Notebook mode | `bp-notebook` (ADR-0025). The largest of these by far — a new view, not a menu row |
+| The open path uses the large-file engine | `bp_buffer::{LargeFile, SizeClass, Access}` (ADR-0027). Opening a 2 GB file currently loads 2 GB. Needs a read-only-because-huge state in the shell, which is a real UI decision, so this is the biggest of the wiring items rather than the cheapest |
+| Security ▸ Audit history | `bp-audit` (ADR-0024) now has a working sealed destination, so the crate is complete. What is missing is the view and the calls that record events -- every capability that should write one already exists |
+| File ▸ Set as Default Editor | `bp-platform`'s `state`, `plan` and `install`. Linux installs; Windows generates a `.reg` and hands it over, pending D8. The refusal string is already shared with the capability register so the greyed row cannot drift from the error |
+| Security ▸ Sign, and verify against a sidecar | `bp-integrity` (ADR-0026). The *signing* half is blocked on D5; **verifying against a `.sig` sidecar is not**, and would replace the shell's hand-rolled two-file dialog with the crate's own convention |
+| Notebook mode | `bp-notebook` (ADR-0025). A new view, not a menu row |
 | Research mode | `bp-research`. Same: a mode, not a row |
 
-## Tier 0.5 — the four defects the cross-crate tests found
+## Tier 0.5 — what the cross-crate tests found
 
-Each has an ignored test naming it, and each is written up with evidence in
-`DECISIONS.md`.
+Two of the four are fixed. What is left:
 
 | Item | Shape |
 | --- | --- |
-| `bp-formats` sniffs a pretty-printed JSON array as JSON Lines | A plain defect. `looks_like_json_lines` needs to not count lines inside a document that opened with `[`. Smallest item in the queue |
-| `bp_ui::state::encode` belongs in `bp-files` | A move, plus the mixed-line-ending bug it hides. R013 says the shell connects and does not decide; this one decides |
-| `bp-search` and `bp-buffer` disagree what a line is | **An ADR, not a patch.** Either `bp-search` adopts ropey's break set or `bp-buffer` drops `unicode_lines`. One definition has to win, and `bp-ui` uses both today |
+| `bp-search` and `bp-buffer` disagree what a line is | **An ADR, not a patch — D6.** Either `bp-search` adopts ropey's break set or `bp-buffer` drops `unicode_lines`. One definition has to win, and `bp-ui` uses both today, in different views. Pinned by the only `#[ignore]`d test in the tree |
+| The shell still has its own encoder | `bp-files` now owns `encode` and `LineEndingPolicy`, and `bp_ui::state::encode` still exists beside it and still normalises. Adopting it is three call sites and deletes a `Result`; it is a **visible behaviour change** — saving stops rewriting minority line breaks — so it wants doing deliberately rather than as a tidy-up |
 | `Profile::is_data` is true for `Ini` and `Xml` | Latent. Harmless until somebody gates a menu on it, at which point every row fails |
+| `bp-config` and `bp-platform` disagree about the config directory | `bp_config::config_path` has its own `cfg!(windows)` and honours a relative `$XDG_CONFIG_HOME`; `bp_platform::dirs` treats that as invalid, which is what XDG requires. `bp-config` should delegate |
 
 ## Tier 1 — pure wiring (the capability exists and is tested)
 

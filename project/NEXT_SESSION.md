@@ -2,8 +2,9 @@
 
 Rewritten 2026-08-19, at the end of the fourth build session.
 
-State: 23 crates, 1,342 tests, green on Windows and Linux. Two of those tests
-are `#[ignore]`d on purpose, because they name real defects.
+State: 24 crates, 1,543 tests, green on Windows and Linux. One of those tests
+is `#[ignore]`d on purpose, because it names a real defect that needs a
+decision rather than a patch.
 
 ---
 
@@ -34,14 +35,16 @@ four rows longer, still reaches its own bottom row — `MenuPopup` caps its
 height and scrolls, and a long menu putting its lowest rows out of reach has
 happened here before and was found by a person, not a test.
 
-### 2. Fix the four defects, or decide them
+### 2. Finish the encoder move, then decide what a line is
 
-`project/WORK_QUEUE.md` Tier 0.5. The `bp-formats` JSONL sniff is the
-smallest item in the repository. The line-definition disagreement between
-`bp-search` and `bp-buffer` is an ADR and wants deciding rather than patching.
-Moving `encode` out of `bp-ui` into `bp-files` fixes a silent data-loss bug on
-mixed-line-ending documents *and* puts a decision back in a library where it
-can be tested.
+`project/WORK_QUEUE.md` Tier 0.5. Two of the four defects are fixed. The
+half-done one is the encoder: `bp-files` owns `encode` and `LineEndingPolicy`
+now, and `bp_ui::state::encode` still sits beside it still normalising. The
+switch is three call sites and deletes a `Result` -- but it is a **visible
+behaviour change**, because saving stops silently rewriting minority line
+breaks, so do it deliberately rather than as a tidy-up.
+
+The line-definition disagreement is D6 and wants an answer, not a patch.
 
 **Write more cross-crate tests as you go.** The first six files of them found
 four defects that 798 unit tests had not. That ratio is the most useful thing
