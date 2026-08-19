@@ -1,28 +1,32 @@
 # Next session plan
 
-Rewritten 2026-08-19, at the end of the fourth build session.
+Rewritten 2026-08-20, at the end of the fifth build session.
 
-State: 24 crates, 1,543 tests, green on Windows and Linux. One of those tests
-is `#[ignore]`d on purpose, because it names a real defect that needs a
-decision rather than a patch.
+State: 24 crates, 1,625 tests, green on Windows and Linux. Four of those
+tests are `#[ignore]`d on purpose, because each one names a real defect and
+wants a fix or a decision rather than a passing assertion.
 
 ---
 
 ## The shape of the problem has changed
 
 For three sessions the largest gap was that capabilities did not exist. It is
-now the opposite. **Six crates are built, tested and unreachable** — the
-large-file engine, notebooks, research, redaction, audit and integrity — and
-the queue's Tier 0 is nothing but wiring. Building another library is the
-easy, comfortable move and it is the wrong one.
+now the opposite. **Four crates are built, tested and unreachable** — the
+large-file engine, notebooks, research and audit — and the queue's Tier 0 is
+nothing but wiring. Building another library is the easy, comfortable move
+and it is the wrong one.
 
 Two things are worth more than any new crate:
 
 ### 1. Ten minutes with the application
 
-Still first, still not done, and now with more riding on it. Four rows were
-added to the Security menu this session and **none has been clicked**. The
-`--editor-view` checklist below is unchanged and still unanswered.
+Still first, still not done, and now with more riding on it. Security gained
+four rows in the fourth session; the fifth rebuilt Verify Signature on
+`bp-integrity`'s sidecar and added File ▸ Set as Default Editor, which writes
+into the desktop database on Linux and saves a `.reg` on Windows. **None of it
+has been clicked**, and the last of those is the one row here that changes
+something outside this application. The `--editor-view` checklist below is
+unchanged and still unanswered.
 
 ```powershell
 cargo run --release
@@ -35,20 +39,36 @@ four rows longer, still reaches its own bottom row — `MenuPopup` caps its
 height and scrolls, and a long menu putting its lowest rows out of reach has
 happened here before and was found by a person, not a test.
 
-### 2. Finish the encoder move, then decide what a line is
+Then File ▸ Set as Default Editor, which deserves reading rather than
+clicking through: it reports what opens those types today *before* it offers
+to change anything, and on Windows it writes nothing at all without a Save
+dialog first. It is the only row in this product that touches state outside
+it.
 
-`project/WORK_QUEUE.md` Tier 0.5. Two of the four defects are fixed. The
-half-done one is the encoder: `bp-files` owns `encode` and `LineEndingPolicy`
-now, and `bp_ui::state::encode` still sits beside it still normalising. The
-switch is three call sites and deletes a `Result` -- but it is a **visible
-behaviour change**, because saving stops silently rewriting minority line
-breaks, so do it deliberately rather than as a tidy-up.
+### 2. Fix the defect that destroys documents
 
-The line-definition disagreement is D6 and wants an answer, not a patch.
+`project/WORK_QUEUE.md` Tier 0.5, and it is first in that table for a reason.
+`bp_naming::sanitize::is_reserved` asks whether the *whole* sanitised title is
+a reserved device name; Win32 asks about the stem before the first dot. A dot
+is not a forbidden character, so it survives sanitising -- and `con.txt`,
+`aux.log`, `NUL.dat` and `lpt1.bak` all pass untouched. On Windows, saving to
+one of those writes **the device**: the save reports success and the document
+is gone.
 
-**Write more cross-crate tests as you go.** The first six files of them found
-four defects that 798 unit tests had not. That ratio is the most useful thing
-learned this session.
+The fix is small and the model is already in the tree.
+`bp_platform::paths::reserved_device_name` takes the stem, trims trailing
+spaces, and includes `CONIN$` and `CONOUT$`, which `bp-naming`'s list omits.
+An `#[ignore]`d test in
+`tests/integration/tests/generated_names_are_legal_and_writable.rs` pins it.
+
+Two more sit behind it, pinned the same way: `bp-notebook` running code it
+could not name through the kernel's interpreter, and `bp-files` never applying
+`\\?\`. The line-definition disagreement is D6 and wants an answer, not a
+patch.
+
+**Write more cross-crate tests as you go.** Eleven files of them have now
+found seven defects that the unit tests had not. That ratio is still the most
+useful thing this project has learned.
 
 ---
 
@@ -108,7 +128,7 @@ recorded here so nobody re-derives them:
   policy, Privacy Mode clamps it for the session, and phase 15 shipping means
   the profiles wanting an encrypted journal are honoured rather than refused.
 
-The replacement for all three is Tier 0 of `project/WORK_QUEUE.md`: six
+The replacement for all three is Tier 0 of `project/WORK_QUEUE.md`: four
 crates with no way in.
 
 ## Decisions still waiting on a human

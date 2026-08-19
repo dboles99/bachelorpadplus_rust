@@ -77,16 +77,18 @@ so whoever finishes an item updates them as part of it.
 | — | The large-file engine | ADR-0027, `bp-buffer` |
 | — | Notebooks, research, redaction, audit, integrity | ADR-0024/0025/0026/0028 |
 | — | Scan for Secrets, Hash, Verify Signature | Security menu, ids 200-203 |
-| — | Cross-crate tests, and the four defects they found | `tests/integration` |
+| — | Cross-crate tests, and the seven defects they found | `tests/integration` |
 | — | JSONL sniffing: a pretty-printed array is not JSON Lines | `bp-formats` |
 | — | The encoder returns to a library; UTF-16 loads and saves | `bp-files` |
 | — | The audit log's sealed destination gets an implementor | `bp-audit` |
 | — | The platform seam, with ADR-0012 mechanised | `bp-platform` |
 | — | Data ▸ YAML, Security ▸ Redact, Security ▸ Inspect Metadata | ids 204-205, 210-211 |
+| — | File ▸ Set as Default Editor, which reports before it offers | ADR-0012, File menu, id 220 |
+| — | Security ▸ Verify Signature, against `bp-integrity`'s sidecar | ADR-0026, id 203 |
 
 Every library half now has its row.
 
-## Tier 0 — five crates with no way in
+## Tier 0 — four crates with no way in
 
 Still the largest block of ready work, and every item is the same shape: a
 tested library and a missing menu row. Read
@@ -98,21 +100,23 @@ batch by menu.
 | --- | --- |
 | The open path uses the large-file engine | `bp_buffer::{LargeFile, SizeClass, Access}` (ADR-0027). Opening a 2 GB file currently loads 2 GB. Needs a read-only-because-huge state in the shell, which is a real UI decision, so this is the biggest of the wiring items rather than the cheapest |
 | Security ▸ Audit history | `bp-audit` (ADR-0024) now has a working sealed destination, so the crate is complete. What is missing is the view and the calls that record events -- every capability that should write one already exists |
-| File ▸ Set as Default Editor | `bp-platform`'s `state`, `plan` and `install`. Linux installs; Windows generates a `.reg` and hands it over, pending D8. The refusal string is already shared with the capability register so the greyed row cannot drift from the error |
-| Security ▸ Sign, and verify against a sidecar | `bp-integrity` (ADR-0026). The *signing* half is blocked on D5; **verifying against a `.sig` sidecar is not**, and would replace the shell's hand-rolled two-file dialog with the crate's own convention |
 | Notebook mode | `bp-notebook` (ADR-0025). A new view, not a menu row |
 | Research mode | `bp-research`. Same: a mode, not a row |
 
 ## Tier 0.5 — what the cross-crate tests found
 
-Two of the four are fixed. What is left:
+Eleven files of cross-crate tests have now found seven defects. Four are
+fixed. These are the rest, each pinned by an `#[ignore]`d test naming it.
+**Take the first one before anything else in this file.**
 
 | Item | Shape |
 | --- | --- |
-| `bp-search` and `bp-buffer` disagree what a line is | **An ADR, not a patch — D6.** Either `bp-search` adopts ropey's break set or `bp-buffer` drops `unicode_lines`. One definition has to win, and `bp-ui` uses both today, in different views. Pinned by the only `#[ignore]`d test in the tree |
-| The shell still has its own encoder | `bp-files` now owns `encode` and `LineEndingPolicy`, and `bp_ui::state::encode` still exists beside it and still normalises. Adopting it is three call sites and deletes a `Result`; it is a **visible behaviour change** — saving stops rewriting minority line breaks — so it wants doing deliberately rather than as a tidy-up |
-| `Profile::is_data` is true for `Ini` and `Xml` | Latent. Harmless until somebody gates a menu on it, at which point every row fails |
+| **`bp-naming` generates Windows device names, and saving destroys the document** | **The most serious open defect.** `sanitize::is_reserved` matches the whole string; Win32 matches the stem before the first dot. So `con.txt`, `aux.log`, `NUL.dat`, `lpt1.bak` all pass sanitising, and opening one on Windows reads or writes the *device* -- the save reports success and the document is gone. Fix `is_reserved` to test the stem, and add `CONIN$`/`CONOUT$`. `bp_platform::paths::reserved_device_name` already does it correctly and is the model |
+| **`bp-notebook` runs unnameable code through the kernel's interpreter** | `infer_kind` does `stated.or(notebook_language)`, conflating "said nothing" with "said something we cannot map". ADR-0025 promises the second becomes `Raw` with a warning, and that only holds for a notebook with no kernelspec. Splitting those two cases is the fix; the ADR already says what the behaviour should be |
+| **`bp-files` never applies `\\?\`** | A name at `SemanticName::to_filename`'s own 255-byte maximum is unwritable in a deep enough directory, and `SaveError` blames a read-only file for `os error 3`. `bp_platform::paths::to_extended_length` is the fix; `bp-files` does not depend on `bp-platform` yet |
+| `bp-search` and `bp-buffer` disagree what a line is | **An ADR, not a patch — D6.** Either `bp-search` adopts ropey's break set or `bp-buffer` drops `unicode_lines`. One definition has to win, and `bp-ui` uses both today, in different views |
 | The recent-files list and the recovery directory both roam on Windows | `recent.toml` and `bp-ui`'s `recovery_dir` both hang off the config directory, which is `%APPDATA%` and roams. Both hold machine-specific absolute paths; `bp-platform` calls this `DirKind::State`. Needs one change owning `bp-config` **and** `bp-ui`, so it cannot be split between agents |
+| `Profile::is_data` is true for `Ini` and `Xml` | Latent. Harmless until somebody gates a menu on it, at which point every row fails |
 
 ## Tier 1 — pure wiring (the capability exists and is tested)
 
@@ -160,6 +164,7 @@ All of it, in one pass. What is worth carrying forward:
 | --- | --- |
 | ~~Word wrap in the editor surface~~ | **Done.** `bp_editor::wrap` owns the breaking rule; `view`'s wrapped half maps rows to characters; `Editor` moves Up and Down by visual row. The shell anchors scrolling to a line *and* a row within it, and Slint reports the column count because it owns the font. |
 | **Input-method composition** | **Slint 1.17.1, and this was checked rather than assumed.** `FocusScope` returns `EventResult::Reject` for `UpdateComposition` and `CommitComposition` in *both* `capture_key_event` and `key_event` (`i-slint-core/items/input_items.rs`), and exposes no callback for either. `TextInput` is the only item in the whole toolkit that consumes them, and `input_method_request` is a backend-internal trait, not an application hook. There is no route to pre-edit text from a `FocusScope`. Revisit on a Slint upgrade. |
+| **Security ▸ Sign Document** | **D5 — where a signing key lives.** `bp_integrity::sign_file` exists, is tested, and writes the very sidecar the Verify row now reads, so this is a key store away from working. The row is greyed with the reason on it rather than `planned`. Verifying shipped without it, because verifying needs nothing stored. |
 | Anything writing to `bp-storage` | **Still a decision, but a narrower one.** Phase 14 exists now and `record_document` honours the policy, so the security half is answered. What remains is ADR-0019's product judgement plus a design pass. Do not "just wire it up". |
 | `bp-organize` | The above, plus a design pass. |
 | ~~YAML support~~ | **Done and unreachable.** ADR-0023 picked `saphyr`; `bp-data` validates, formats, minifies and converts, with nesting, alias expansion and duplicate keys all bounded. No `bp-ui` code calls any of it. This is now a wiring item, not a blocked one. |
