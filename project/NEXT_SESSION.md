@@ -190,6 +190,13 @@ Three sessions of evidence, worth reading before dispatching any:
   not when the menu was built, and a 1.2 s poll can shift it in between.
   Pre-existing and applies to plain paste too; fixing it means freezing a
   snapshot while a menu is open.
+- **`fuzz/corpus/yaml/` breaks editor tooling that scans the workspace.**
+  Google's Cloud Code extension crash-loops its YAML language server on
+  `billion-laughs.yaml` — a 570-byte file, 21 aborts in one window, and three
+  notifications that never mention YAML. `.vscode/settings.json` now narrows
+  that extension's matcher and is checked in for that reason. Any other tool
+  that walks the tree for `*.yaml` is a candidate; the `.claude/worktrees/`
+  copies multiply it. Reproduction and numbers in `fuzz/README.md`.
 
 ---
 
