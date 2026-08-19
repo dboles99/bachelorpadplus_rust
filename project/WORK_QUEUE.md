@@ -71,8 +71,46 @@ so whoever finishes an item updates them as part of it.
 | W12 | Tab context menu | Right-click a tab |
 | W13 | Follow System theme | View menu, `ThemeId::for_system` |
 | W14 | Indentation settings | Format menu, `bp_editor::Indent` |
+| — | YAML, bounded before a tree exists | ADR-0023, `bp-data` |
+| — | Document hashes and detached Ed25519 signatures | `bp-crypto::sign` |
+| — | Privacy Mode, and a secret scanner that never holds a secret | `bp-security`, `bp-secrets` |
+| — | The large-file engine | ADR-0027, `bp-buffer` |
+| — | Notebooks, research, redaction, audit, integrity | ADR-0024/0025/0026/0028 |
+| — | Scan for Secrets, Hash, Verify Signature | Security menu, ids 200-203 |
+| — | Cross-crate tests, and the four defects they found | `tests/integration` |
 
 Every library half now has its row.
+
+## Tier 0 — six crates with no way in
+
+This is the largest block of ready work in the repository, and every item is
+the same shape: a tested library and a missing menu row. Read
+`prompts/rosettas/R011_WIRE_CAPABILITY_INTO_SHELL.md` before taking any of
+them. **Only one agent may add to `AppWindow` in `app.slint` at a time**, so
+batch by menu.
+
+| Item | What exists |
+| --- | --- |
+| Data ▸ YAML validate / format / minify / convert | `bp_data::{yaml_validate, yaml_format, yaml_minify, yaml_to_json, json_to_yaml}` (ADR-0023). The cheapest item here: the Data menu already has the shape for it, next to JSON |
+| The open path uses the large-file engine | `bp_buffer::{LargeFile, SizeClass, Access}` (ADR-0027). Opening a 2 GB file currently loads 2 GB. Needs a read-only-because-huge state in the shell, which is a real UI decision |
+| Security ▸ Redact | `bp_redaction::{redact, verify}` (ADR-0028). Needs spans, so it pairs naturally with Scan for Secrets, which already produces them |
+| Security ▸ Metadata inspector | `bp_redaction::metadata::inspect` |
+| Security ▸ Audit history | `bp-audit` (ADR-0024). **Also needs a `Sealer` implementor**, or `Destination::Sealed` refuses every time; wrapping the `.bpadx` envelope is the intended wiring |
+| Security ▸ Sign, and verify against a sidecar | `bp-integrity` (ADR-0026). Blocked on the signing-key decision in `DECISIONS.md`; the *verify against a sidecar* half is not |
+| Notebook mode | `bp-notebook` (ADR-0025). The largest of these by far — a new view, not a menu row |
+| Research mode | `bp-research`. Same: a mode, not a row |
+
+## Tier 0.5 — the four defects the cross-crate tests found
+
+Each has an ignored test naming it, and each is written up with evidence in
+`DECISIONS.md`.
+
+| Item | Shape |
+| --- | --- |
+| `bp-formats` sniffs a pretty-printed JSON array as JSON Lines | A plain defect. `looks_like_json_lines` needs to not count lines inside a document that opened with `[`. Smallest item in the queue |
+| `bp_ui::state::encode` belongs in `bp-files` | A move, plus the mixed-line-ending bug it hides. R013 says the shell connects and does not decide; this one decides |
+| `bp-search` and `bp-buffer` disagree what a line is | **An ADR, not a patch.** Either `bp-search` adopts ropey's break set or `bp-buffer` drops `unicode_lines`. One definition has to win, and `bp-ui` uses both today |
+| `Profile::is_data` is true for `Ini` and `Xml` | Latent. Harmless until somebody gates a menu on it, at which point every row fails |
 
 ## Tier 1 — pure wiring (the capability exists and is tested)
 
@@ -120,11 +158,11 @@ All of it, in one pass. What is worth carrying forward:
 | --- | --- |
 | ~~Word wrap in the editor surface~~ | **Done.** `bp_editor::wrap` owns the breaking rule; `view`'s wrapped half maps rows to characters; `Editor` moves Up and Down by visual row. The shell anchors scrolling to a line *and* a row within it, and Slint reports the column count because it owns the font. |
 | **Input-method composition** | **Slint 1.17.1, and this was checked rather than assumed.** `FocusScope` returns `EventResult::Reject` for `UpdateComposition` and `CommitComposition` in *both* `capture_key_event` and `key_event` (`i-slint-core/items/input_items.rs`), and exposes no callback for either. `TextInput` is the only item in the whole toolkit that consumes them, and `input_method_request` is a backend-internal trait, not an application hook. There is no route to pre-edit text from a `FocusScope`. Revisit on a Slint upgrade. |
-| Anything writing to `bp-storage` | **A decision, not a task.** Recording a document's extracted title puts a plaintext index of what the user writes about on disk. ADR-0019 explains why it is deliberately unwired; ADR-0011 says the security profile governs it, and phase 14 does not exist. Do not "just wire it up". |
+| Anything writing to `bp-storage` | **Still a decision, but a narrower one.** Phase 14 exists now and `record_document` honours the policy, so the security half is answered. What remains is ADR-0019's product judgement plus a design pass. Do not "just wire it up". |
 | `bp-organize` | The above, plus a design pass. |
-| YAML support | `serde_yaml` is deprecated; the replacement is a long-lived dependency choice and wants a human. |
+| ~~YAML support~~ | **Done and unreachable.** ADR-0023 picked `saphyr`; `bp-data` validates, formats, minifies and converts, with nesting, alias expansion and duplicate keys all bounded. No `bp-ui` code calls any of it. This is now a wiring item, not a blocked one. |
 | Markdown preview | Slint has no HTML view. Needs a rendering decision first. |
-| `.bpadx` encryption | ADR-0011 forbids custom cryptography; envelope format, crate and versioning want agreement before code. |
+| ~~`.bpadx` encryption~~ | **Done.** ADR-0021 settled the envelope and it ships; ADR-0022 seals the recovery journal with it. |
 | Print | Platform work with no cross-platform story yet. |
 | **W11, drag and drop to open** | **Slint 1.17.1**, and this was checked rather than assumed. `DropArea` exists and compiles, and the item is implemented in `i-slint-core/items/drag_n_drop.rs` -- but the winit backend has no file-drop plumbing, and `DataTransfer` exposes only `plain_text` and `image`. There is no channel a dropped file's path could arrive through. Revisit on a Slint upgrade; do not spend an afternoon on it before checking that changed. |
 

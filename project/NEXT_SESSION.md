@@ -1,21 +1,62 @@
 # Next session plan
 
-Written 2026-08-17, at the end of the third build session.
+Rewritten 2026-08-19, at the end of the fourth build session.
 
-State: 15 crates, 542 tests, 26 commits, every one through the full gate,
-green on Windows and Linux.
+State: 23 crates, 1,342 tests, green on Windows and Linux. Two of those tests
+are `#[ignore]`d on purpose, because they name real defects.
 
 ---
 
-## Start here: ten minutes with `--editor-view`
+## The shape of the problem has changed
+
+For three sessions the largest gap was that capabilities did not exist. It is
+now the opposite. **Six crates are built, tested and unreachable** — the
+large-file engine, notebooks, research, redaction, audit and integrity — and
+the queue's Tier 0 is nothing but wiring. Building another library is the
+easy, comfortable move and it is the wrong one.
+
+Two things are worth more than any new crate:
+
+### 1. Ten minutes with the application
+
+Still first, still not done, and now with more riding on it. Four rows were
+added to the Security menu this session and **none has been clicked**. The
+`--editor-view` checklist below is unchanged and still unanswered.
+
+```powershell
+cargo run --release
+cargo run --release -- --editor-view
+```
+
+Click Security ▸ Scan for Secrets on a file with an AWS key in it. Click Hash
+Document and check the digest against `sha256sum`. Note whether the menu, now
+four rows longer, still reaches its own bottom row — `MenuPopup` caps its
+height and scrolls, and a long menu putting its lowest rows out of reach has
+happened here before and was found by a person, not a test.
+
+### 2. Fix the four defects, or decide them
+
+`project/WORK_QUEUE.md` Tier 0.5. The `bp-formats` JSONL sniff is the
+smallest item in the repository. The line-definition disagreement between
+`bp-search` and `bp-buffer` is an ADR and wants deciding rather than patching.
+Moving `encode` out of `bp-ui` into `bp-files` fixes a silent data-loss bug on
+mixed-line-ending documents *and* puts a decision back in a library where it
+can be tested.
+
+**Write more cross-crate tests as you go.** The first six files of them found
+four defects that 798 unit tests had not. That ratio is the most useful thing
+learned this session.
+
+---
+
+## The `--editor-view` checklist, unchanged and still unanswered
 
 ```powershell
 cargo run --release -- --editor-view
 ```
 
-This has been the first item for two sessions running and it has not been
-done. It is now the single largest thing standing between this project and
-knowing whether it works.
+This has been the first item for three sessions running and it has not been
+done.
 
 The custom editor view (ADR-0018) has 147 tests behind its *rules* — motion,
 word boundaries, chords, tab stops, the involution property that caught two
@@ -49,80 +90,38 @@ whatever that caret does.
 
 ---
 
-## Then, in order of value
+## What is no longer on this list
 
-### 1. Wire the five built-but-unreachable things
+Three items that headed previous versions of this plan are done, and are
+recorded here so nobody re-derives them:
 
-Each is a tested library function with no menu row. They are the cheapest
-work available and `project/WORK_QUEUE.md` has the specifics.
+- **Wire the five built-but-unreachable things** — done, plus seven more.
+  Every library half in the old table has its menu row.
+- **Parity, or retire the flag** — settled, and not in the view's favour.
+  Word wrap works; input-method composition cannot be done on Slint 1.17.1
+  and the evidence is in `project/WORK_QUEUE.md`. `--editor-view` stays
+  opt-in and the default stays `TextInput`.
+- **Security profiles (phase 14)** — done. All three dependants read the
+  policy, Privacy Mode clamps it for the session, and phase 15 shipping means
+  the profiles wanting an encrypted journal are honoured rather than refused.
 
-| Row | Function that already exists |
-| --- | --- |
-| Zoom (Ctrl+= / Ctrl+- / Ctrl+0) | `Config::font_size` |
-| Indentation (tab width, spaces or tabs) | `Config::{tab_width, indent_spaces}` |
-| Insert ▸ Date / Time / ISO 8601 | `bp_naming::Stamp::all()` |
-| Document statistics | `bp_semantic::statistics` |
-| Go to Line | `Editor::go_to_line` |
-
-Two more Tier 1 items need no library work at all: the find box's
-case-sensitive / whole-word / **regex** toggles (regex search is fully
-implemented and unreachable), and double- and triple-click selection.
-
-**They no longer all queue behind one file.** `ui/app.slint` has been split
-the way `lib.rs` was — seven files, listed in
-`docs/architecture/ARCHITECTURE.md` — so the find bar, the editor surface, the
-status bar, the results panel and the tab are each somebody's own file.
-
-What still serialises is narrower but real: `AppWindow`'s properties and
-callbacks stay in `app.slint`, because that is the API Rust binds to, and so
-do the menu bar, the popups, both editor views and the tab strip. An item that
-adds a property still edits that file; it just no longer edits twelve hundred
-lines to do it. `project/WORK_QUEUE.md` has the rule.
-
-### 2. Parity, or retire the flag
-
-`--editor-view` is temporary and should not become furniture. Two things
-stand between it and being the default:
-
-1. **Word wrap.** The deep one: it makes a visual line differ from a document
-   line, which every function in `bp_editor::view` assumes away, and it
-   changes what Up and Down mean.
-2. **Input-method composition.** Slint delivers pre-edit text through
-   `KeyEventType::UpdateComposition`, which a bare `FocusScope` never sees.
-   Without it CJK entry does not work at all. Investigate before writing code.
-
-If those look worse than they are worth, the honest outcome is to delete the
-surface and keep the rope. The storage change is the valuable half and it is
-already unconditional.
-
-### 3. Security profiles (phase 14)
-
-Now the largest structural gap, and it has three dependants rather than two:
-the recovery journal writing unsaved text to disk in plaintext, clipboard
-history holding copied secrets in memory, and `bp-storage` — built, tested,
-and deliberately unreachable because recording a document's extracted title
-puts a plaintext index of what the user writes about on disk.
-
-The first two are *running*. The third is *waiting*, which is the better
-failure mode and the reason it was left unwired.
-
----
+The replacement for all three is Tier 0 of `project/WORK_QUEUE.md`: six
+crates with no way in.
 
 ## Decisions still waiting on a human
 
-- **`.bpadx` envelope format** (phase 15). ADR-0011 forbids custom
-  cryptography, which constrains this more than it looks: crate, envelope
-  layout and version scheme want agreeing before code exists.
-- **What may leave the machine** (phases 8 and 10). Generative providers and
-  embeddings both imply sending document content somewhere. Nothing says
-  which providers are acceptable.
-- **YAML parser** (phase 6). `serde_yaml` is deprecated; the replacement is a
-  long-lived dependency choice.
-- **Whether `bp-storage` may record titles before phase 14.** Currently no,
-  by ADR-0019. That is a decision, not an oversight, and reversing it is
-  allowed — but deliberately.
-
----
+- **Where a signing key lives** (phase 16). This is the one blocking a row
+  that is otherwise finished — Sign Document greys because there is no key
+  store, no keyring integration and no decision on file permissions for a key
+  on disk. ADR-0026 documents what `bp-integrity` can and cannot enforce per
+  platform, which is most of the input needed.
+- **One definition of a line.** `bp-search` counts `
+`; `bp-buffer`'s rope
+  uses ropey's `unicode_lines`. `bp-ui` uses both today, in different views.
+- **What may leave the machine** (phases 8 and 10). Unchanged.
+- **Whether `bp-storage` may record extracted titles** (phase 9). Narrower
+  than it was — the security half is answered by phase 14 — but ADR-0019's
+  product judgement still stands.
 
 ## Working with agents in this repository
 
