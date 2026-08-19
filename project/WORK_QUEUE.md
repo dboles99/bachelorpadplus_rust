@@ -85,6 +85,7 @@ so whoever finishes an item updates them as part of it.
 | — | Data ▸ YAML, Security ▸ Redact, Security ▸ Inspect Metadata | ids 204-205, 210-211 |
 | — | File ▸ Set as Default Editor, which reports before it offers | ADR-0012, File menu, id 220 |
 | — | Security ▸ Verify Signature, against `bp-integrity`'s sidecar | ADR-0026, id 203 |
+| — | `bp-naming` tests the *stem* for a device name, as Win32 does | `bp-naming`, and a two-way list agreement test |
 
 Every library half now has its row.
 
@@ -105,13 +106,13 @@ batch by menu.
 
 ## Tier 0.5 — what the cross-crate tests found
 
-Eleven files of cross-crate tests have now found seven defects. Four are
-fixed. These are the rest, each pinned by an `#[ignore]`d test naming it.
-**Take the first one before anything else in this file.**
+Eleven files of cross-crate tests have now found seven defects. Five are
+fixed -- the last of them was the one that destroyed documents, and it is in
+the Done table above. These are the rest, each pinned by an `#[ignore]`d test
+naming it. **Take the first one before anything else in this file.**
 
 | Item | Shape |
 | --- | --- |
-| **`bp-naming` generates Windows device names, and saving destroys the document** | **The most serious open defect.** `sanitize::is_reserved` matches the whole string; Win32 matches the stem before the first dot. So `con.txt`, `aux.log`, `NUL.dat`, `lpt1.bak` all pass sanitising, and opening one on Windows reads or writes the *device* -- the save reports success and the document is gone. Fix `is_reserved` to test the stem, and add `CONIN$`/`CONOUT$`. `bp_platform::paths::reserved_device_name` already does it correctly and is the model |
 | **`bp-notebook` runs unnameable code through the kernel's interpreter** | `infer_kind` does `stated.or(notebook_language)`, conflating "said nothing" with "said something we cannot map". ADR-0025 promises the second becomes `Raw` with a warning, and that only holds for a notebook with no kernelspec. Splitting those two cases is the fix; the ADR already says what the behaviour should be |
 | **`bp-files` never applies `\\?\`** | A name at `SemanticName::to_filename`'s own 255-byte maximum is unwritable in a deep enough directory, and `SaveError` blames a read-only file for `os error 3`. `bp_platform::paths::to_extended_length` is the fix; `bp-files` does not depend on `bp-platform` yet |
 | `bp-search` and `bp-buffer` disagree what a line is | **An ADR, not a patch — D6.** Either `bp-search` adopts ropey's break set or `bp-buffer` drops `unicode_lines`. One definition has to win, and `bp-ui` uses both today, in different views |

@@ -2,9 +2,10 @@
 
 Rewritten 2026-08-20, at the end of the fifth build session.
 
-State: 24 crates, 1,625 tests, green on Windows and Linux. Four of those
-tests are `#[ignore]`d on purpose, because each one names a real defect and
-wants a fix or a decision rather than a passing assertion.
+State: 24 crates, 1,633 tests, green on Windows and Linux. Three of those are
+`#[ignore]`d on purpose, because each one names a real defect and wants a fix
+or a decision rather than a passing assertion. There were four: the one that
+destroyed documents is fixed, and its test runs now.
 
 ---
 
@@ -45,26 +46,20 @@ to change anything, and on Windows it writes nothing at all without a Save
 dialog first. It is the only row in this product that touches state outside
 it.
 
-### 2. Fix the defect that destroys documents
+### 2. Fix the defects the cross-crate tests found
 
-`project/WORK_QUEUE.md` Tier 0.5, and it is first in that table for a reason.
-`bp_naming::sanitize::is_reserved` asks whether the *whole* sanitised title is
-a reserved device name; Win32 asks about the stem before the first dot. A dot
-is not a forbidden character, so it survives sanitising -- and `con.txt`,
-`aux.log`, `NUL.dat` and `lpt1.bak` all pass untouched. On Windows, saving to
-one of those writes **the device**: the save reports success and the document
-is gone.
+`project/WORK_QUEUE.md` Tier 0.5. **The one that destroyed documents is
+fixed.** `bp_naming::sanitize` now takes the stem before the first dot, the
+way Win32 does, so `con.txt`, `aux.log`, `NUL.dat` and `lpt1.bak` become
+`con File.txt` and its friends rather than names that write to the device.
+Its list gained `CONIN$` and `CONOUT$`, and a property test compares the two
+crates' verdicts stem by stem, in both directions, so the two lists cannot
+drift apart quietly.
 
-The fix is small and the model is already in the tree.
-`bp_platform::paths::reserved_device_name` takes the stem, trims trailing
-spaces, and includes `CONIN$` and `CONOUT$`, which `bp-naming`'s list omits.
-An `#[ignore]`d test in
-`tests/integration/tests/generated_names_are_legal_and_writable.rs` pins it.
-
-Two more sit behind it, pinned the same way: `bp-notebook` running code it
-could not name through the kernel's interpreter, and `bp-files` never applying
-`\\?\`. The line-definition disagreement is D6 and wants an answer, not a
-patch.
+Two sit behind it, pinned by `#[ignore]`d tests: `bp-notebook` running code
+it could not name through the kernel's interpreter, and `bp-files` never
+applying `\\?\`. The line-definition disagreement is D6 and wants an
+answer, not a patch.
 
 **Write more cross-crate tests as you go.** Eleven files of them have now
 found seven defects that the unit tests had not. That ratio is still the most
@@ -193,10 +188,12 @@ Three sessions of evidence, worth reading before dispatching any:
 - **`fuzz/corpus/yaml/` breaks editor tooling that scans the workspace.**
   Google's Cloud Code extension crash-loops its YAML language server on
   `billion-laughs.yaml` — a 570-byte file, 21 aborts in one window, and three
-  notifications that never mention YAML. `.vscode/settings.json` now narrows
-  that extension's matcher and is checked in for that reason. Any other tool
-  that walks the tree for `*.yaml` is a candidate; the `.claude/worktrees/`
-  copies multiply it. Reproduction and numbers in `fuzz/README.md`.
+  notifications that never mention YAML. No checked-in setting fixes it —
+  narrowing `cloudcode.yaml.yamlFileMatcher` was tried and does not, because
+  the server dies during initialisation. Disable the extension for this
+  workspace; nothing here is GCP. Any other tool that walks the tree for
+  `*.yaml` is a candidate; the `.claude/worktrees/` copies multiply it.
+  Reproduction and numbers in `fuzz/README.md`.
 
 ---
 
