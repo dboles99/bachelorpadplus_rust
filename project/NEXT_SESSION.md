@@ -31,32 +31,20 @@ worth trusting.
 
 Four things are worth more than any new crate:
 
-### 1. Ten minutes with the application
+### 1. ~~Ten minutes with the application~~ — done, and it found a defect
 
-Still first, still not done, and now with more riding on it. Security gained
-four rows in the fourth session; the fifth rebuilt Verify Signature on
-`bp-integrity`'s sidecar and added File ▸ Set as Default Editor, which writes
-into the desktop database on Linux and saves a `.reg` on Windows. **None of it
-has been clicked**, and the last of those is the one row here that changes
-something outside this application. The `--editor-view` checklist below is
-unchanged and still unanswered.
+**Done on 2026-08-20.** The section below records what it answered; the
+short version is that the product works and one thing was quietly wrong on
+screen that no test could have seen. What remains unchecked is the wheel,
+drag-to-select, resize, and the goal column when arrowing through a short
+line.
 
-```powershell
-cargo run --release
-cargo run --release -- --editor-view
-```
-
-Click Security ▸ Scan for Secrets on a file with an AWS key in it. Click Hash
-Document and check the digest against `sha256sum`. Note whether the menu, now
-four rows longer, still reaches its own bottom row — `MenuPopup` caps its
-height and scrolls, and a long menu putting its lowest rows out of reach has
-happened here before and was found by a person, not a test.
-
-Then File ▸ Set as Default Editor, which deserves reading rather than
-clicking through: it reports what opens those types today *before* it offers
-to change anything, and on Windows it writes nothing at all without a Save
-dialog first. It is the only row in this product that touches state outside
-it.
+The rows added over the last two sessions have now been clicked: Scan for
+Secrets answers, the Security menu reaches its own bottom row, and Security ▸
+Security History is live. **File ▸ Set as Default Editor is the exception and
+is still unclicked** -- it is the one row that changes state outside this
+application, so it wants reading rather than clicking through, and nobody has
+done that yet.
 
 ### 2. Fix the defects the cross-crate tests found
 
@@ -133,46 +121,64 @@ Two things worth keeping from doing it:
 
 ---
 
-## The `--editor-view` checklist, unchanged and still unanswered
+## The `--editor-view` checklist — answered, and it found one defect
 
 ```powershell
 cargo run --release -- --editor-view
 ```
 
-This has been the first item for three sessions running and it has not been
-done.
+**Done on 2026-08-20**, after heading this file for four sessions. A person
+drove both views. What it found is worth more than the four sessions of
+waiting suggested, and less than feared.
 
-The custom editor view (ADR-0018) has 147 tests behind its *rules* — motion,
-word boundaries, chords, tab stops, the involution property that caught two
-real defects. Its *behaviour in a window* has been verified to exactly one
-standard: it renders a frame with a real file open and exits without
-panicking.
-
-Everything below is unverified, and each is seconds:
-
-| Check | What would be wrong |
+| Check | Answer |
 | --- | --- |
-| Type a character | Keys not reaching the `FocusScope` at all |
-| Click mid-line | Caret lands left or right of the pointer — the measured advance is off |
-| Click at the end of a long line | Advance error accumulating across columns |
-| Arrow down through a short line and back up | The goal column not surviving |
-| Drag to select | Selection rectangles misplaced, or drag not extending |
-| Scroll the wheel | Wrong direction, or snapping back to the caret |
-| **Ctrl+S** | The surface swallowing chords it should reject — this would stop saving |
-| Ctrl+D, Alt+Up, Alt+Down | Duplicate and move line, shipped this session, never run |
-| Watch the status bar | Ln/Col is the payoff; it should track the caret |
-| Open a tab-indented file | Tab stops wrong, caret off by columns |
-| Resize the window | Row count not following, blank strip at the bottom |
+| Type a character | Works, both views |
+| Click mid-line | **Caret tracks the pointer.** A click on a line reported that line; a click at the end of `line 30` reported `Ln 30, Col 8`, exactly its length plus one |
+| **Ctrl+S** | **Works** — verified by reading the file back off the disk, not by the status bar |
+| Watch the status bar | `Ln 18, Col 66` and `Ln 30, Col 8`. The payoff is real |
+| Open a tab-indented file | **Broken, and now fixed** — see below |
+| The Security menu reaching its bottom row | Reaches it. `MenuPopup` is not clipping the four rows added since |
+| Recovery journal | Fires unprompted; the status bar showed `Recovery 10:00 AM` |
+| Scroll the wheel | **Still unchecked** |
+| Drag to select | **Still unchecked** |
+| Resize the window | **Still unchecked** |
+| Arrow down through a short line and back up | **Still unchecked** |
 
-**The advance measurement and the wheel direction are the two most likely to
-be subtly wrong.** Both are single-line fixes once someone has looked.
+### What it found: a tab was drawn as one glyph
 
-Write down what feels wrong, not only what breaks. The default is still
-`TextInput`, so nothing is lost if the answer is bad — but five features
-shipped in the last two sessions are enabled only here, and they all inherit
-whatever that caret does.
+`bp_editor::view` computed columns as though tabs reached the next stop --
+`visual_column`, `char_column` and `wrap` all did -- while `VisualRow::text`
+handed the raw `	` to Slint, which draws it as a single glyph. The surface
+places the caret and the selection at `visual_column x advance`, so **on any
+line containing a tab the caret sat somewhere the character was not, and the
+error grew with every tab further along the line.**
 
----
+Fixed by `bp_editor::view::expand_tabs` and `VisualRow::display_text`.
+`text` stays raw, because the column arithmetic in that module indexes it by
+character; `display_text` is what the toolkit gets. The property that pins
+it: for every position in a line, the number of characters drawn before it
+equals the visual column computed for it.
+
+**Nothing in 177 tests caught this, and nothing was going to.** Every one of
+them was about the model, and the model was right. The defect lived in the
+one seam a test cannot see -- what a toolkit does with the string it is
+handed -- which is the exact argument this file has been making for four
+sessions about why somebody has to look.
+
+### Two things about doing this again
+
+- **Do not drive the window while somebody else is.** Two of the three
+  findings from this pass evaporated on inspection: a fixture whose line
+  labels were hand-numbered and drifted from the gutter by one (the gutter
+  was right), and an apparent stray deletion that was the other person
+  typing. Generate a fixture rather than numbering it by hand -- the one in
+  the scratchpad asserts every label against its own position.
+- **`AKIAIOSFODNN7EXAMPLE` is not a finding, and a scan that ignores it is
+  working.** `bp-secrets` treats anything containing `example` as a
+  placeholder, deliberately, with a test pinning that exact string. A fixture
+  meant to exercise the scan needs a key that looks random --
+  `AKIA5MZ7QK2XPLRW4VTD` does.
 
 ## What is no longer on this list
 
@@ -255,7 +261,8 @@ Three sessions of evidence, worth reading before dispatching any:
 
 ## Housekeeping
 
-- **`bp-ui`'s tests create `%APPDATA%achelorpadecovery`.** Empty --
+- **`bp-ui`'s tests create `%APPDATA%achelorpad
+ecovery`.** Empty --
   every checkpoint they trigger is refused and refusal deletes -- so it is a
   `mkdir` and nothing more. It is still a test reaching outside a temp
   directory, and it is the same shape as the defect the security history hit
