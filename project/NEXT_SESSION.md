@@ -1,125 +1,81 @@
 # Next session plan
 
-Rewritten 2026-08-20, at the end of the fifth build session.
+Rewritten 2026-08-20, at the end of the sixth build session.
 
-State: 24 crates, 1,649 tests, green on Windows and Linux. Three of those are
-`#[ignore]`d on purpose, because each one names a real defect and wants a fix
-or a decision rather than a passing assertion. There were four: the one that
-destroyed documents is fixed, and its test runs now.
+State: 24 crates, 1,693 tests, **0 ignored**, green on Windows and Linux
+across all ten gate stages. Every defect the eleven files of cross-crate tests
+found is fixed, and the last decision behind one of them — D6, what a line is
+— is ADR-0029.
 
 ---
 
-## The shape of the problem has changed
+## The shape of the problem has changed again
 
-For three sessions the largest gap was that capabilities did not exist. It is
-now the opposite. **Three crates are built, tested and unreachable** — the
-large-file engine, notebooks and research — and the queue's Tier 0 is
-nothing but wiring. Building another library is the easy, comfortable move
-and it is the wrong one.
+Three sessions ago the gap was that capabilities did not exist. Two sessions
+ago it was that they existed and were unreachable. **Neither is the gap now.**
 
-An audit at the end of the fifth session put a number on that: `bp-research`,
-`bp-notebook` and `bp-storage` have **zero reverse dependencies anywhere in
-the application**, and with `bp-buffer`'s large-file engine that is over ten
-thousand lines and 237 unit tests defending code no user can reach.
-`bp-notebook` is named by the fuzz harness; nothing in the shipped binary
-names any of the three. `bp-audit` came off that list in the same session --
-Security ▸ Security History reads it and five capabilities write into it.
+Twenty of the twenty-three library crates are reachable from the shell. Every
+defect the cross-crate tests found is fixed. There is no `#[ignore]`d test
+anywhere in the tree. The record has been reconciled with the product and the
+gate has grown two stages that were missing. What is left is smaller, and
+sharper, than any of that.
 
-The same audit found two things this file had no way to see, and they are
-items 2 and 3 below. Both are cheap, and both make everything after them
-worth trusting.
+**Three things are worth more than anything else in the queue.**
 
-Four things are worth more than any new crate:
+### 1. The viewer for a document the rope does not hold
 
-### 1. ~~Ten minutes with the application~~ — done, and it found a defect
+The largest single thing between this repository and a product, and it is now
+the *only* part of the large-file story still missing.
 
-**Done on 2026-08-20.** The section below records what it answered; the
-short version is that the product works and one thing was quietly wrong on
-screen that no test could have seen. What remains unchecked is the wheel,
-drag-to-select, resize, and the goal column when arrowing through a short
-line.
+The classification half shipped: the open path reads metadata before it reads
+a byte, an ordinary document opens as it always did, a large one opens and
+edits with its size in the status bar, and a huge one is refused in
+`Access::ReadOnlyBySize`'s own words. "Opening a 2 GB file loads 2 GB" is no
+longer true.
 
-The rows added over the last two sessions have now been clicked: Scan for
-Secrets answers, the Security menu reaches its own bottom row, and Security ▸
-Security History is live. **File ▸ Set as Default Editor is the exception and
-is still unclicked** -- it is the one row that changes state outside this
-application, so it wants reading rather than clicking through, and nobody has
-done that yet.
+What is missing is showing one. `bp_buffer::LargeFile` has `display_lines`,
+`index_through_line`, `line_start` and `WindowReader`, all tested and
+benchmarked (ADR-0027 carries the numbers). Connecting them means
+`display_lines` driving the editor surface's scroll anchor — which is
+**`--editor-view` only**, because `TextInput` owns its own text and there is
+no way to hand it a window of a file it does not have.
 
-### 2. Fix the defects the cross-crate tests found
+That is the shape of the work, and it is worth knowing before starting: this
+is the first feature that is *only* available under the opt-in view. Decide
+whether that is acceptable before writing code, because the alternative — a
+huge file that opens under one flag and is refused under the other — is a
+product answer, not an implementation detail.
 
-`project/WORK_QUEUE.md` Tier 0.5. **The one that destroyed documents is
-fixed.** `bp_naming::sanitize` now takes the stem before the first dot, the
-way Win32 does, so `con.txt`, `aux.log`, `NUL.dat` and `lpt1.bak` become
-`con File.txt` and its friends rather than names that write to the device.
-Its list gained `CONIN$` and `CONOUT$`, and a property test compares the two
-crates' verdicts stem by stem, in both directions, so the two lists cannot
-drift apart quietly. `bp-files` closes the other route into the same failure
--- the name a user *types*, which sanitising never sees -- by refusing to
-write to a device at all.
+### 2. Finish the manual pass
 
-Two sit behind it, pinned by `#[ignore]`d tests: `bp-notebook` running code
-it could not name through the kernel's interpreter, and `bp-files` never
-applying `\\?\`. The line-definition disagreement is D6 and wants an
-answer, not a patch.
+Four checks remain, and the last pass is the argument for doing them: it found
+a defect 177 tests could not, in the one seam a test in this repository cannot
+see — what a toolkit does with the string it is handed.
 
-**Write more cross-crate tests as you go.** Eleven files of them have now
-found seven defects that the unit tests had not. That ratio is still the most
-useful thing this project has learned.
-
-### 3. ~~Make the record match the product again~~ — done, and worth knowing why
-
-**Done at the end of the fifth session, in the same pass that found it.**
-This repository's method is that the written record says what is real — that
-is what ROADMAP's three-word status vocabulary is for. An audit found four
-entries in `DECISIONS.md`'s open-items list describing defects that were
-demonstrably fixed, a README roster naming two crates that have menu rows
-while omitting two that have none, and phase 18 still marked *Built,
-unwired* a session after Set as Default Editor shipped. All of it is
-corrected. What is worth carrying forward is the list itself, because every
-one of these went stale the same way — the fix landed and the record did
-not:
-
-| Claim | Where it is false |
+| Still unchecked | Why it matters |
 | --- | --- |
-| JSONL sniff calls a pretty-printed array "JSON Lines" | `bp_formats::looks_like_json_lines` requires `closes_what_it_opens(first)` |
-| The encoder is `pub(crate)` in the shell | `crates/bp-files/src/encode.rs` |
-| YAML has no way in | `bp-ui/src/state.rs:593` calls `bp_data::yaml_validate` |
-| `bp-audit`'s sealed destination has no implementor | `bp-audit/src/passphrase.rs:185` |
-| README: five crates built and unreachable | Names `bp-integrity` and `bp-platform`, which have rows; omits `bp-audit` and `bp-storage`, which do not |
-| ROADMAP phase 18: **Built, unwired** | File ▸ Set as Default Editor shipped in the fifth session |
+| Scroll the wheel | Direction, and whether it snaps back to the caret |
+| Drag to select | Whether the selection rectangles land where the drag went |
+| Resize the window | Whether the row count follows, or a blank strip appears |
+| Arrow down through a short line and back up | Whether the goal column survives |
+| **File ▸ Set as Default Editor** | **The only row that changes state outside this application.** It reports before it offers and writes nothing on Windows without a Save dialog first — so it wants reading rather than clicking through |
 
-A reader who checks one claim and finds it stale has no way to know which of
-the rest to trust, and the method depends entirely on trusting them. **The
-roster is now counted rather than remembered** — reverse dependencies read
-out of every `Cargo.toml` and checked against what the shell's source
-actually names — which is the only version of that claim that stays true
-without somebody maintaining it.
+### 3. The two latent defects, before something depends on them
 
-### 4. ~~Put `fuzz/` inside the gate~~ — done, and it costs five minutes
+Neither is wrong today. Both become wrong the moment anything relies on them,
+and both are cheap now and awkward later.
 
-`Invoke-LocalCI.ps1` swept `spikes/` for standalone workspaces. There is no
-`spikes/` directory in this tree, and there *was* a `fuzz/` one holding five
-hostile-input harnesses that nothing formatted, linted or ran — while phase 19
-was marked *Started* on the strength of them.
-
-Two stages now run them, on both legs, and they were green from the first run:
-42 tests, one `#[ignore]`d for cost with the reason on it. **The full gate is
-about five minutes longer** — two and a half per leg — which is the honest
-price of the assurance and is visible in the stage table rather than hidden.
-`-Quick` skips it, so `pre-commit` is unchanged and `pre-push` carries it.
-
-Two things worth keeping from doing it:
-
-- **The stage was verified to fail**, by breaking the formatting of
-  `fuzz/tests/yaml.rs` and watching it go red while the workspace `fmt` stage
-  stayed green. That contrast *is* the blindness, reproduced. A gate stage
-  nobody has seen fail is a stage nobody knows the shape of.
-- **Where one harness becomes too expensive to gate on**, the answer is
-  already in the tree: `fuzz/tests/envelope.rs` `#[ignore]`s its KDF-cost
-  test with the reason on it. Do that, not a switch that turns the stage off.
-
----
+- **`recent.toml` and `recovery_dir` roam on Windows.** Both hang off the
+  config directory, which is `%APPDATA%`; both hold machine-specific absolute
+  paths, which is exactly what `bp_platform::DirKind::roams` warns against.
+  One change owning `bp-config` **and** `bp-ui`, so it cannot be split.
+  It would also close something recorded and not fixed: `bp-ui`'s tests
+  create a real `%APPDATA%achelorpad
+ecovery` directory, which is the
+  same shape as the security-history defect that was found and fixed by
+  giving the path a field instead of a global.
+- **`Profile::is_data` is true for `Ini` and `Xml`.** Harmless until somebody
+  gates a menu on it, at which point every row fails at once.
 
 ## The `--editor-view` checklist — answered, and it found one defect
 
@@ -182,36 +138,53 @@ sessions about why somebody has to look.
 
 ## What is no longer on this list
 
-Three items that headed previous versions of this plan are done, and are
-recorded here so nobody re-derives them:
+Recorded so nobody re-derives them.
 
-- **Wire the five built-but-unreachable things** — done, plus seven more.
-  Every library half in the old table has its menu row.
-- **Parity, or retire the flag** — settled, and not in the view's favour.
-  Word wrap works; input-method composition cannot be done on Slint 1.17.1
-  and the evidence is in `project/WORK_QUEUE.md`. `--editor-view` stays
-  opt-in and the default stays `TextInput`.
-- **Security profiles (phase 14)** — done. All three dependants read the
-  policy, Privacy Mode clamps it for the session, and phase 15 shipping means
-  the profiles wanting an encrypted journal are honoured rather than refused.
-
-The replacement for all three is Tier 0 of `project/WORK_QUEUE.md`: four
-crates with no way in.
+- **Ten minutes with the application** — done, and it found the tab defect.
+- **Wire the built-but-unreachable things** — all but three crates are
+  reachable, and the three that are not are named above.
+- **Parity, or retire the flag** — settled and not in the view's favour.
+  Input-method composition cannot work on Slint 1.17.1; `--editor-view` stays
+  opt-in.
+- **Security profiles (phase 14)** — done; all three dependants read the
+  policy.
+- **Make the record match the product** — done, and the lesson kept: every
+  stale claim went stale the same way, a fix landing without the record
+  moving.
+- **Put `fuzz/` inside the gate** — done, on both legs, and verified to fail
+  before it was trusted.
+- **The seven cross-crate defects** — all fixed. The device name that
+  destroyed documents, the typed name that did the same, the tab drawn as one
+  glyph, the extended-length prefix, the notebook language, the JSONL sniff,
+  the encoder's location.
+- **D6, what a line is** — ADR-0029. A break is `
+` or `
+`; the rope
+  dropped `unicode_lines`, a default nobody chose.
 
 ## Decisions still waiting on a human
 
-- **Where a signing key lives** (phase 16). This is the one blocking a row
-  that is otherwise finished — Sign Document greys because there is no key
-  store, no keyring integration and no decision on file permissions for a key
-  on disk. ADR-0026 documents what `bp-integrity` can and cannot enforce per
-  platform, which is most of the input needed.
-- **One definition of a line.** `bp-search` counts `
-`; `bp-buffer`'s rope
-  uses ropey's `unicode_lines`. `bp-ui` uses both today, in different views.
-- **What may leave the machine** (phases 8 and 10). Unchanged.
-- **Whether `bp-storage` may record extracted titles** (phase 9). Narrower
-  than it was — the security half is answered by phase 14 — but ADR-0019's
-  product judgement still stands.
+`project/DECISIONS_NEEDED.md` is the register; these are the ones that block
+work rather than merely await it.
+
+- **Where a signing key lives (D5).** The one blocking a row that is otherwise
+  finished — Security ▸ Sign Document greys because there is no key store, no
+  keyring integration and no decision on file permissions for a key on disk.
+  ADR-0026 documents what `bp-integrity` can and cannot enforce per platform,
+  which is most of the input needed.
+- **Whether a huge document may be viewable only under `--editor-view`.** New,
+  and it gates item 1 above. `TextInput` owns its own text, so a document
+  served from disk in chunks cannot be shown in it. Either the feature is
+  opt-in-only, or the default view has to change, or a huge file opens under
+  one flag and is refused under the other — which is the answer to avoid, and
+  the reason to decide before writing code.
+- **What may leave the machine (D1).** Unchanged. Phases 8 and 10.
+- **Whether `bp-storage` may record extracted titles (D3).** Narrower than it
+  was — phase 14 answered the security half — but ADR-0019's product
+  judgement still stands.
+- **`bp-crypto`'s derive-once API (D7).** Reading a sealed audit history costs
+  a full Argon2id derivation per line, so a few hundred lines is several
+  seconds. It has not bitten yet because no history is that long.
 
 ## Working with agents in this repository
 

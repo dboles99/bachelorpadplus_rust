@@ -94,10 +94,11 @@ so whoever finishes an item updates them as part of it.
 | — | `bp-files` applies the extended-length prefix | `bp-files` |
 | — | A cell that named a language we cannot map is never given the kernel's | ADR-0025, `bp-notebook` |
 | — | One definition of a line, and no ignored tests left | ADR-0029, `bp-buffer` |
+| — | Size decides how a document is opened; opening stops reading the file twice | ADR-0027, `bp-ui` |
 
 Every library half now has its row.
 
-## Tier 0 — three crates with no way in
+## Tier 0 — two crates with no way in, and one view
 
 Still the largest block of ready work, and every item is the same shape: a
 tested library and a missing menu row. Read
@@ -107,7 +108,7 @@ batch by menu.
 
 | Item | What exists |
 | --- | --- |
-| The open path uses the large-file engine | `bp_buffer::{LargeFile, SizeClass, Access}` (ADR-0027). Opening a 2 GB file currently loads 2 GB. Needs a read-only-because-huge state in the shell, which is a real UI decision, so this is the biggest of the wiring items rather than the cheapest |
+| A view for a document that is not in the rope | `bp_buffer::LargeFile` (ADR-0027) -- `display_lines`, `index_through_line`, `WindowReader`. The *classification* half is done: the open path reads metadata first, a large document opens with its size in the status bar, and a huge one is refused in `Access::ReadOnlyBySize`'s words rather than loaded whole. What is missing is the viewer, and it is a feature rather than wiring: `display_lines` has to drive the editor surface's scroll anchor, which exists only under `--editor-view` |
 | Notebook mode | `bp-notebook` (ADR-0025). A new view, not a menu row |
 | Research mode | `bp-research`. Same: a mode, not a row |
 
