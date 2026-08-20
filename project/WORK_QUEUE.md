@@ -93,6 +93,7 @@ so whoever finishes an item updates them as part of it.
 | — | A tab is drawn as wide as the caret believes it is | `bp-editor`, found by looking |
 | — | `bp-files` applies the extended-length prefix | `bp-files` |
 | — | A cell that named a language we cannot map is never given the kernel's | ADR-0025, `bp-notebook` |
+| — | One definition of a line, and no ignored tests left | ADR-0029, `bp-buffer` |
 
 Every library half now has its row.
 
@@ -112,14 +113,14 @@ batch by menu.
 
 ## Tier 0.5 — what the cross-crate tests found
 
-Eleven files of cross-crate tests have now found seven defects. **All seven
-are fixed.** What is left in this tier is one decision and two latent items,
-and the decision -- D6 -- is the only thing anywhere in the tree still pinned
-by an `#[ignore]`d test.
+Eleven files of cross-crate tests found seven defects. **All seven are fixed,
+the decision behind the last of them is made (ADR-0029), and there is no
+`#[ignore]`d test left anywhere in the tree.** What remains here is two latent
+items -- neither is wrong today, and both would be wrong the moment something
+depended on them.
 
 | Item | Shape |
 | --- | --- |
-| `bp-search` and `bp-buffer` disagree what a line is | **An ADR, not a patch — D6.** Either `bp-search` adopts ropey's break set or `bp-buffer` drops `unicode_lines`. One definition has to win, and `bp-ui` uses both today, in different views |
 | The recent-files list and the recovery directory both roam on Windows | `recent.toml` and `bp-ui`'s `recovery_dir` both hang off the config directory, which is `%APPDATA%` and roams. Both hold machine-specific absolute paths; `bp-platform` calls this `DirKind::State`. Needs one change owning `bp-config` **and** `bp-ui`, so it cannot be split between agents |
 | `Profile::is_data` is true for `Ini` and `Xml` | Latent. Harmless until somebody gates a menu on it, at which point every row fails |
 
