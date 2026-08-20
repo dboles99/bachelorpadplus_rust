@@ -2,7 +2,7 @@
 
 Rewritten 2026-08-20, at the end of the fifth build session.
 
-State: 24 crates, 1,643 tests, green on Windows and Linux. Three of those are
+State: 24 crates, 1,649 tests, green on Windows and Linux. Three of those are
 `#[ignore]`d on purpose, because each one names a real defect and wants a fix
 or a decision rather than a passing assertion. There were four: the one that
 destroyed documents is fixed, and its test runs now.
@@ -12,17 +12,18 @@ destroyed documents is fixed, and its test runs now.
 ## The shape of the problem has changed
 
 For three sessions the largest gap was that capabilities did not exist. It is
-now the opposite. **Four crates are built, tested and unreachable** — the
-large-file engine, notebooks, research and audit — and the queue's Tier 0 is
+now the opposite. **Three crates are built, tested and unreachable** — the
+large-file engine, notebooks and research — and the queue's Tier 0 is
 nothing but wiring. Building another library is the easy, comfortable move
 and it is the wrong one.
 
 An audit at the end of the fifth session put a number on that: `bp-research`,
-`bp-notebook`, `bp-audit` and `bp-storage` have **zero reverse dependencies
-anywhere in the application**, and with `bp-buffer`'s large-file engine that
-is over thirteen thousand lines and 281 unit tests defending code no user can
-reach. `bp-audit` is named by the integration tests and `bp-notebook` by the
-fuzz harness; nothing in the shipped binary names any of the four.
+`bp-notebook` and `bp-storage` have **zero reverse dependencies anywhere in
+the application**, and with `bp-buffer`'s large-file engine that is over ten
+thousand lines and 237 unit tests defending code no user can reach.
+`bp-notebook` is named by the fuzz harness; nothing in the shipped binary
+names any of the three. `bp-audit` came off that list in the same session --
+Security ▸ Security History reads it and five capabilities write into it.
 
 The same audit found two things this file had no way to see, and they are
 items 2 and 3 below. Both are cheap, and both make everything after them
@@ -253,6 +254,16 @@ Three sessions of evidence, worth reading before dispatching any:
 ---
 
 ## Housekeeping
+
+- **`bp-ui`'s tests create `%APPDATA%achelorpadecovery`.** Empty --
+  every checkpoint they trigger is refused and refusal deletes -- so it is a
+  `mkdir` and nothing more. It is still a test reaching outside a temp
+  directory, and it is the same shape as the defect the security history hit
+  and now guards against: `AppState::new()` builds its `Journal` from the
+  real `recovery_dir()`. The fix is the one the history took, a field rather
+  than a global, and it wants doing with the item below about `recent.toml`
+  roaming, since both own `bp-config` and `bp-ui` together.
+
 
 - ~~**`ui/app.slint` wants splitting.**~~ **Done** — seven files. What is left
   in it, and why each thing stayed, is in `docs/architecture/ARCHITECTURE.md`.

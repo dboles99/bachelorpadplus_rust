@@ -87,10 +87,13 @@ so whoever finishes an item updates them as part of it.
 | — | Security ▸ Verify Signature, against `bp-integrity`'s sidecar | ADR-0026, id 203 |
 | — | `bp-naming` tests the *stem* for a device name, as Win32 does | `bp-naming`, and a two-way list agreement test |
 | — | `atomic_write` refuses a device name a user typed | `bp-files`, which reaches `bp-platform` now |
+| — | The gate sees `fuzz/`, on both legs | `scripts/Invoke-LocalCI.ps1` |
+| — | `paths::file_name`, and the panic lints | `bp-platform`, `[workspace.lints]` |
+| — | Security ▸ Security History, and the five calls that fill it | ADR-0024, id 206 |
 
 Every library half now has its row.
 
-## Tier 0 — four crates with no way in
+## Tier 0 — three crates with no way in
 
 Still the largest block of ready work, and every item is the same shape: a
 tested library and a missing menu row. Read
@@ -101,7 +104,6 @@ batch by menu.
 | Item | What exists |
 | --- | --- |
 | The open path uses the large-file engine | `bp_buffer::{LargeFile, SizeClass, Access}` (ADR-0027). Opening a 2 GB file currently loads 2 GB. Needs a read-only-because-huge state in the shell, which is a real UI decision, so this is the biggest of the wiring items rather than the cheapest |
-| Security ▸ Audit history | `bp-audit` (ADR-0024) now has a working sealed destination, so the crate is complete. What is missing is the view and the calls that record events -- every capability that should write one already exists |
 | Notebook mode | `bp-notebook` (ADR-0025). A new view, not a menu row |
 | Research mode | `bp-research`. Same: a mode, not a row |
 
