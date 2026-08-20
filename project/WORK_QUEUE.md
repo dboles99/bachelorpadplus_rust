@@ -110,7 +110,7 @@ batch by menu.
 
 | Item | What exists |
 | --- | --- |
-| A view for a document that is not in the rope | `bp_buffer::LargeFile` (ADR-0027) -- `display_lines`, `index_through_line`, `WindowReader`. The *classification* half is done: the open path reads metadata first, a large document opens with its size in the status bar, and a huge one is refused in `Access::ReadOnlyBySize`'s words rather than loaded whole. What is missing is the viewer, and it is a feature rather than wiring: `display_lines` has to drive the editor surface's scroll anchor, which exists only under `--editor-view` |
+| A view for a document that is not in the rope | `bp_buffer::LargeFile` (ADR-0027) -- `display_lines`, `index_through_line`, `WindowReader`. The *classification* half is done. What is missing is the viewer, and **[ADR-0030](../docs/decisions/ADR-0030.md) says what shape it takes**: a huge document opens in the custom surface, read-only, in *every* build, regardless of `--editor-view`. Whatever chooses the surface must be one named function, not an `if` in two places |
 | Notebook mode | `bp-notebook` (ADR-0025). A new view, not a menu row |
 | Research mode | `bp-research`. Same: a mode, not a row |
 
@@ -188,8 +188,8 @@ All of it, in one pass. What is worth carrying forward:
 | --- | --- |
 | ~~Word wrap in the editor surface~~ | **Done.** `bp_editor::wrap` owns the breaking rule; `view`'s wrapped half maps rows to characters; `Editor` moves Up and Down by visual row. The shell anchors scrolling to a line *and* a row within it, and Slint reports the column count because it owns the font. |
 | **Input-method composition** | **Slint 1.17.1, and this was checked rather than assumed.** `FocusScope` returns `EventResult::Reject` for `UpdateComposition` and `CommitComposition` in *both* `capture_key_event` and `key_event` (`i-slint-core/items/input_items.rs`), and exposes no callback for either. `TextInput` is the only item in the whole toolkit that consumes them, and `input_method_request` is a backend-internal trait, not an application hook. There is no route to pre-edit text from a `FocusScope`. Revisit on a Slint upgrade. |
-| **Security ▸ Sign Document** | **D5 — where a signing key lives.** `bp_integrity::sign_file` exists, is tested, and writes the very sidecar the Verify row now reads, so this is a key store away from working. The row is greyed with the reason on it rather than `planned`. Verifying shipped without it, because verifying needs nothing stored. |
-| Anything writing to `bp-storage` | **Still a decision, but a narrower one.** Phase 14 exists now and `record_document` honours the policy, so the security half is answered. What remains is ADR-0019's product judgement plus a design pass. Do not "just wire it up". |
+| ~~**Security ▸ Sign Document**~~ | **Unblocked.** D5 is answered and is [ADR-0031](../docs/decisions/ADR-0031.md): the key is stored sealed in a `.bpadx` envelope under a passphrase, rather than protected by file permissions Windows cannot narrow from safe Rust. `bp_integrity::sign_file` already writes the sidecar the Verify row reads, so what is left is a key store and a passphrase prompt -- both of which have a shape to copy, in `bp-crypto` and in `bp-ui`. |
+| Anything writing to `bp-storage` | **A design pass, and only that.** D3 is answered: it may be wired, *after* somebody decides what it records and what the user sees for it. ADR-0019 stands as written, and "just wire it up" is still the wrong move -- now by confirmation rather than by default. |
 | `bp-organize` | The above, plus a design pass. |
 | ~~YAML support~~ | **Done and unreachable.** ADR-0023 picked `saphyr`; `bp-data` validates, formats, minifies and converts, with nesting, alias expansion and duplicate keys all bounded. No `bp-ui` code calls any of it. This is now a wiring item, not a blocked one. |
 | Markdown preview | Slint has no HTML view. Needs a rendering decision first. |

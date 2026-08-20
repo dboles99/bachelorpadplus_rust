@@ -2,10 +2,14 @@
 
 Rewritten 2026-08-20, at the end of the sixth build session.
 
-State: 24 crates, 1,693 tests, **0 ignored**, green on Windows and Linux
+State: 24 crates, 1,700+ tests, **0 ignored**, green on Windows and Linux
 across all ten gate stages. Every defect the eleven files of cross-crate tests
-found is fixed, and the last decision behind one of them — D6, what a line is
-— is ADR-0029.
+found is fixed, both latent items behind them are fixed, and **four decisions
+that were blocking work were answered on 2026-08-20** — ADR-0030, ADR-0031 and
+ADR-0032, plus a narrowing of the `bp-storage` question.
+
+**The queue is no longer decision-gated.** For four sessions the bottleneck
+was how long a question sat; it is now effort again.
 
 ---
 
@@ -24,8 +28,9 @@ sharper, than any of that.
 
 ### 1. The viewer for a document the rope does not hold
 
-The largest single thing between this repository and a product, and it is now
-the *only* part of the large-file story still missing.
+The largest single thing between this repository and a product, the only part
+of the large-file story still missing, and **no longer blocked on a
+decision**.
 
 The classification half shipped: the open path reads metadata before it reads
 a byte, an ordinary document opens as it always did, a large one opens and
@@ -36,15 +41,26 @@ longer true.
 What is missing is showing one. `bp_buffer::LargeFile` has `display_lines`,
 `index_through_line`, `line_start` and `WindowReader`, all tested and
 benchmarked (ADR-0027 carries the numbers). Connecting them means
-`display_lines` driving the editor surface's scroll anchor — which is
-**`--editor-view` only**, because `TextInput` owns its own text and there is
-no way to hand it a window of a file it does not have.
+`display_lines` driving the editor surface's scroll anchor.
 
-That is the shape of the work, and it is worth knowing before starting: this
-is the first feature that is *only* available under the opt-in view. Decide
-whether that is acceptable before writing code, because the alternative — a
-huge file that opens under one flag and is refused under the other — is a
-product answer, not an implementation detail.
+**D11 is answered and it is ADR-0030: a huge document opens in the custom
+surface, read-only, in every build, regardless of `--editor-view`.** The
+reasoning is that the one thing keeping that view opt-in is input-method
+composition, which is a statement about typing, and this viewer is read-only.
+So the flag now means precisely "which surface *edits* a document the rope
+holds", and there is no build in which the same file opens for one user and
+is refused for another.
+
+Two things follow that are worth knowing before starting:
+
+- **Whatever chooses the surface must be one function with a name**, not an
+  `if` in the open path and another in `refresh`. Two places deciding which
+  view a document gets is how the two views come to disagree about which
+  sizes they claim.
+- **`Access::ReadOnlyBySize`'s message has to stop saying "not yet connected
+  to a view"** the moment it is. That sentence exists so a limitation does not
+  become folklore; leaving it after it stops being true is the same failure
+  pointing the other way. `state::huge_refusal` is where it lives.
 
 ### 2. Finish the manual pass
 
@@ -172,27 +188,29 @@ Recorded so nobody re-derives them.
 
 ## Decisions still waiting on a human
 
-`project/DECISIONS_NEEDED.md` is the register; these are the ones that block
-work rather than merely await it.
+`project/DECISIONS_NEEDED.md` is the register. **Four were answered on
+2026-08-20** and none of them blocks anything now:
 
-- **Where a signing key lives (D5).** The one blocking a row that is otherwise
-  finished — Security ▸ Sign Document greys because there is no key store, no
-  keyring integration and no decision on file permissions for a key on disk.
-  ADR-0026 documents what `bp-integrity` can and cannot enforce per platform,
-  which is most of the input needed.
-- **Whether a huge document may be viewable only under `--editor-view`.** New,
-  and it gates item 1 above. `TextInput` owns its own text, so a document
-  served from disk in chunks cannot be shown in it. Either the feature is
-  opt-in-only, or the default view has to change, or a huge file opens under
-  one flag and is refused under the other — which is the answer to avoid, and
-  the reason to decide before writing code.
+| Was | Answer |
+| --- | --- |
+| D11, whether a huge document may be `--editor-view` only | No. It opens in the custom surface, read-only, in every build ([ADR-0030](../docs/decisions/ADR-0030.md)) |
+| D5, where a signing key lives | Sealed in a `.bpadx` envelope under a passphrase, rather than protected by file permissions ([ADR-0031](../docs/decisions/ADR-0031.md)) |
+| D9, the application id | `io.github.dboles99.BachelorPadPlus`, and no longer the same constant as `APP_DIR` ([ADR-0032](../docs/decisions/ADR-0032.md)) |
+| D3, whether `bp-storage` may be wired in | Yes, after a design pass. ADR-0019 stands as written; what is open now is the design, not the permission |
+
+What is still open, and what each holds up:
+
 - **What may leave the machine (D1).** Unchanged. Phases 8 and 10.
-- **Whether `bp-storage` may record extracted titles (D3).** Narrower than it
-  was — phase 14 answered the security half — but ADR-0019's product
-  judgement still stands.
+- **An outside review of the `.bpadx` envelope (D4).** Now larger than it was:
+  ADR-0031 puts the signing key inside the same envelope, so a review covers
+  the key store too.
 - **`bp-crypto`'s derive-once API (D7).** Reading a sealed audit history costs
   a full Argon2id derivation per line, so a few hundred lines is several
-  seconds. It has not bitten yet because no history is that long.
+  seconds. It has not bitten yet because no history is that long. Unaffected
+  by ADR-0031: one key file is one derivation.
+- **Applying Windows default-editor registration (D8).** Needs a Win32 call or
+  a dependency, and `bp-platform` forbids both.
+- **Where the `.bpadx` validation ceiling sits (D10).**
 
 ## Working with agents in this repository
 
