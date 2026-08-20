@@ -235,16 +235,22 @@ Three sessions of evidence, worth reading before dispatching any:
   passenger.** It is the thing that validates everything else.
 - **Review the substance, not the report.** Agents self-reported all green in
   every case where a real defect was present.
-- **Code taking a `Platform` parameter must not use `std::path` to split
-  anything.** This has now been sprung twice. `4390593` recorded a surviving
+- **Code taking a `Platform` parameter must not let `std::path` answer for
+  it.** This has now been sprung **three times**, by three different
+  functions, and every time the Windows leg was green while the Linux leg
+  found it. `4390593` recorded a surviving
   mutation where `PathBuf::join` stood in for `bp_platform::paths::join` and
   only the Linux leg would ever have failed. The fifth session's device-name
   refusal did it again: the *judgement* was parameterised and the *split* was
   `Path::file_name()`, which splits by the platform the binary was compiled
   for — so on Linux `C:\Users\me\con.txt` is one file name containing no
   device, and the Windows rule passed by never being evaluated. Windows had
-  been green for an hour. **`bp_platform::paths::file_name(platform, path)`
-  exists now**, with `Path::file_name`'s exact semantics and the platform made
+  been green for an hour. The third was `writable_path`, which took a platform
+  and then called `std::path::absolute` -- and on the Linux leg
+  `C:\docs\...` is a *relative* path, so the Windows rule was tested against
+  a Linux working directory. The shape is always the same: the *judgement*
+  takes the platform and some *path operation* underneath it does not.
+  **`bp_platform::paths::file_name(platform, path)` exists now**, with `Path::file_name`'s exact semantics and the platform made
   explicit, so the correct thing is a drop-in rather than something you have
   to know to spell as `components(platform, p).last()`. `paths::join` was
   already the same fix for the writing direction.
@@ -255,7 +261,12 @@ Three sessions of evidence, worth reading before dispatching any:
   `path.parent()` on paths that really are the host's. A stage that cries
   wolf gets disabled wholesale, which `docs/governance/LOCAL_CI.md` already
   says about gates that are wrong. The enforcement is the primitive being
-  there and obvious.
+  there and obvious -- plus a test named for the trap in each function that
+  has fallen into it, which fails on the Linux leg if anyone reintroduces it.
+
+  **Ask of any parameterised function: which platform is each line of this
+  answering about?** `is_absolute`, `components`, `file_name` and `join` all
+  take one. `std::path` never does.
 
 ---
 

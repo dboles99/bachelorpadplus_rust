@@ -90,6 +90,8 @@ so whoever finishes an item updates them as part of it.
 | — | The gate sees `fuzz/`, on both legs | `scripts/Invoke-LocalCI.ps1` |
 | — | `paths::file_name`, and the panic lints | `bp-platform`, `[workspace.lints]` |
 | — | Security ▸ Security History, and the five calls that fill it | ADR-0024, id 206 |
+| — | A tab is drawn as wide as the caret believes it is | `bp-editor`, found by looking |
+| — | `bp-files` applies the extended-length prefix | `bp-files`, and the last of the cross-crate defects |
 
 Every library half now has its row.
 
@@ -109,15 +111,14 @@ batch by menu.
 
 ## Tier 0.5 — what the cross-crate tests found
 
-Eleven files of cross-crate tests have now found seven defects. Five are
-fixed -- the last of them was the one that destroyed documents, and it is in
-the Done table above. These are the rest, each pinned by an `#[ignore]`d test
-naming it. **Take the first one before anything else in this file.**
+Eleven files of cross-crate tests have now found seven defects. **Six are
+fixed.** What is left is one decision and two latent items -- and the
+decision, D6, is the only thing in this tier still pinned by an `#[ignore]`d
+test.
 
 | Item | Shape |
 | --- | --- |
 | **`bp-notebook` runs unnameable code through the kernel's interpreter** | `infer_kind` does `stated.or(notebook_language)`, conflating "said nothing" with "said something we cannot map". ADR-0025 promises the second becomes `Raw` with a warning, and that only holds for a notebook with no kernelspec. Splitting those two cases is the fix; the ADR already says what the behaviour should be |
-| **`bp-files` never applies `\\?\`** | A name at `SemanticName::to_filename`'s own 255-byte maximum is unwritable in a deep enough directory, and `SaveError` blames a read-only file for `os error 3`. `bp_platform::paths::to_extended_length` is the fix, and `bp-files` depends on `bp-platform` now -- the edge that used to be half the work is already there |
 | `bp-search` and `bp-buffer` disagree what a line is | **An ADR, not a patch — D6.** Either `bp-search` adopts ropey's break set or `bp-buffer` drops `unicode_lines`. One definition has to win, and `bp-ui` uses both today, in different views |
 | The recent-files list and the recovery directory both roam on Windows | `recent.toml` and `bp-ui`'s `recovery_dir` both hang off the config directory, which is `%APPDATA%` and roams. Both hold machine-specific absolute paths; `bp-platform` calls this `DirKind::State`. Needs one change owning `bp-config` **and** `bp-ui`, so it cannot be split between agents |
 | `Profile::is_data` is true for `Ini` and `Xml` | Latent. Harmless until somebody gates a menu on it, at which point every row fails |
