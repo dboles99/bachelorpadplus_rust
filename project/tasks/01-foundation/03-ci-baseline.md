@@ -1,35 +1,42 @@
 # Task: ci-baseline
 
+**Phase:** 01-foundation
+**Status:** Done on Windows; Linux leg built but not enabled
+
 ## Objective
 
-Implement and validate `ci-baseline` as part of phase `01-foundation`.
+Establish an automatic quality gate. GitHub Actions is unavailable to this
+project, so the gate is local and it is the only gate (ADR-0016).
 
-## Steps
+## Acceptance criteria
 
-1. Inspect relevant specifications and ADRs.
-2. Define interfaces and acceptance criteria.
-3. Implement smallest production-quality vertical slice.
-4. Add tests before broadening scope.
-5. Validate cross-platform/security/performance implications as applicable.
-6. Record artifacts and metadata.
-7. Update decision log only if architecture changes.
-
-## Required Rosetta
-
-Use the closest prompt in `prompts/rosettas/`, adapting only the task-specific variables.
+- [x] One script runs format, locked dependency check, clippy with warnings
+      denied, and the test suite.
+- [x] Every stage runs even after one fails, so a run reports everything at
+      once; exit code is non-zero if any stage failed.
+- [x] Wired into `pre-commit` and `pre-push` so it runs without anyone
+      remembering to.
+- [x] Hook installation verifies the executable bit, because the global
+      `core.hooksPath` stubs skip non-executable hooks silently.
+- [x] Installation does not set a repo-local `core.hooksPath`, which would
+      disable the machine's global commit-msg hook.
+- [x] A documented bypass exists for deliberate work-in-progress commits.
+- [x] The dormant GitHub workflow is set to manual trigger only, so pushes do
+      not queue runs that cannot execute, and its steps match the local gate.
+- [x] Documented in `docs/governance/LOCAL_CI.md`.
+- [ ] Linux leg enabled — needs a Rust toolchain inside WSL. Until then the
+      stage reports `skipped`, never a false pass.
 
 ## Artifacts
 
-Store task outputs under an appropriate `artifacts/` category or source crate.
-
-## Metadata
-
-Record generated artifact metadata under `metadata/` where useful.
-
-## Database
-
-Add/modify schema only through explicit migrations.
+- `scripts/Invoke-LocalCI.ps1`
+- `scripts/Install-GitHooks.ps1`
+- `scripts/hooks/pre-commit`, `scripts/hooks/pre-push`
+- `docs/governance/LOCAL_CI.md`
+- `docs/decisions/ADR-0016.md`
 
 ## Notes
 
-Keep observations that are not architectural decisions here or in `notes/`.
+BP-ADR-0001 makes Linux first-class, and nothing in the current setup would
+catch a Windows-only regression. The Linux leg is the only thing that would,
+so enabling it matters more than it looks.
