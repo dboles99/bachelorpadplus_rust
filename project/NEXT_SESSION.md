@@ -2,7 +2,7 @@
 
 Rewritten 2026-08-20, at the end of the sixth build session.
 
-State: 24 crates, 1,734 tests, **0 ignored**, green on Windows and Linux
+State: 24 crates, 1,754 tests, **0 ignored**, green on Windows and Linux
 across all ten gate stages. Every defect the eleven files of cross-crate tests
 found is fixed, both latent items behind them are fixed, and **four decisions
 that were blocking work were answered on 2026-08-20** — ADR-0030, ADR-0031 and

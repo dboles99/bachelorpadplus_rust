@@ -99,6 +99,7 @@ so whoever finishes an item updates them as part of it.
 | — | The Data menu's question is asked of the format, not of its class | `Format::has_data_operations`, `bp-formats` |
 | — | The application id is reverse-DNS, and is not the directory name | ADR-0032, `bp-platform` |
 | — | A view for a document the rope does not hold | ADR-0030, `bp-ui/viewer.rs` |
+| — | Security ▸ Sign Document, and a key store that seals rather than restricts | ADR-0031, `bp-integrity`, ids 202 |
 
 Every library half now has its row.
 
@@ -194,7 +195,7 @@ All of it, in one pass. What is worth carrying forward:
 | --- | --- |
 | ~~Word wrap in the editor surface~~ | **Done.** `bp_editor::wrap` owns the breaking rule; `view`'s wrapped half maps rows to characters; `Editor` moves Up and Down by visual row. The shell anchors scrolling to a line *and* a row within it, and Slint reports the column count because it owns the font. |
 | **Input-method composition** | **Slint 1.17.1, and this was checked rather than assumed.** `FocusScope` returns `EventResult::Reject` for `UpdateComposition` and `CommitComposition` in *both* `capture_key_event` and `key_event` (`i-slint-core/items/input_items.rs`), and exposes no callback for either. `TextInput` is the only item in the whole toolkit that consumes them, and `input_method_request` is a backend-internal trait, not an application hook. There is no route to pre-edit text from a `FocusScope`. Revisit on a Slint upgrade. |
-| ~~**Security ▸ Sign Document**~~ | **Unblocked.** D5 is answered and is [ADR-0031](../docs/decisions/ADR-0031.md): the key is stored sealed in a `.bpadx` envelope under a passphrase, rather than protected by file permissions Windows cannot narrow from safe Rust. `bp_integrity::sign_file` already writes the sidecar the Verify row reads, so what is left is a key store and a passphrase prompt -- both of which have a shape to copy, in `bp-crypto` and in `bp-ui`. |
+| ~~**Security ▸ Sign Document**~~ | **Done** — [ADR-0031](../docs/decisions/ADR-0031.md). The key is sealed in a `.bpadx` envelope under a passphrase rather than protected by file permissions Windows cannot narrow. One ceremony, not one per signature: the first signature creates the key, the second unlocks it, and the row says which before the click |
 | Anything writing to `bp-storage` | **A design pass, and only that.** D3 is answered: it may be wired, *after* somebody decides what it records and what the user sees for it. ADR-0019 stands as written, and "just wire it up" is still the wrong move -- now by confirmation rather than by default. |
 | `bp-organize` | The above, plus a design pass. |
 | ~~YAML support~~ | **Done and unreachable.** ADR-0023 picked `saphyr`; `bp-data` validates, formats, minifies and converts, with nesting, alias expansion and duplicate keys all bounded. No `bp-ui` code calls any of it. This is now a wiring item, not a blocked one. |
