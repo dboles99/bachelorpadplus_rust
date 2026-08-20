@@ -27,7 +27,7 @@ ordinary coding:
 | --- | --- | --- |
 | **1** | Drive the window and write down what is wrong | **Only a person.** No agent, no test |
 | **2** | Decide what `bp-storage`, notebooks and research *are* | **Only Daniel.** Product design, not implementation |
-| **3** | `state.rs` wants splitting; find over a huge document | An agent, once 1 and 2 are not blocking |
+| **3** | Find over a huge document | An agent, once 1 and 2 are not blocking |
 
 That ordering is the plan. It is deliberately not the order of difficulty.
 
@@ -144,23 +144,7 @@ The largest unreachable crate and the least specified. Same shape: a mode.
 
 ## 3. What an agent can take now
 
-Two items, both real, neither urgent.
-
-### `crates/bp-ui/src/state.rs` is 6,282 lines
-
-More than twice the size the *whole shell* was when the first split happened.
-The seams are already there as comment banners. The reason it has not been
-done is scheduling rather than difficulty: **every wiring item touches it**, so
-the split has to happen between items rather than during one — and right now
-there is no wiring item in flight, which makes this the moment.
-
-Suggested seams, from the banners already in the file: the security operations
-(scan, redact, hash, sign, verify, history) are the largest coherent block and
-have their own tests; the passphrase flow is a second; the find/replace state a
-third.
-
-**One agent, whole file, its own commit.** Nothing else may touch `bp-ui`
-while it runs.
+One item, real, not urgent. The other one — splitting `state.rs` — is done.
 
 ### Find, over a document served from disk
 
@@ -185,6 +169,12 @@ Recorded so nobody re-derives them.
   permission-protected, which closes the asymmetry ADR-0026 measured.
 - **The application id** — reverse-DNS and no longer the same constant as
   `APP_DIR` (ADR-0032).
+- **`state.rs` at 6,282 lines** — split four ways, into `state/security.rs`,
+  `state/data.rs`, `state/encryption.rs` and `state/find.rs`. What made it
+  possible is worth carrying forward: the new modules are *children* of
+  `state`, and a child can see its parent's private items, so `editors`,
+  `stamps`, `gutter_lines` and `match_index` stayed private instead of being
+  widened to `pub(crate)` for the whole crate to reach.
 - **The two latent defects** — the three files that roamed on Windows, and
   `Profile::is_data` answering a question it could not.
 - **Parity, or retire `--editor-view`** — settled and not in the view's
@@ -294,8 +284,15 @@ for the trap in each function that has fallen into it.
   deliberately when all three moved to `DirKind::State` — a ten-path recent
   list rebuilds itself and a recovery journal is transient — so they are safe
   to delete and nothing will recreate them.
-- **`crates/bp-ui/src/state.rs` at 6,282 lines** is §3 above, listed here too
-  because it is the kind of thing that stops being noticed.
+- **`crates/bp-ui/src/state/security.rs` at 2,820 lines** is the largest file
+  in `bp-ui` now, and it is listed here for the same reason `state.rs` used to
+  be: this is the kind of thing that stops being noticed. It is not the same
+  problem — it is one subject, half of it is tests under their own banners,
+  and it is roughly the size the whole shell was when the *first* split
+  happened rather than twice it. Its seams, if it ever needs them, are
+  `bp-secrets`/`bp-redaction` on one side and `bp-crypto`/`bp-integrity` on
+  the other: "what is in this document" against "is this document what it
+  was".
 - **Native Linux timing.** WSLg's compositor makes startup numbers
   unrepresentative, so ADR-0015's evidence remains Windows-only.
 - **Scroll smoothness under CPU rasterisation** is the standing revert

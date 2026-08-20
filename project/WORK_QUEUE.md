@@ -21,10 +21,12 @@ which is not the same list.
 
 `bp-ui/src/lib.rs` has been split, so `state.rs`, `editor_view.rs`,
 `dispatch.rs`, `viewer.rs`, `audit.rs`, `passphrase.rs` and
-`default_editor.rs` can take different agents — nine modules now, listed with
-their sizes in `docs/architecture/ARCHITECTURE.md`. **`state.rs` is 6,282
-lines of those**, so in practice two agents in `bp-ui` still collide more
-often than the count suggests; splitting it is its own Tier 0 item. `ui/app.slint` has now been split too
+`default_editor.rs` can take different agents — thirteen modules now, listed
+with their sizes in `docs/architecture/ARCHITECTURE.md`. **`state.rs` has been
+split too**, into `state/security.rs`, `state/data.rs`, `state/encryption.rs`
+and `state/find.rs`, so the security operations, the Data menu and the
+passphrase flow are each somebody's own file rather than three banners in one
+6,282-line one. `ui/app.slint` has now been split too
 — ten files, listed in `docs/architecture/ARCHITECTURE.md`. So the find
 bar, the editor surface, the status bar, the results panel and the tab are
 each somebody's own file.
@@ -104,10 +106,11 @@ so whoever finishes an item updates them as part of it.
 | — | The application id is reverse-DNS, and is not the directory name | ADR-0032, `bp-platform` |
 | — | A view for a document the rope does not hold | ADR-0030, `bp-ui/viewer.rs` |
 | — | Security ▸ Sign Document, and a key store that seals rather than restricts | ADR-0031, `bp-integrity`, ids 202 |
+| — | `state.rs` splits four ways; the private fields stay private | `bp-ui/src/state/{security,data,encryption,find}.rs` |
 
 Every library half now has its row.
 
-## Tier 0 — two modes, and two things an agent can take today
+## Tier 0 — three modes, and one thing an agent can take today
 
 **The shape of this tier changed with the last item to leave it.** What is
 here is not tested libraries missing a menu row; `bp-notebook` and
@@ -119,11 +122,17 @@ feature: a scroll model, four keys, four refusals and a surface decision.
 Read `prompts/rosettas/R011_WIRE_CAPABILITY_INTO_SHELL.md` before touching
 `bp-ui`. **Only one agent may add to `AppWindow` in `app.slint` at a time.**
 
+**Splitting `state.rs` has left this tier**, which is why there is one row
+below rather than two. It is worth knowing what it cost, because the same
+shape will come round again: the split was possible only because the new
+modules are *children* of `state`, so `AppState`'s private fields stayed
+private. A sibling module would have widened every field it touched to
+`pub(crate)`.
+
 ### Ready for an agent, now
 
 | Item | Shape |
 | --- | --- |
-| **Split `crates/bp-ui/src/state.rs`** | 6,282 lines, more than twice what the *whole shell* was when the first split happened. The seams are already there as comment banners; the largest coherent block is the security operations (scan, redact, hash, sign, verify, history), which have their own tests. Not hard — **scheduled**: every wiring item touches this file, so it has to happen between items, and right now none is in flight. **One agent, whole file, its own commit, nothing else in `bp-ui` while it runs** |
 | **Find, over a document served from disk** | The last piece of the large-file story. `bp_buffer::LargeFile::windows` gives overlapping text windows with a fresh file handle, so a background search does not disturb the scrolling viewport, and `bp-search` decides what a match is. A feature rather than wiring, and ADR-0030 names the two hard parts: a match found in a window has to become a scroll position, and a search over 2 GB has to be interruptible |
 
 ### Blocked on a design pass, not on effort
