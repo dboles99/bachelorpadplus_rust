@@ -107,21 +107,28 @@ out of every `Cargo.toml` and checked against what the shell's source
 actually names — which is the only version of that claim that stays true
 without somebody maintaining it.
 
-### 4. Put `fuzz/` inside the gate — still open
+### 4. ~~Put `fuzz/` inside the gate~~ — done, and it costs five minutes
 
-`Invoke-LocalCI.ps1` sweeps `spikes/` for standalone workspaces. There is no
-`spikes/` directory in this tree, and there *is* a `fuzz/` one holding five
-hostile-input harnesses that nothing formats, lints or runs.
+`Invoke-LocalCI.ps1` swept `spikes/` for standalone workspaces. There is no
+`spikes/` directory in this tree, and there *was* a `fuzz/` one holding five
+hostile-input harnesses that nothing formatted, linted or ran — while phase 19
+was marked *Started* on the strength of them.
 
-Run by hand at the end of the fifth session, they are green — thirteen tests
-across the YAML and notebook harnesses alone, including the alias bomb refused
-at every size and two stack-overflow properties. So this is not a hidden
-failure. It is that **"every commit in this repository has passed the gate" is
-not true of that code**, and phase 19 is marked *Started* on the strength of
-tests nothing runs.
+Two stages now run them, on both legs, and they were green from the first run:
+42 tests, one `#[ignore]`d for cost with the reason on it. **The full gate is
+about five minutes longer** — two and a half per leg — which is the honest
+price of the assurance and is visible in the stage table rather than hidden.
+`-Quick` skips it, so `pre-commit` is unchanged and `pre-push` carries it.
 
-Its own commit, never a passenger. The gate is the thing that validates
-everything else.
+Two things worth keeping from doing it:
+
+- **The stage was verified to fail**, by breaking the formatting of
+  `fuzz/tests/yaml.rs` and watching it go red while the workspace `fmt` stage
+  stayed green. That contrast *is* the blindness, reproduced. A gate stage
+  nobody has seen fail is a stage nobody knows the shape of.
+- **Where one harness becomes too expensive to gate on**, the answer is
+  already in the tree: `fuzz/tests/envelope.rs` `#[ignore]`s its KDF-cost
+  test with the reason on it. Do that, not a switch that turns the stage off.
 
 ---
 
@@ -243,12 +250,16 @@ Three sessions of evidence, worth reading before dispatching any:
   positioned relative to its parent element, so moving them would change the
   coordinate parent, and nothing in the gate can see a menu opening in the
   wrong place.
-- **Five agent worktrees under `.claude/worktrees/`, three with uncommitted
-  files.** Each was checked at the end of the fifth session and everything in
-  them has already landed on the branch — the cross-crate test files, the fuzz
-  workspace, ADR-0022. Nothing unique is at risk and they are safe to prune.
-  Each is also a full copy of the tree, which is what multiplies
-  `billion-laughs.yaml` six times over for anything that walks the workspace.
+- ~~**Five agent worktrees under `.claude/worktrees/`.**~~ **Pruned**, after
+  each was checked file by file against what landed: the cross-crate test file
+  is byte-identical to `9d716f5`, `fuzz/README.md` to `db9af48`, and the
+  worktree carrying a draft `ADR-0022.md` held the *YAML* ADR, whose body is
+  byte-identical to the `ADR-0023.md` it was renumbered into. Nothing unique
+  was in any of them. Worth knowing for next time: **an abandoned worktree's
+  file can differ from the main tree and still be safe**, because the branch
+  moved on — the comparison that answers the question is against the commit
+  the work landed in, not against `HEAD`. It also removes the sixfold copy of
+  `fuzz/corpus/yaml/` that was breaking editor tooling.
 - **All 59 commits live on `feat/phase-01-foundation-ui`.** `main` has none of
   them and 44 are unpushed, so a sixteen-phase product exists in exactly one
   place under a branch named for phase one.
