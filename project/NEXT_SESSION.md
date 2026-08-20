@@ -54,7 +54,9 @@ way Win32 does, so `con.txt`, `aux.log`, `NUL.dat` and `lpt1.bak` become
 `con File.txt` and its friends rather than names that write to the device.
 Its list gained `CONIN$` and `CONOUT$`, and a property test compares the two
 crates' verdicts stem by stem, in both directions, so the two lists cannot
-drift apart quietly.
+drift apart quietly. `bp-files` closes the other route into the same failure
+-- the name a user *types*, which sanitising never sees -- by refusing to
+write to a device at all.
 
 Two sit behind it, pinned by `#[ignore]`d tests: `bp-notebook` running code
 it could not name through the kernel's interpreter, and `bp-files` never

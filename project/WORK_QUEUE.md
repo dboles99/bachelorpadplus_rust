@@ -86,6 +86,7 @@ so whoever finishes an item updates them as part of it.
 | — | File ▸ Set as Default Editor, which reports before it offers | ADR-0012, File menu, id 220 |
 | — | Security ▸ Verify Signature, against `bp-integrity`'s sidecar | ADR-0026, id 203 |
 | — | `bp-naming` tests the *stem* for a device name, as Win32 does | `bp-naming`, and a two-way list agreement test |
+| — | `atomic_write` refuses a device name a user typed | `bp-files`, which reaches `bp-platform` now |
 
 Every library half now has its row.
 
@@ -114,7 +115,7 @@ naming it. **Take the first one before anything else in this file.**
 | Item | Shape |
 | --- | --- |
 | **`bp-notebook` runs unnameable code through the kernel's interpreter** | `infer_kind` does `stated.or(notebook_language)`, conflating "said nothing" with "said something we cannot map". ADR-0025 promises the second becomes `Raw` with a warning, and that only holds for a notebook with no kernelspec. Splitting those two cases is the fix; the ADR already says what the behaviour should be |
-| **`bp-files` never applies `\\?\`** | A name at `SemanticName::to_filename`'s own 255-byte maximum is unwritable in a deep enough directory, and `SaveError` blames a read-only file for `os error 3`. `bp_platform::paths::to_extended_length` is the fix; `bp-files` does not depend on `bp-platform` yet |
+| **`bp-files` never applies `\\?\`** | A name at `SemanticName::to_filename`'s own 255-byte maximum is unwritable in a deep enough directory, and `SaveError` blames a read-only file for `os error 3`. `bp_platform::paths::to_extended_length` is the fix, and `bp-files` depends on `bp-platform` now -- the edge that used to be half the work is already there |
 | `bp-search` and `bp-buffer` disagree what a line is | **An ADR, not a patch — D6.** Either `bp-search` adopts ropey's break set or `bp-buffer` drops `unicode_lines`. One definition has to win, and `bp-ui` uses both today, in different views |
 | The recent-files list and the recovery directory both roam on Windows | `recent.toml` and `bp-ui`'s `recovery_dir` both hang off the config directory, which is `%APPDATA%` and roams. Both hold machine-specific absolute paths; `bp-platform` calls this `DirKind::State`. Needs one change owning `bp-config` **and** `bp-ui`, so it cannot be split between agents |
 | `Profile::is_data` is true for `Ini` and `Xml` | Latent. Harmless until somebody gates a menu on it, at which point every row fails |
