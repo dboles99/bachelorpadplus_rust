@@ -95,6 +95,8 @@ so whoever finishes an item updates them as part of it.
 | — | A cell that named a language we cannot map is never given the kernel's | ADR-0025, `bp-notebook` |
 | — | One definition of a line, and no ignored tests left | ADR-0029, `bp-buffer` |
 | — | Size decides how a document is opened; opening stops reading the file twice | ADR-0027, `bp-ui` |
+| — | The recent list, the recovery journal and the security history stop roaming | `DirKind::State`, `bp-config` and `bp-ui` |
+| — | The Data menu's question is asked of the format, not of its class | `Format::has_data_operations`, `bp-formats` |
 
 Every library half now has its row.
 
@@ -116,14 +118,29 @@ batch by menu.
 
 Eleven files of cross-crate tests found seven defects. **All seven are fixed,
 the decision behind the last of them is made (ADR-0029), and there is no
-`#[ignore]`d test left anywhere in the tree.** What remains here is two latent
-items -- neither is wrong today, and both would be wrong the moment something
-depended on them.
+`#[ignore]`d test left anywhere in the tree.** The two latent items that
+remained -- neither wrong today, both wrong the moment anything depended on
+them -- **are fixed too, and this tier is empty.**
 
-| Item | Shape |
+| Item | Landed as |
 | --- | --- |
-| The recent-files list and the recovery directory both roam on Windows | `recent.toml` and `bp-ui`'s `recovery_dir` both hang off the config directory, which is `%APPDATA%` and roams. Both hold machine-specific absolute paths; `bp-platform` calls this `DirKind::State`. Needs one change owning `bp-config` **and** `bp-ui`, so it cannot be split between agents |
-| `Profile::is_data` is true for `Ini` and `Xml` | Latent. Harmless until somebody gates a menu on it, at which point every row fails |
+| The recent-files list, the recovery journal and the security history all roamed on Windows | All three resolve through `DirKind::State`; `bp-config` and `bp-ui` in one change, because splitting it would have scattered the product's files |
+| `Profile::is_data` was true for `Ini` and `Xml` | `Profile::is_data_class` for the class, `Format::has_data_operations` for the menu, `Format::ALL` and a test holding the second against `menus::data` |
+
+What that pair is worth remembering for:
+
+- **A path built by subtracting another path's last component moves when that
+  one does.** The security history was `recovery_dir()` with `with_file_name`.
+  Renaming the recovery folder would have moved it silently, and a history
+  that moves starts again at sequence one.
+- **Separate the rule from the edge that reads the environment.**
+  `recovery_dir_under` and `audit_path_under` take the state directory as an
+  argument, so both are assertable without a real profile -- the same split
+  `bp_config::config_path` and `config_path_in` already made.
+- **A predicate on the wrong type is a trap with no name.** `is_data` was
+  asked of the *profile*, and `Profile::StructuredData` holds six formats of
+  which `bp-data` parses four. The fix was not a better `match`; it was
+  asking the question of the format.
 
 ## Tier 1 — pure wiring (the capability exists and is tested)
 

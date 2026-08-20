@@ -60,22 +60,30 @@ see — what a toolkit does with the string it is handed.
 | Arrow down through a short line and back up | Whether the goal column survives |
 | **File ▸ Set as Default Editor** | **The only row that changes state outside this application.** It reports before it offers and writes nothing on Windows without a Save dialog first — so it wants reading rather than clicking through |
 
-### 3. The two latent defects, before something depends on them
+### 3. ~~The two latent defects~~ — done
 
-Neither is wrong today. Both become wrong the moment anything relies on them,
-and both are cheap now and awkward later.
+Both are fixed. Neither was wrong on the day it was written down, which is the
+argument for the tier: the row that would have gone wrong had not been written
+yet.
 
-- **`recent.toml` and `recovery_dir` roam on Windows.** Both hang off the
-  config directory, which is `%APPDATA%`; both hold machine-specific absolute
-  paths, which is exactly what `bp_platform::DirKind::roams` warns against.
-  One change owning `bp-config` **and** `bp-ui`, so it cannot be split.
-  It would also close something recorded and not fixed: `bp-ui`'s tests
-  create a real `%APPDATA%achelorpad
-ecovery` directory, which is the
-  same shape as the security-history defect that was found and fixed by
-  giving the path a field instead of a global.
-- **`Profile::is_data` is true for `Ini` and `Xml`.** Harmless until somebody
-  gates a menu on it, at which point every row fails at once.
+- **`recent.toml`, the recovery journal and the security history all roamed
+  on Windows.** All three hung off the config directory, which is `%APPDATA%`;
+  all three hold machine-specific absolute paths, which is exactly what
+  `bp_platform::DirKind::roams` warns against. All three resolve through
+  `DirKind::State` now, in one change owning `bp-config` **and** `bp-ui`,
+  because splitting it would have scattered the product's files. The
+  housekeeping item came with it: `cargo test` no longer creates a recovery
+  directory in the developer's own profile.
+- **`Profile::is_data` was true for `Ini` and `Xml`.** The class question is
+  `Profile::is_data_class` and says outright that it is not the menu
+  question; the menu question is `Format::has_data_operations`, asked of the
+  format. A test walks `Format::ALL` against `menus::data` so the two are one
+  truth.
+
+What generalises, in one line each: **a path derived by subtracting another
+path's last component moves when that one does**, **separate the rule from
+the edge that reads the environment**, and **a predicate on the wrong type is
+a trap with no name.**
 
 ## The `--editor-view` checklist — answered, and it found one defect
 
@@ -245,16 +253,14 @@ Three sessions of evidence, worth reading before dispatching any:
 
 ## Housekeeping
 
-- **`bp-ui`'s tests create `%APPDATA%achelorpad
-ecovery`.** Empty --
-  every checkpoint they trigger is refused and refusal deletes -- so it is a
-  `mkdir` and nothing more. It is still a test reaching outside a temp
-  directory, and it is the same shape as the defect the security history hit
-  and now guards against: `AppState::new()` builds its `Journal` from the
-  real `recovery_dir()`. The fix is the one the history took, a field rather
-  than a global, and it wants doing with the item below about `recent.toml`
-  roaming, since both own `bp-config` and `bp-ui` together.
-
+- ~~**`bp-ui`'s tests create a recovery directory in `%APPDATA%`.**~~
+  **Fixed**, with the roaming item, since both owned `bp-config` and `bp-ui`
+  together. `recovery_dir()` is `cfg(test)`-redirected to a unique temp path
+  -- the fix the security history already took, after it wrote a live history
+  into the developer's own profile once. A test pins it, and a second one
+  pins that two states in one process do not share a journal, because
+  parallel tests each writing checkpoints the others then read is how the
+  shared-file version of this failed.
 
 - ~~**`ui/app.slint` wants splitting.**~~ **Done** — seven files. What is left
   in it, and why each thing stayed, is in `docs/architecture/ARCHITECTURE.md`.
