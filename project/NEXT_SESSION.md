@@ -2,7 +2,7 @@
 
 Rewritten 2026-08-20, at the end of the fifth build session.
 
-State: 24 crates, 1,633 tests, green on Windows and Linux. Three of those are
+State: 24 crates, 1,643 tests, green on Windows and Linux. Three of those are
 `#[ignore]`d on purpose, because each one names a real defect and wants a fix
 or a decision rather than a passing assertion. There were four: the one that
 destroyed documents is fixed, and its test runs now.
@@ -17,7 +17,18 @@ large-file engine, notebooks, research and audit — and the queue's Tier 0 is
 nothing but wiring. Building another library is the easy, comfortable move
 and it is the wrong one.
 
-Two things are worth more than any new crate:
+An audit at the end of the fifth session put a number on that: `bp-research`,
+`bp-notebook`, `bp-audit` and `bp-storage` have **zero reverse dependencies
+anywhere in the application**, and with `bp-buffer`'s large-file engine that
+is over thirteen thousand lines and 281 unit tests defending code no user can
+reach. `bp-audit` is named by the integration tests and `bp-notebook` by the
+fuzz harness; nothing in the shipped binary names any of the four.
+
+The same audit found two things this file had no way to see, and they are
+items 2 and 3 below. Both are cheap, and both make everything after them
+worth trusting.
+
+Four things are worth more than any new crate:
 
 ### 1. Ten minutes with the application
 
@@ -66,6 +77,51 @@ answer, not a patch.
 **Write more cross-crate tests as you go.** Eleven files of them have now
 found seven defects that the unit tests had not. That ratio is still the most
 useful thing this project has learned.
+
+### 3. ~~Make the record match the product again~~ — done, and worth knowing why
+
+**Done at the end of the fifth session, in the same pass that found it.**
+This repository's method is that the written record says what is real — that
+is what ROADMAP's three-word status vocabulary is for. An audit found four
+entries in `DECISIONS.md`'s open-items list describing defects that were
+demonstrably fixed, a README roster naming two crates that have menu rows
+while omitting two that have none, and phase 18 still marked *Built,
+unwired* a session after Set as Default Editor shipped. All of it is
+corrected. What is worth carrying forward is the list itself, because every
+one of these went stale the same way — the fix landed and the record did
+not:
+
+| Claim | Where it is false |
+| --- | --- |
+| JSONL sniff calls a pretty-printed array "JSON Lines" | `bp_formats::looks_like_json_lines` requires `closes_what_it_opens(first)` |
+| The encoder is `pub(crate)` in the shell | `crates/bp-files/src/encode.rs` |
+| YAML has no way in | `bp-ui/src/state.rs:593` calls `bp_data::yaml_validate` |
+| `bp-audit`'s sealed destination has no implementor | `bp-audit/src/passphrase.rs:185` |
+| README: five crates built and unreachable | Names `bp-integrity` and `bp-platform`, which have rows; omits `bp-audit` and `bp-storage`, which do not |
+| ROADMAP phase 18: **Built, unwired** | File ▸ Set as Default Editor shipped in the fifth session |
+
+A reader who checks one claim and finds it stale has no way to know which of
+the rest to trust, and the method depends entirely on trusting them. **The
+roster is now counted rather than remembered** — reverse dependencies read
+out of every `Cargo.toml` and checked against what the shell's source
+actually names — which is the only version of that claim that stays true
+without somebody maintaining it.
+
+### 4. Put `fuzz/` inside the gate — still open
+
+`Invoke-LocalCI.ps1` sweeps `spikes/` for standalone workspaces. There is no
+`spikes/` directory in this tree, and there *is* a `fuzz/` one holding five
+hostile-input harnesses that nothing formats, lints or runs.
+
+Run by hand at the end of the fifth session, they are green — thirteen tests
+across the YAML and notebook harnesses alone, including the alias bomb refused
+at every size and two stack-overflow properties. So this is not a hidden
+failure. It is that **"every commit in this repository has passed the gate" is
+not true of that code**, and phase 19 is marked *Started* on the strength of
+tests nothing runs.
+
+Its own commit, never a passenger. The gate is the thing that validates
+everything else.
 
 ---
 
@@ -165,6 +221,17 @@ Three sessions of evidence, worth reading before dispatching any:
   passenger.** It is the thing that validates everything else.
 - **Review the substance, not the report.** Agents self-reported all green in
   every case where a real defect was present.
+- **Code taking a `Platform` parameter must not use `std::path` to split
+  anything.** This has now been sprung twice. `4390593` recorded a surviving
+  mutation where `PathBuf::join` stood in for `bp_platform::paths::join` and
+  only the Linux leg would ever have failed. The fifth session's device-name
+  refusal did it again: the *judgement* was parameterised and the *split* was
+  `Path::file_name()`, which splits by the platform the binary was compiled
+  for — so on Linux `C:\Users\me\con.txt` is one file name containing no
+  device, and the Windows rule passed by never being evaluated. Windows had
+  been green for an hour. `bp_platform::paths::components` is the split that
+  takes the platform, and the rule generalises to every `std::path` operation
+  in a parameterised function.
 
 ---
 
@@ -176,6 +243,20 @@ Three sessions of evidence, worth reading before dispatching any:
   positioned relative to its parent element, so moving them would change the
   coordinate parent, and nothing in the gate can see a menu opening in the
   wrong place.
+- **Five agent worktrees under `.claude/worktrees/`, three with uncommitted
+  files.** Each was checked at the end of the fifth session and everything in
+  them has already landed on the branch — the cross-crate test files, the fuzz
+  workspace, ADR-0022. Nothing unique is at risk and they are safe to prune.
+  Each is also a full copy of the tree, which is what multiplies
+  `billion-laughs.yaml` six times over for anything that walks the workspace.
+- **All 59 commits live on `feat/phase-01-foundation-ui`.** `main` has none of
+  them and 44 are unpushed, so a sixteen-phase product exists in exactly one
+  place under a branch named for phase one.
+- **The panic discipline is real and unenforced.** Not one `unwrap()`,
+  `panic!`, `todo!` or `unimplemented!` in production library code across all
+  24 crates — every hit is a test module or a benchmark. There is no
+  `[workspace.lints]` table; clippy runs default lints under `-D warnings`.
+  One table would make the convention a rule.
 - **Native Linux timing.** WSLg's compositor makes startup numbers
   unrepresentative, so ADR-0015's evidence remains Windows-only.
 - **Scroll smoothness under CPU rasterisation** is the standing revert
