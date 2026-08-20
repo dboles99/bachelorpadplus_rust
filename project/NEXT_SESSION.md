@@ -71,6 +71,11 @@ papercut there — it is the feature being broken.
 | Arrow down through a short line and back up | Whether the goal column survives |
 | **File ▸ Set as Default Editor** | **The only row that changes state outside this application.** It reports before it offers and writes nothing on Windows without a Save dialog first — so it wants *reading* rather than clicking through |
 
+**There is a written-out version of this checklist**, with every command, the
+exact strings to expect and space to write findings, at
+`~\Downloads\BachelorPad_Manual_Pass_21AUG2026.md`. It also carries Part 2's
+three decisions with their options laid out.
+
 ### A 192 MiB fixture costs a few hundred bytes
 
 Write real lines, then extend with `set_len`: both NTFS and ext4 record the
