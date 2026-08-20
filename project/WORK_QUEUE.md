@@ -91,7 +91,8 @@ so whoever finishes an item updates them as part of it.
 | — | `paths::file_name`, and the panic lints | `bp-platform`, `[workspace.lints]` |
 | — | Security ▸ Security History, and the five calls that fill it | ADR-0024, id 206 |
 | — | A tab is drawn as wide as the caret believes it is | `bp-editor`, found by looking |
-| — | `bp-files` applies the extended-length prefix | `bp-files`, and the last of the cross-crate defects |
+| — | `bp-files` applies the extended-length prefix | `bp-files` |
+| — | A cell that named a language we cannot map is never given the kernel's | ADR-0025, `bp-notebook` |
 
 Every library half now has its row.
 
@@ -111,14 +112,13 @@ batch by menu.
 
 ## Tier 0.5 — what the cross-crate tests found
 
-Eleven files of cross-crate tests have now found seven defects. **Six are
-fixed.** What is left is one decision and two latent items -- and the
-decision, D6, is the only thing in this tier still pinned by an `#[ignore]`d
-test.
+Eleven files of cross-crate tests have now found seven defects. **All seven
+are fixed.** What is left in this tier is one decision and two latent items,
+and the decision -- D6 -- is the only thing anywhere in the tree still pinned
+by an `#[ignore]`d test.
 
 | Item | Shape |
 | --- | --- |
-| **`bp-notebook` runs unnameable code through the kernel's interpreter** | `infer_kind` does `stated.or(notebook_language)`, conflating "said nothing" with "said something we cannot map". ADR-0025 promises the second becomes `Raw` with a warning, and that only holds for a notebook with no kernelspec. Splitting those two cases is the fix; the ADR already says what the behaviour should be |
 | `bp-search` and `bp-buffer` disagree what a line is | **An ADR, not a patch — D6.** Either `bp-search` adopts ropey's break set or `bp-buffer` drops `unicode_lines`. One definition has to win, and `bp-ui` uses both today, in different views |
 | The recent-files list and the recovery directory both roam on Windows | `recent.toml` and `bp-ui`'s `recovery_dir` both hang off the config directory, which is `%APPDATA%` and roams. Both hold machine-specific absolute paths; `bp-platform` calls this `DirKind::State`. Needs one change owning `bp-config` **and** `bp-ui`, so it cannot be split between agents |
 | `Profile::is_data` is true for `Ini` and `Xml` | Latent. Harmless until somebody gates a menu on it, at which point every row fails |
