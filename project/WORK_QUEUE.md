@@ -19,9 +19,13 @@ which is not the same list.
 
 ## Collision rules
 
-`bp-ui/src/lib.rs` has been split, so `state.rs`, `editor_view.rs` and
-`dispatch.rs` can take different agents. `ui/app.slint` has now been split too
-— seven files, listed in `docs/architecture/ARCHITECTURE.md`. So the find
+`bp-ui/src/lib.rs` has been split, so `state.rs`, `editor_view.rs`,
+`dispatch.rs`, `viewer.rs`, `audit.rs`, `passphrase.rs` and
+`default_editor.rs` can take different agents — nine modules now, listed with
+their sizes in `docs/architecture/ARCHITECTURE.md`. **`state.rs` is 6,282
+lines of those**, so in practice two agents in `bp-ui` still collide more
+often than the count suggests; splitting it is its own Tier 0 item. `ui/app.slint` has now been split too
+— ten files, listed in `docs/architecture/ARCHITECTURE.md`. So the find
 bar, the editor surface, the status bar, the results panel and the tab are
 each somebody's own file.
 
@@ -103,23 +107,32 @@ so whoever finishes an item updates them as part of it.
 
 Every library half now has its row.
 
-## Tier 0 — two crates with no way in
+## Tier 0 — two modes, and two things an agent can take today
 
-Still the largest block of ready work, and **the shape of it changed with the
-last item to leave**. These are not tested libraries missing a menu row; each
-is a *mode* — a view, a set of interactions, and a decision about what the
-product is. The viewer for a huge document was the last of the ones that could
-be described as wiring, and even it turned out to be a feature: a scroll
-model, four keys, four refusals and a surface decision.
+**The shape of this tier changed with the last item to leave it.** What is
+here is not tested libraries missing a menu row; `bp-notebook` and
+`bp-research` are each a *mode* — a view, a set of interactions, and a
+decision about what the product is. The viewer for a huge document was the
+last item that could be described as wiring, and even it turned out to be a
+feature: a scroll model, four keys, four refusals and a surface decision.
 
-Read `prompts/rosettas/R011_WIRE_CAPABILITY_INTO_SHELL.md` before taking
-either. **Only one agent may add to `AppWindow` in `app.slint` at a time.**
+Read `prompts/rosettas/R011_WIRE_CAPABILITY_INTO_SHELL.md` before touching
+`bp-ui`. **Only one agent may add to `AppWindow` in `app.slint` at a time.**
 
-| Item | What exists |
+### Ready for an agent, now
+
+| Item | Shape |
 | --- | --- |
-| ~~A view for a document that is not in the rope~~ | **Done** — [ADR-0030](../docs/decisions/ADR-0030.md). A huge document is served from disk as the reader scrolls, in the custom surface in *every* build. Measured: a 192 MiB log costs 0.8 MiB more than a small note. What is left of the large-file story is **find**, which `LargeFile::windows` exists for and which is a feature rather than wiring |
-| Notebook mode | `bp-notebook` (ADR-0025). A new view, not a menu row |
-| Research mode | `bp-research`. Same: a mode, not a row |
+| **Split `crates/bp-ui/src/state.rs`** | 6,282 lines, more than twice what the *whole shell* was when the first split happened. The seams are already there as comment banners; the largest coherent block is the security operations (scan, redact, hash, sign, verify, history), which have their own tests. Not hard — **scheduled**: every wiring item touches this file, so it has to happen between items, and right now none is in flight. **One agent, whole file, its own commit, nothing else in `bp-ui` while it runs** |
+| **Find, over a document served from disk** | The last piece of the large-file story. `bp_buffer::LargeFile::windows` gives overlapping text windows with a fresh file handle, so a background search does not disturb the scrolling viewport, and `bp-search` decides what a match is. A feature rather than wiring, and ADR-0030 names the two hard parts: a match found in a window has to become a scroll position, and a search over 2 GB has to be interruptible |
+
+### Blocked on a design pass, not on effort
+
+| Item | What exists | What is missing |
+| --- | --- | --- |
+| Notebook mode | `bp-notebook`, 3,627 lines, 59 tests (ADR-0025). Format questions settled; a run needs a `UserGesture` no parsed file can produce, which is the security half done and a real constraint on the UI | A **view** where a document is a sequence of cells rather than a rope |
+| Research mode | `bp-research`, 5,208 lines, 161 tests. The largest unreachable crate and the least specified | Same: a mode, and a decision about what it is for |
+| `bp-storage` | 721 lines, 21 tests. ADR-0020 settled the security half — `record_document` honours the policy | **What the user gets for it.** D3 permits wiring *after* a design pass; recording something before deciding what it is for is how a metadata store becomes a liability |
 
 ## Tier 0.5 — what the cross-crate tests found
 
@@ -204,9 +217,28 @@ All of it, in one pass. What is worth carrying forward:
 | Print | Platform work with no cross-platform story yet. |
 | **W11, drag and drop to open** | **Slint 1.17.1**, and this was checked rather than assumed. `DropArea` exists and compiles, and the item is implemented in `i-slint-core/items/drag_n_drop.rs` -- but the winit backend has no file-drop plumbing, and `DataTransfer` exposes only `plain_text` and `image`. There is no channel a dropped file's path could arrive through. Revisit on a Slint upgrade; do not spend an afternoon on it before checking that changed. |
 
-## Not a queue item
+## Not a queue item, and it is the top of `NEXT_SESSION.md`
 
-The first thing in `NEXT_SESSION.md` is a person typing into `--editor-view`
-and writing down what feels wrong. No agent can do that, and W1, W5, W6 and W7
-are all worth less until somebody has — they are caret-dependent, and nobody
-has yet confirmed the caret lands where the pointer does.
+**A person driving the window and writing down what is wrong.** No agent can
+do it, and the argument is no longer theoretical: two manual passes have
+happened and each found a defect no test could — a menu bar where twelve of
+fourteen menus swallowed clicks, and a tab drawn as one glyph while every
+column was computed as though it reached the next stop.
+
+Both lived in the same seam, and it is the one a test in this repository
+cannot see: **what a toolkit does with what it is handed.** 1,754 tests will
+not find the third.
+
+The caret question that used to head this section is answered — a click at the
+end of `line 30` reported `Ln 30, Col 8`, exactly its length plus one — so W1,
+W5, W6 and W7 are no longer waiting on it. What is unchecked now, in priority
+order, is the wheel and the resize, because the huge-file viewer inherits both
+and does nothing else. `NEXT_SESSION.md` has the full checklist and a
+four-line recipe for a 192 MiB fixture.
+
+## Also not a queue item: three design passes
+
+`bp-storage`, notebook mode and research mode are each blocked on a decision
+about **what the product is**, not on effort. They are listed in Tier 0 above
+so the size of them is visible, but taking one without an answer produces a
+feature nobody asked for. `project/DECISIONS_NEEDED.md` carries the questions.

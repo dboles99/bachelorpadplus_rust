@@ -1,244 +1,230 @@
 # Next session plan
 
-Rewritten 2026-08-20, at the end of the sixth build session.
+Rewritten 2026-08-21, at the end of the seventh build session.
 
-State: 24 crates, 1,754 tests, **0 ignored**, green on Windows and Linux
-across all ten gate stages. Every defect the eleven files of cross-crate tests
-found is fixed, both latent items behind them are fixed, and **four decisions
-that were blocking work were answered on 2026-08-20** — ADR-0030, ADR-0031 and
-ADR-0032, plus a narrowing of the `bp-storage` question.
-
-**The queue is no longer decision-gated.** For four sessions the bottleneck
-was how long a question sat; it is now effort again.
+State: **24 crates, 1,754 tests, 0 ignored**, green on Windows and Linux
+across all ten gate stages. 80 commits, all on
+`feat/phase-01-foundation-ui`; 8 unpushed.
 
 ---
 
-## The shape of the problem has changed again
+## The bottleneck has moved, and this is the first session it has not been code
 
-Three sessions ago the gap was that capabilities did not exist. Two sessions
-ago it was that they existed and were unreachable. **Neither is the gap now.**
+Four sessions ago the gap was that capabilities did not exist. Three sessions
+ago they existed and were unreachable. Two sessions ago the record disagreed
+with the product. Last session the queue was gated on questions only a human
+could answer.
 
-Twenty of the twenty-three library crates are reachable from the shell, and
-the largest unreachable *module* -- `bp-buffer`'s chunked reader -- now has
-the view it was waiting for. Every
-defect the cross-crate tests found is fixed. There is no `#[ignore]`d test
-anywhere in the tree. The record has been reconciled with the product and the
-gate has grown two stages that were missing. What is left is smaller, and
-sharper, than any of that.
+**None of those is the gap now.** Four decisions were answered on 2026-08-20
+and three of them are built. Phase 4 is complete. Sign Document was the last
+row in the product greyed for a missing *decision* rather than a missing
+prerequisite, and it acts.
 
-**Two of the three things that were worth most have been done.** What was
-first — the viewer for a document the rope does not hold — shipped, and so did
-the pair of latent defects. What is left at the top is the one no agent can
-do.
+What is left divides cleanly into three kinds, and only one of them is
+ordinary coding:
 
-### 1. ~~The viewer for a document the rope does not hold~~ — done
+| | What | Who can do it |
+| --- | --- | --- |
+| **1** | Drive the window and write down what is wrong | **Only a person.** No agent, no test |
+| **2** | Decide what `bp-storage`, notebooks and research *are* | **Only Daniel.** Product design, not implementation |
+| **3** | `state.rs` wants splitting; find over a huge document | An agent, once 1 and 2 are not blocking |
 
-Phase 4 is complete. A document past the huge threshold opens and is read from
-disk as the reader scrolls: arrow keys, the page keys, Ctrl+Home and the wheel
-move the window, the gutter numbers the *document* rather than the screen, and
-the status bar says which lines are on screen.
+That ordering is the plan. It is deliberately not the order of difficulty.
 
-[ADR-0030](../docs/decisions/ADR-0030.md) has the decision and the numbers.
-The one worth carrying: **a few lines of text peaked at 31.3 MiB and a 192 MiB
-log at 32.1 MiB.** A document 240 times the size, for 0.8 MiB more.
+---
 
-Four things came out of building it that generalise:
+## 1. Drive the window — the top of the list, and it has been for four sessions
 
-- **"Do nothing" is not always harmless.** A viewer has no `Editor`, so every
-  editing path finds `None` and does nothing — which is exactly right for
-  typing and exactly wrong for saving: `text_of` such a document is the empty
-  string, so a Ctrl+S that merely did nothing *special* would encode nothing
-  and atomically write it over two gigabytes, and report success. Four paths
-  refuse by name now, and the test asserts the file's size is unchanged rather
-  than trusting a return value.
-- **A bound can be found by asking instead of by counting.** The end of the
-  file is not known without indexing the whole thing, so a scroll to a
-  candidate position that yields no lines is one past the end and is refused.
-  One seek and one chunk, against reading two gigabytes to learn the same
-  thing.
-- **The surface decision is one function with a name.** `uses_custom_surface`,
-  recomputed per refresh, because ADR-0030 makes it depend on the active
-  document rather than on the flag. An `if` in the open path and another in
-  `refresh` is how two views come to disagree about which sizes they claim.
-- **A refusal with a price on it is not a missing feature.** Ctrl+End and a
-  total line count both need the whole file indexed. Both say so, and neither
-  silently freezes the window for several seconds.
+The argument for this is no longer theoretical. **Two manual passes have
+happened and each found a defect no test could**, both in the same seam:
 
-**What is left of the large-file story is find.** `LargeFile::windows` exists
-for exactly it and `bp-search` decides what a match is, so the pieces are
-there — but it is a feature rather than wiring: a match found in a window has
-to become a scroll position, and a search over 2 GB has to be interruptible.
+- the first found a menu bar where twelve of fourteen menus swallowed clicks,
+  and Save As defaulting to the process working directory — which wrote real
+  documents into a git checkout;
+- the second found a tab drawn as a single glyph while every column in
+  `bp-editor` was computed as though it reached the next tab stop, so the
+  caret on any tab-bearing line sat where the character was not, and the error
+  grew with every tab further along.
 
-### 2. Finish the manual pass — now the top of the list
-
-Five checks remain, and the last pass is the argument for doing them: it found
-a defect 177 tests could not, in the one seam a test in this repository cannot
-see — what a toolkit does with the string it is handed.
-
-**The wheel and the resize matter more than they did**, because the huge-file
-viewer inherits both and has nothing else. Scrolling is all a viewer does, so
-a wheel that goes the wrong way is not a papercut there — it is the feature
-being broken. A 192 MiB fixture is one `set_len` away; `crates/bp-ui/src/state.rs`
-has the helper the tests use.
-
-| Still unchecked | Why it matters |
-| --- | --- |
-| Scroll the wheel | Direction, and whether it snaps back to the caret. **In both an editor and the huge-file viewer** |
-| Resize the window | Whether the row count follows, or a blank strip appears. The viewer refetches on a size change, so this is also whether it refetches the right number |
-| Drag to select | Whether the selection rectangles land where the drag went |
-| Arrow down through a short line and back up | Whether the goal column survives |
-| **Open something enormous** | The gutter numbering the document rather than the screen, the status bar's `Ln 4812006-4812035`, and the four greyed File rows. Rendered and measured on 2026-08-20, but nobody has *read* one |
-| **File ▸ Set as Default Editor** | **The only row that changes state outside this application.** It reports before it offers and writes nothing on Windows without a Save dialog first — so it wants reading rather than clicking through |
-
-### 3. ~~The two latent defects~~ — done
-
-Both are fixed. Neither was wrong on the day it was written down, which is the
-argument for the tier: the row that would have gone wrong had not been written
-yet.
-
-- **`recent.toml`, the recovery journal and the security history all roamed
-  on Windows.** All three hung off the config directory, which is `%APPDATA%`;
-  all three hold machine-specific absolute paths, which is exactly what
-  `bp_platform::DirKind::roams` warns against. All three resolve through
-  `DirKind::State` now, in one change owning `bp-config` **and** `bp-ui`,
-  because splitting it would have scattered the product's files. The
-  housekeeping item came with it: `cargo test` no longer creates a recovery
-  directory in the developer's own profile.
-- **`Profile::is_data` was true for `Ini` and `Xml`.** The class question is
-  `Profile::is_data_class` and says outright that it is not the menu
-  question; the menu question is `Format::has_data_operations`, asked of the
-  format. A test walks `Format::ALL` against `menus::data` so the two are one
-  truth.
-
-What generalises, in one line each: **a path derived by subtracting another
-path's last component moves when that one does**, **separate the rule from
-the edge that reads the environment**, and **a predicate on the wrong type is
-a trap with no name.**
-
-## The `--editor-view` checklist — answered, and it found one defect
+**Neither was findable from a test in this repository**, because both lived in
+what a toolkit does with what it is handed. 1,754 tests will not find the
+third.
 
 ```powershell
-cargo run --release -- --editor-view
+cargo run --release                    # the default surface
+cargo run --release -- --editor-view   # the custom one
 ```
 
-**Done on 2026-08-20**, after heading this file for four sessions. A person
-drove both views. What it found is worth more than the four sessions of
-waiting suggested, and less than feared.
+### The checklist, in priority order
 
-| Check | Answer |
+The first two moved up when the huge-file viewer shipped, because scrolling is
+the whole of what a viewer does. A wheel that goes the wrong way is not a
+papercut there — it is the feature being broken.
+
+| Check | Why it matters now |
 | --- | --- |
-| Type a character | Works, both views |
-| Click mid-line | **Caret tracks the pointer.** A click on a line reported that line; a click at the end of `line 30` reported `Ln 30, Col 8`, exactly its length plus one |
-| **Ctrl+S** | **Works** — verified by reading the file back off the disk, not by the status bar |
-| Watch the status bar | `Ln 18, Col 66` and `Ln 30, Col 8`. The payoff is real |
-| Open a tab-indented file | **Broken, and now fixed** — see below |
-| The Security menu reaching its bottom row | Reaches it. `MenuPopup` is not clipping the four rows added since |
-| Recovery journal | Fires unprompted; the status bar showed `Recovery 10:00 AM` |
-| Scroll the wheel | **Still unchecked** |
-| Drag to select | **Still unchecked** |
-| Resize the window | **Still unchecked** |
-| Arrow down through a short line and back up | **Still unchecked** |
+| **Scroll the wheel** | Direction, and whether it snaps back to the caret. **In an editor *and* in the viewer** — they share `EditorSurface` but take different paths through `scroll_by_rows` |
+| **Resize the window** | Whether the row count follows, or a blank strip appears. The viewer refetches on a size change, so this is also whether it refetches the right number |
+| **Open something enormous** | Rendered and measured on 2026-08-20; nobody has *read* one. Check the gutter numbers the document rather than the screen, that the status bar reads `Ln 4812006-4812035`, and that Save / Save As / Save a Copy / Reload are greyed with their reason |
+| **Sign a document** | Brand new and never clicked. Two passphrase entries the first time, one after; the message should carry your public key. Then Verify Signature on the same document, which should say ✓ |
+| Drag to select | Whether the selection rectangles land where the drag went |
+| Arrow down through a short line and back up | Whether the goal column survives |
+| **File ▸ Set as Default Editor** | **The only row that changes state outside this application.** It reports before it offers and writes nothing on Windows without a Save dialog first — so it wants *reading* rather than clicking through |
 
-### What it found: a tab was drawn as one glyph
+### A 192 MiB fixture costs a few hundred bytes
 
-`bp_editor::view` computed columns as though tabs reached the next stop --
-`visual_column`, `char_column` and `wrap` all did -- while `VisualRow::text`
-handed the raw `	` to Slint, which draws it as a single glyph. The surface
-places the caret and the selection at `visual_column x advance`, so **on any
-line containing a tab the caret sat somewhere the character was not, and the
-error grew with every tab further along the line.**
+Write real lines, then extend with `set_len`: both NTFS and ext4 record the
+length without writing the bytes. `a_huge_file` in `crates/bp-ui/src/state.rs`
+is the helper the tests use, and it is four lines.
 
-Fixed by `bp_editor::view::expand_tabs` and `VisualRow::display_text`.
-`text` stays raw, because the column arithmetic in that module indexes it by
-character; `display_text` is what the toolkit gets. The property that pins
-it: for every position in a line, the number of characters drawn before it
-equals the visual column computed for it.
+```powershell
+$p = "$env:TEMP\enormous.log"
+$sb = [System.Text.StringBuilder]::new()
+1..5000 | ForEach-Object { [void]$sb.AppendLine("line $_`tcolumn two") }
+[System.IO.File]::WriteAllText($p, $sb.ToString())
+$fs = [System.IO.File]::Open($p, 'Open', 'Write'); $fs.SetLength(201326593); $fs.Close()
+```
 
-**Nothing in 177 tests caught this, and nothing was going to.** Every one of
-them was about the model, and the model was right. The defect lived in the
-one seam a test cannot see -- what a toolkit does with the string it is
-handed -- which is the exact argument this file has been making for four
-sessions about why somebody has to look.
+### Three things learned about doing this
 
-### Two things about doing this again
+- **Do not drive the window while somebody else is.** Two of three findings
+  from the last pass evaporated on inspection: a fixture whose line labels were
+  hand-numbered and had drifted from the gutter by one (the gutter was right),
+  and an apparent stray deletion that was the other person typing. Generate a
+  fixture rather than numbering it by hand.
+- **`AKIAIOSFODNN7EXAMPLE` is not a finding**, and a scan that ignores it is
+  working. `bp-secrets` treats anything containing `example` as a placeholder,
+  deliberately, with a test pinning that exact string. A fixture meant to
+  exercise the scan needs a key that looks random — `AKIA5MZ7QK2XPLRW4VTD`
+  does.
+- **The software renderer has no rendering notifier**, so `--measure-exit`
+  returns before the first frame. `--renderer=platform` is what actually
+  paints one, and its timings are not comparable to ADR-0017's.
 
-- **Do not drive the window while somebody else is.** Two of the three
-  findings from this pass evaporated on inspection: a fixture whose line
-  labels were hand-numbered and drifted from the gutter by one (the gutter
-  was right), and an apparent stray deletion that was the other person
-  typing. Generate a fixture rather than numbering it by hand -- the one in
-  the scratchpad asserts every label against its own position.
-- **`AKIAIOSFODNN7EXAMPLE` is not a finding, and a scan that ignores it is
-  working.** `bp-secrets` treats anything containing `example` as a
-  placeholder, deliberately, with a test pinning that exact string. A fixture
-  meant to exercise the scan needs a key that looks random --
-  `AKIA5MZ7QK2XPLRW4VTD` does.
+---
+
+## 2. Three decisions, and they are about what the product *is*
+
+Every one of these is a design question rather than an implementation one, and
+each gates a whole phase. `project/DECISIONS_NEEDED.md` is the register.
+
+### `bp-storage` — 721 lines, 21 tests, called by nothing (phase 9)
+
+D3 is answered as far as *permission* goes: it may be wired, **after** a
+design pass. ADR-0019 stands as written and ADR-0020 settled the security half
+— `record_document` honours the policy, dropping the title under `PathOnly`
+and recording nothing under `Disabled`.
+
+What is open is the design, and it is one question: **what does the user get
+for it?** A related-notes panel, duplicate detection, a "documents like this
+one" list, something else. Recording something before deciding what it is for
+is how a metadata store becomes a liability.
+
+### `bp-notebook` — 3,627 lines, 59 tests, reached only by the fuzz harness (phase 12)
+
+ADR-0025 settled the format questions. What is missing is a **mode**: a view
+where a document is a sequence of cells rather than a rope, which is the same
+shape of problem the huge-file viewer just turned out to be — and that one took
+a scroll model, four keys, four refusals and a surface decision.
+
+Worth knowing before starting: `bp-notebook` refuses to run a cell without a
+`UserGesture` that no parsed file can produce. That is the security half done
+and it constrains the UI, because the gesture has to come from somewhere real.
+
+### `bp-research` — 5,208 lines, 161 tests, called by nothing (phase 13)
+
+The largest unreachable crate and the least specified. Same shape: a mode.
+
+---
+
+## 3. What an agent can take now
+
+Two items, both real, neither urgent.
+
+### `crates/bp-ui/src/state.rs` is 6,282 lines
+
+More than twice the size the *whole shell* was when the first split happened.
+The seams are already there as comment banners. The reason it has not been
+done is scheduling rather than difficulty: **every wiring item touches it**, so
+the split has to happen between items rather than during one — and right now
+there is no wiring item in flight, which makes this the moment.
+
+Suggested seams, from the banners already in the file: the security operations
+(scan, redact, hash, sign, verify, history) are the largest coherent block and
+have their own tests; the passphrase flow is a second; the find/replace state a
+third.
+
+**One agent, whole file, its own commit.** Nothing else may touch `bp-ui`
+while it runs.
+
+### Find, over a document served from disk
+
+The last piece of the large-file story. `bp_buffer::LargeFile::windows`
+exists for exactly this — overlapping text windows, with a fresh file handle
+so a background search does not disturb the scrolling viewport — and
+`bp-search` decides what a match is.
+
+It is a feature rather than wiring, and the two hard parts are named in
+ADR-0030: a match found in a window has to become a scroll position, and a
+search over 2 GB has to be interruptible. Neither is solved.
+
+---
 
 ## What is no longer on this list
 
 Recorded so nobody re-derives them.
 
-- **Ten minutes with the application** — done, and it found the tab defect.
-- **Wire the built-but-unreachable things** — all but three crates are
-  reachable, and the three that are not are named above.
-- **Parity, or retire the flag** — settled and not in the view's favour.
-  Input-method composition cannot work on Slint 1.17.1; `--editor-view` stays
-  opt-in.
-- **Security profiles (phase 14)** — done; all three dependants read the
-  policy.
-- **Make the record match the product** — done, and the lesson kept: every
-  stale claim went stale the same way, a fix landing without the record
+- **The viewer for a document the rope does not hold** — shipped (ADR-0030). A
+  192 MiB log costs 0.8 MiB more than a small note, measured.
+- **Sign Document** — shipped (ADR-0031). The key is sealed rather than
+  permission-protected, which closes the asymmetry ADR-0026 measured.
+- **The application id** — reverse-DNS and no longer the same constant as
+  `APP_DIR` (ADR-0032).
+- **The two latent defects** — the three files that roamed on Windows, and
+  `Profile::is_data` answering a question it could not.
+- **Parity, or retire `--editor-view`** — settled and not in the view's
+  favour. Word wrap is done; input-method composition cannot be done at all on
+  Slint 1.17.1. The flag stays opt-in and now means precisely "which surface
+  *edits* a document the rope holds".
+- **Make the record match the product** — done twice now, and the lesson kept:
+  every stale claim went stale the same way, a fix landing without the record
   moving.
-- **Put `fuzz/` inside the gate** — done, on both legs, and verified to fail
-  before it was trusted.
-- **The seven cross-crate defects** — all fixed. The device name that
-  destroyed documents, the typed name that did the same, the tab drawn as one
-  glyph, the extended-length prefix, the notebook language, the JSONL sniff,
-  the encoder's location.
-- **D6, what a line is** — ADR-0029. A break is `
-` or `
-`; the rope
-  dropped `unicode_lines`, a default nobody chose.
+- **Put `fuzz/` inside the gate** — done, on both legs, verified to fail before
+  it was trusted.
+- **The seven cross-crate defects** — all fixed. **D6, what a line is** —
+  ADR-0029.
+
+---
 
 ## Decisions still waiting on a human
 
-`project/DECISIONS_NEEDED.md` is the register. **Four were answered on
-2026-08-20** and none of them blocks anything now:
+`project/DECISIONS_NEEDED.md` is the register. **Nothing here blocks work that
+is otherwise ready**, which is new: for four sessions something always did.
 
-| Was | Answer |
-| --- | --- |
-| D11, whether a huge document may be `--editor-view` only | No. It opens in the custom surface, read-only, in every build ([ADR-0030](../docs/decisions/ADR-0030.md)) |
-| D5, where a signing key lives | Sealed in a `.bpadx` envelope under a passphrase, rather than protected by file permissions ([ADR-0031](../docs/decisions/ADR-0031.md)) |
-| D9, the application id | `io.github.dboles99.BachelorPadPlus`, and no longer the same constant as `APP_DIR` ([ADR-0032](../docs/decisions/ADR-0032.md)) |
-| D3, whether `bp-storage` may be wired in | Yes, after a design pass. ADR-0019 stands as written; what is open now is the design, not the permission |
+| # | Question | What it holds up |
+| --- | --- | --- |
+| D1 | What may leave the machine — which providers, if any | Phases 8 and 10 |
+| D3 | What `bp-storage` records, and what the user sees for it | Phase 9, `bp-organize`. See §2 above |
+| D4 | An outside review of the `.bpadx` envelope | Trusting it with real documents. **Larger than it was**: ADR-0031 puts the signing key in the same envelope |
+| D7 | A derive-once API for `bp-crypto` | A long security history staying readable — one Argon2id derivation per line |
+| D8 | Applying Windows default-editor registration needs Win32 or a dependency | specs §19's Windows half |
+| D10 | Where the `.bpadx` validation ceiling sits | Opening a hostile or corrupt file |
 
-What is still open, and what each holds up:
-
-- **What may leave the machine (D1).** Unchanged. Phases 8 and 10.
-- **An outside review of the `.bpadx` envelope (D4).** Now larger than it was:
-  ADR-0031 puts the signing key inside the same envelope, so a review covers
-  the key store too.
-- **`bp-crypto`'s derive-once API (D7).** Reading a sealed audit history costs
-  a full Argon2id derivation per line, so a few hundred lines is several
-  seconds. It has not bitten yet because no history is that long. Unaffected
-  by ADR-0031: one key file is one derivation.
-- **Applying Windows default-editor registration (D8).** Needs a Win32 call or
-  a dependency, and `bp-platform` forbids both.
-- **Where the `.bpadx` validation ceiling sits (D10).**
+---
 
 ## Working with agents in this repository
 
-Three sessions of evidence, worth reading before dispatching any:
+Four sessions of evidence, worth reading before dispatching any:
 
 - **`prompts/rosettas/R011_WIRE_CAPABILITY_INTO_SHELL.md` earns its keep.** An
   agent that read it found and fixed an unbounded dispatch range that would
   have swallowed its own new ids.
 - **Give one crate per agent.** Four ran concurrently without collision when
   each owned one crate. The moment two want `bp-ui` or `app.slint`, serialise.
-- **Ask for a property, not more examples.** Every defect found by review this
-  session was found by a property — "moving a line down and back returns the
-  exact original bytes" caught two that example-based unit tests written
-  alongside the feature missed entirely.
+- **Ask for a property, not more examples.** Every defect found by review has
+  been found by a property — "moving a line down and back returns the exact
+  original bytes" caught two that example-based tests written alongside the
+  feature missed entirely.
 - **Tell them to report problems outside their scope rather than fix them.**
   Both times an agent fixed something adjacent, it was wrong to: a JSON
   reformatter that duplicated `bp-data` and disagreed with it on key order,
@@ -248,112 +234,90 @@ Three sessions of evidence, worth reading before dispatching any:
   passenger.** It is the thing that validates everything else.
 - **Review the substance, not the report.** Agents self-reported all green in
   every case where a real defect was present.
-- **Code taking a `Platform` parameter must not let `std::path` answer for
-  it.** This has now been sprung **three times**, by three different
-  functions, and every time the Windows leg was green while the Linux leg
-  found it. `4390593` recorded a surviving
-  mutation where `PathBuf::join` stood in for `bp_platform::paths::join` and
-  only the Linux leg would ever have failed. The fifth session's device-name
-  refusal did it again: the *judgement* was parameterised and the *split* was
-  `Path::file_name()`, which splits by the platform the binary was compiled
-  for — so on Linux `C:\Users\me\con.txt` is one file name containing no
-  device, and the Windows rule passed by never being evaluated. Windows had
-  been green for an hour. The third was `writable_path`, which took a platform
-  and then called `std::path::absolute` -- and on the Linux leg
-  `C:\docs\...` is a *relative* path, so the Windows rule was tested against
-  a Linux working directory. The shape is always the same: the *judgement*
-  takes the platform and some *path operation* underneath it does not.
-  **`bp_platform::paths::file_name(platform, path)` exists now**, with `Path::file_name`'s exact semantics and the platform made
-  explicit, so the correct thing is a drop-in rather than something you have
-  to know to spell as `components(platform, p).last()`. `paths::join` was
-  already the same fix for the writing direction.
 
-  Not made into a gate check, and that was measured rather than assumed: a
-  grep for host-dependent `std::path` calls in files that mention `Platform`
-  returns five hits and all five are legitimate -- `str::strip_prefix`, and
-  `path.parent()` on paths that really are the host's. A stage that cries
-  wolf gets disabled wholesale, which `docs/governance/LOCAL_CI.md` already
-  says about gates that are wrong. The enforcement is the primitive being
-  there and obvious -- plus a test named for the trap in each function that
-  has fallen into it, which fails on the Linux leg if anyone reintroduces it.
+### The two traps this repository springs repeatedly
 
-  **Ask of any parameterised function: which platform is each line of this
-  answering about?** `is_absolute`, `components`, `file_name` and `join` all
-  take one. `std::path` never does.
+**A function reading the real profile directory means `cargo test` writes
+there.** Sprung **three times**: the security history wrote a live log into
+`%APPDATA%`, `AppState::new()` built its recovery journal from the real path,
+and — during the change that added it — a test run wrote **a real Ed25519
+private key** into `%LOCALAPPDATA%`. The fix is a field on `AppState`, not a
+function, and for the key a `cfg(test)` redirect on the *function* would not
+have been enough: `has_signing_key` decides which question the passphrase bar
+asks, and the signing that follows must open the file that answer was about.
+
+> **Ask of anything that resolves a path at startup: what happens when a test
+> constructs one of these?**
+
+**Code taking a `Platform` parameter must not let `std::path` answer for it.**
+Also sprung three times, by three different functions, and every time the
+Windows leg was green while the Linux leg found it. `4390593` recorded a
+surviving mutation where `PathBuf::join` stood in for
+`bp_platform::paths::join`. The device-name refusal did it again: the
+*judgement* was parameterised and the *split* was `Path::file_name()`, which
+splits by the platform the binary was compiled for — so on Linux
+`C:\Users\me\con.txt` is one file name containing no device, and the Windows
+rule passed by never being evaluated. The third was `writable_path`, which
+took a platform and then called `std::path::absolute`, so on the Linux leg
+`C:\docs\...` is a *relative* path.
+
+`bp_platform::paths::file_name(platform, path)` exists now, with
+`Path::file_name`'s exact semantics and the platform made explicit;
+`paths::join` is the same fix for the writing direction.
+
+Neither is a gate check, and that was measured rather than assumed: a grep for
+host-dependent `std::path` calls in files mentioning `Platform` returns five
+hits and all five are legitimate. A stage that cries wolf gets disabled
+wholesale, which `docs/governance/LOCAL_CI.md` already says about gates that
+are wrong. The enforcement is the primitive being obvious, plus a test named
+for the trap in each function that has fallen into it.
+
+> **Ask of any parameterised function: which platform is each line of this
+> answering about?** `is_absolute`, `components`, `file_name` and `join` all
+> take one. `std::path` never does.
 
 ---
 
 ## Housekeeping
 
-- ~~**`bp-ui`'s tests create a recovery directory in `%APPDATA%`.**~~
-  **Fixed**, with the roaming item, since both owned `bp-config` and `bp-ui`
-  together. `recovery_dir()` is `cfg(test)`-redirected to a unique temp path
-  -- the fix the security history already took, after it wrote a live history
-  into the developer's own profile once. A test pins it, and a second one
-  pins that two states in one process do not share a journal, because
-  parallel tests each writing checkpoints the others then read is how the
-  shared-file version of this failed.
-
-- ~~**`ui/app.slint` wants splitting.**~~ **Done** — seven files. What is left
-  in it, and why each thing stayed, is in `docs/architecture/ARCHITECTURE.md`.
-  The popups were the one piece deliberately not moved: a `PopupWindow` is
-  positioned relative to its parent element, so moving them would change the
-  coordinate parent, and nothing in the gate can see a menu opening in the
-  wrong place.
-- ~~**Five agent worktrees under `.claude/worktrees/`.**~~ **Pruned**, after
-  each was checked file by file against what landed: the cross-crate test file
-  is byte-identical to `9d716f5`, `fuzz/README.md` to `db9af48`, and the
-  worktree carrying a draft `ADR-0022.md` held the *YAML* ADR, whose body is
-  byte-identical to the `ADR-0023.md` it was renumbered into. Nothing unique
-  was in any of them. Worth knowing for next time: **an abandoned worktree's
-  file can differ from the main tree and still be safe**, because the branch
-  moved on — the comparison that answers the question is against the commit
-  the work landed in, not against `HEAD`. It also removes the sixfold copy of
-  `fuzz/corpus/yaml/` that was breaking editor tooling.
-- **All 59 commits live on `feat/phase-01-foundation-ui`.** `main` has none of
-  them and 44 are unpushed, so a sixteen-phase product exists in exactly one
-  place under a branch named for phase one.
-- ~~**The panic discipline is real and unenforced.**~~ **Enforced now.**
-  There was not one `unwrap()`, `panic!`, `todo!` or `unimplemented!` in
-  production library code across all 24 crates before the lints were switched
-  on, which is why switching them on cost no code changes.
-  `[workspace.lints.clippy]` carries the four at `warn`, the gate's
-  `-D warnings` makes them errors, and `clippy.toml` exempts test code
-  because `unwrap()` in a fixture *is* the assertion.
-
-  Three exemptions, each narrow and each with its reason on it: Slint's
-  generated code moved behind a `mod generated` so its ~400 machine-written
-  panics stop drowning the lint that guards the hand-written 209 tests'
-  worth of shell around it; `bp-buffer`'s benchmark and `bp-naming`'s
-  property-strategy helpers carry file-level allows, because clippy's
-  `allow-unwrap-in-tests` recognises `#[test]` functions and `#[cfg(test)]`
-  blocks and neither of those is either; and `tests/integration` does not
-  inherit the lints at all, being test code end to end.
-
-  `expect_used` (nine in library code, all with a message saying what was
-  assumed), `unreachable` (one) and `indexing_slicing` (thirty-six) are
-  **not** on. Each is a change to the code rather than to the policy and
-  wants its own pass.
+- **All 80 commits live on `feat/phase-01-foundation-ui`.** `main` has none of
+  them and 8 are unpushed, so a twenty-phase product exists in exactly one
+  place under a branch named for phase one. This is the item most likely to
+  hurt and least likely to be noticed.
+- **Three orphaned files sit in `%APPDATA%\bachelorpad\`**: `recent.toml`,
+  `security-history.log`, and an empty `recovery` folder. Left behind
+  deliberately when all three moved to `DirKind::State` — a ten-path recent
+  list rebuilds itself and a recovery journal is transient — so they are safe
+  to delete and nothing will recreate them.
+- **`crates/bp-ui/src/state.rs` at 6,282 lines** is §3 above, listed here too
+  because it is the kind of thing that stops being noticed.
 - **Native Linux timing.** WSLg's compositor makes startup numbers
   unrepresentative, so ADR-0015's evidence remains Windows-only.
 - **Scroll smoothness under CPU rasterisation** is the standing revert
-  condition on ADR-0017 and needs a capture rig. The custom view makes it more
-  pressing: it redraws a set of `Text` elements per scroll.
+  condition on ADR-0017 and needs a capture rig. **The huge-file viewer makes
+  this more pressing than the custom editor did**: it redraws a set of `Text`
+  elements per scroll *and* reads the disk to fill them.
 - **Idle memory drifted from ~20 MB to ~32 MB** in one session after dialogs
-  had been opened. Below the 50 MB target, observed twice, never investigated.
+  had been opened. Below the 50 MB target, observed three times now, never
+  investigated.
 - **A clipboard menu row decodes its id against the history at click time**,
   not when the menu was built, and a 1.2 s poll can shift it in between.
   Pre-existing and applies to plain paste too; fixing it means freezing a
   snapshot while a menu is open.
 - **`fuzz/corpus/yaml/` breaks editor tooling that scans the workspace.**
   Google's Cloud Code extension crash-loops its YAML language server on
-  `billion-laughs.yaml` — a 570-byte file, 21 aborts in one window, and three
-  notifications that never mention YAML. No checked-in setting fixes it —
-  narrowing `cloudcode.yaml.yamlFileMatcher` was tried and does not, because
-  the server dies during initialisation. Disable the extension for this
-  workspace; nothing here is GCP. Any other tool that walks the tree for
-  `*.yaml` is a candidate; the `.claude/worktrees/` copies multiply it.
-  Reproduction and numbers in `fuzz/README.md`.
+  `billion-laughs.yaml` — a 570-byte file, 21 aborts in one window. **No
+  checked-in setting fixes it**; narrowing `cloudcode.yaml.yamlFileMatcher`
+  was tried and does not, because the server dies during initialisation.
+  Disable the extension for this workspace; nothing here is GCP. Any other
+  tool that walks the tree for `*.yaml` is a candidate. Reproduction and
+  numbers in `fuzz/README.md`.
+- **The panic lints are on** — `unwrap_used`, `panic`, `todo`,
+  `unimplemented`, at `warn` in `[workspace.lints.clippy]`, made errors by the
+  gate's `-D warnings`. `expect_used` (nine in library code, each with a
+  message saying what was assumed), `unreachable` (one) and `indexing_slicing`
+  (thirty-six) are **not** on; each is a change to the code rather than to the
+  policy and wants its own pass.
 
 ---
 
@@ -364,7 +328,11 @@ Three sessions of evidence, worth reading before dispatching any:
 - `./scripts/Install-GitHooks.ps1` once per clone; the hooks run the gate.
 - Every commit in this repository has passed the gate. Keep it that way.
 - `docs/decisions/` is the register; add an ADR when a decision has
-  consequences beyond one file.
+  consequences beyond one file. **Amend it in place when the build changes the
+  answer** — ADR-0031 said the signing key goes in `DirKind::State` and it
+  goes in `Data`; the amendment says so and why, rather than the sentence
+  quietly changing.
 - **Do not edit files while the gate is running.** The Linux leg re-runs
   `cargo fmt --check` from scratch, and a mid-run edit fails it for a reason
-  that has nothing to do with the change.
+  that has nothing to do with the change. The fuzz stage's `cargo fmt` reaches
+  the main crates through path dependencies, so this applies to it too.
