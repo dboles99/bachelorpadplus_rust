@@ -33,10 +33,70 @@ That ordering is the plan. It is deliberately not the order of difficulty.
 
 ---
 
+## 0. Two open defects, both found by driving the window on 2026-08-21
+
+These jump the queue because one of them destroys the user's text during the
+most ordinary thing in an editor.
+
+### Find edits the document while you type the query
+
+**Reproduce:** open any file, Ctrl+F, type `replicas`. The `r` reaches the find
+box, which correctly reports `1 of 3`. Every character after it goes **into the
+document**, replacing the match the `r` had just selected. `alpha replicas
+beta` becomes `alpha eeplicas beta`; the tab goes dirty; the find box still
+reads `r`. Reproduced with **1.5 seconds between keystrokes**, so it is not a
+race and not an artefact of synthetic input.
+
+**Cause, and it is one line with a comment saying what it does.**
+`on_find_changed` in `crates/bp-ui/src/lib.rs` runs on *every* keystroke in the
+query box and calls `dispatch::select`, which ends in `editor.focus()` —
+`select-range` in `ui/app.slint` says "Just take the focus back from the find
+box". That is right for its **other** caller, Find Next, where the user does
+want the caret in the document afterwards. It is wrong for the preview that
+runs while they are still typing, and the two share one function.
+
+**What needs deciding before it is fixed**, which is why this is not a
+one-liner: the preview still has to *show* the match. Selecting without
+focusing is the obvious answer for `TextInput`
+(`set-selection-offsets` without `editor.focus()`), and the custom surface's
+branch calls `ui.invoke_focus_editor()` for the same reason and wants the same
+treatment. Splitting `dispatch::select` into "show it" and "go to it" is
+probably the shape.
+
+**The `--editor-view` half is by inspection, not by driving.** The recovery
+dialog blocked synthetic input before that run finished. The branch is
+`state.editor_view` in `dispatch::select` and it steals the focus by a
+different call, so it is very likely the same defect — but it has not been
+seen.
+
+### Crash recovery restores the text and forgets the encoding and line ending
+
+`AppState::restore` opens the document and inserts the checkpoint's text, but
+never calls `set_line_ending` or `set_encoding` the way `open` does. The
+document therefore falls back to `LineEnding::default()`, which is
+`platform_default()`, which is **CRLF on Windows**.
+
+So an LF file that is recovered on Windows is rewritten CRLF throughout on the
+next save, and a UTF-16 document comes back as UTF-8. Seen in the status bar —
+`LF` before the crash, `CRLF` on the recovered tab — and confirmed in the code.
+
+This one contradicts a test that already exists and is passing:
+`saving_a_mixed_document_does_not_rewrite_the_minority_line_break`. The
+document's convention is respected on every path except the one that runs
+after a crash.
+
+**The fix is small; the question is where the value comes from.** The
+checkpoint does not carry the encoding or the line ending, so either
+`bp_history::Checkpoint` gains two fields (and old journals need a default), or
+recovery re-detects from the text — which is wrong for encoding, because the
+text has already been decoded.
+
+---
+
 ## 1. Drive the window — the top of the list, and it has been for four sessions
 
-The argument for this is no longer theoretical. **Two manual passes have
-happened and each found a defect no test could**, both in the same seam:
+The argument for this is no longer theoretical. **Three manual passes have
+happened and each found a defect no test could**, all in the same seam:
 
 - the first found a menu bar where twelve of fourteen menus swallowed clicks,
   and Save As defaulting to the process working directory — which wrote real
@@ -44,11 +104,13 @@ happened and each found a defect no test could**, both in the same seam:
 - the second found a tab drawn as a single glyph while every column in
   `bp-editor` was computed as though it reached the next tab stop, so the
   caret on any tab-bearing line sat where the character was not, and the error
-  grew with every tab further along.
+  grew with every tab further along;
+- **the third, on 2026-08-21, found that typing a query into Find edits the
+  document.** It is the worst of the three and it is open — see §0 below.
 
-**Neither was findable from a test in this repository**, because both lived in
-what a toolkit does with what it is handed. 1,754 tests will not find the
-third.
+**None was findable from a test in this repository**, because all three lived
+in what a toolkit does with what it is handed. 1,754 tests do not find the
+third either: `AppState::find` is correct and every test of it passes.
 
 ```powershell
 cargo run --release                    # the default surface
