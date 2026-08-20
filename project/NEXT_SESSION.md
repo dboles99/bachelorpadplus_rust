@@ -2,7 +2,7 @@
 
 Rewritten 2026-08-20, at the end of the sixth build session.
 
-State: 24 crates, 1,700+ tests, **0 ignored**, green on Windows and Linux
+State: 24 crates, 1,734 tests, **0 ignored**, green on Windows and Linux
 across all ten gate stages. Every defect the eleven files of cross-crate tests
 found is fixed, both latent items behind them are fixed, and **four decisions
 that were blocking work were answered on 2026-08-20** — ADR-0030, ADR-0031 and
@@ -18,62 +18,76 @@ was how long a question sat; it is now effort again.
 Three sessions ago the gap was that capabilities did not exist. Two sessions
 ago it was that they existed and were unreachable. **Neither is the gap now.**
 
-Twenty of the twenty-three library crates are reachable from the shell. Every
+Twenty of the twenty-three library crates are reachable from the shell, and
+the largest unreachable *module* -- `bp-buffer`'s chunked reader -- now has
+the view it was waiting for. Every
 defect the cross-crate tests found is fixed. There is no `#[ignore]`d test
 anywhere in the tree. The record has been reconciled with the product and the
 gate has grown two stages that were missing. What is left is smaller, and
 sharper, than any of that.
 
-**Three things are worth more than anything else in the queue.**
+**Two of the three things that were worth most have been done.** What was
+first — the viewer for a document the rope does not hold — shipped, and so did
+the pair of latent defects. What is left at the top is the one no agent can
+do.
 
-### 1. The viewer for a document the rope does not hold
+### 1. ~~The viewer for a document the rope does not hold~~ — done
 
-The largest single thing between this repository and a product, the only part
-of the large-file story still missing, and **no longer blocked on a
-decision**.
+Phase 4 is complete. A document past the huge threshold opens and is read from
+disk as the reader scrolls: arrow keys, the page keys, Ctrl+Home and the wheel
+move the window, the gutter numbers the *document* rather than the screen, and
+the status bar says which lines are on screen.
 
-The classification half shipped: the open path reads metadata before it reads
-a byte, an ordinary document opens as it always did, a large one opens and
-edits with its size in the status bar, and a huge one is refused in
-`Access::ReadOnlyBySize`'s own words. "Opening a 2 GB file loads 2 GB" is no
-longer true.
+[ADR-0030](../docs/decisions/ADR-0030.md) has the decision and the numbers.
+The one worth carrying: **a few lines of text peaked at 31.3 MiB and a 192 MiB
+log at 32.1 MiB.** A document 240 times the size, for 0.8 MiB more.
 
-What is missing is showing one. `bp_buffer::LargeFile` has `display_lines`,
-`index_through_line`, `line_start` and `WindowReader`, all tested and
-benchmarked (ADR-0027 carries the numbers). Connecting them means
-`display_lines` driving the editor surface's scroll anchor.
+Four things came out of building it that generalise:
 
-**D11 is answered and it is ADR-0030: a huge document opens in the custom
-surface, read-only, in every build, regardless of `--editor-view`.** The
-reasoning is that the one thing keeping that view opt-in is input-method
-composition, which is a statement about typing, and this viewer is read-only.
-So the flag now means precisely "which surface *edits* a document the rope
-holds", and there is no build in which the same file opens for one user and
-is refused for another.
+- **"Do nothing" is not always harmless.** A viewer has no `Editor`, so every
+  editing path finds `None` and does nothing — which is exactly right for
+  typing and exactly wrong for saving: `text_of` such a document is the empty
+  string, so a Ctrl+S that merely did nothing *special* would encode nothing
+  and atomically write it over two gigabytes, and report success. Four paths
+  refuse by name now, and the test asserts the file's size is unchanged rather
+  than trusting a return value.
+- **A bound can be found by asking instead of by counting.** The end of the
+  file is not known without indexing the whole thing, so a scroll to a
+  candidate position that yields no lines is one past the end and is refused.
+  One seek and one chunk, against reading two gigabytes to learn the same
+  thing.
+- **The surface decision is one function with a name.** `uses_custom_surface`,
+  recomputed per refresh, because ADR-0030 makes it depend on the active
+  document rather than on the flag. An `if` in the open path and another in
+  `refresh` is how two views come to disagree about which sizes they claim.
+- **A refusal with a price on it is not a missing feature.** Ctrl+End and a
+  total line count both need the whole file indexed. Both say so, and neither
+  silently freezes the window for several seconds.
 
-Two things follow that are worth knowing before starting:
+**What is left of the large-file story is find.** `LargeFile::windows` exists
+for exactly it and `bp-search` decides what a match is, so the pieces are
+there — but it is a feature rather than wiring: a match found in a window has
+to become a scroll position, and a search over 2 GB has to be interruptible.
 
-- **Whatever chooses the surface must be one function with a name**, not an
-  `if` in the open path and another in `refresh`. Two places deciding which
-  view a document gets is how the two views come to disagree about which
-  sizes they claim.
-- **`Access::ReadOnlyBySize`'s message has to stop saying "not yet connected
-  to a view"** the moment it is. That sentence exists so a limitation does not
-  become folklore; leaving it after it stops being true is the same failure
-  pointing the other way. `state::huge_refusal` is where it lives.
+### 2. Finish the manual pass — now the top of the list
 
-### 2. Finish the manual pass
-
-Four checks remain, and the last pass is the argument for doing them: it found
+Five checks remain, and the last pass is the argument for doing them: it found
 a defect 177 tests could not, in the one seam a test in this repository cannot
 see — what a toolkit does with the string it is handed.
 
+**The wheel and the resize matter more than they did**, because the huge-file
+viewer inherits both and has nothing else. Scrolling is all a viewer does, so
+a wheel that goes the wrong way is not a papercut there — it is the feature
+being broken. A 192 MiB fixture is one `set_len` away; `crates/bp-ui/src/state.rs`
+has the helper the tests use.
+
 | Still unchecked | Why it matters |
 | --- | --- |
-| Scroll the wheel | Direction, and whether it snaps back to the caret |
+| Scroll the wheel | Direction, and whether it snaps back to the caret. **In both an editor and the huge-file viewer** |
+| Resize the window | Whether the row count follows, or a blank strip appears. The viewer refetches on a size change, so this is also whether it refetches the right number |
 | Drag to select | Whether the selection rectangles land where the drag went |
-| Resize the window | Whether the row count follows, or a blank strip appears |
 | Arrow down through a short line and back up | Whether the goal column survives |
+| **Open something enormous** | The gutter numbering the document rather than the screen, the status bar's `Ln 4812006-4812035`, and the four greyed File rows. Rendered and measured on 2026-08-20, but nobody has *read* one |
 | **File ▸ Set as Default Editor** | **The only row that changes state outside this application.** It reports before it offers and writes nothing on Windows without a Save dialog first — so it wants reading rather than clicking through |
 
 ### 3. ~~The two latent defects~~ — done

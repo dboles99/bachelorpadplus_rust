@@ -97,20 +97,26 @@ so whoever finishes an item updates them as part of it.
 | — | Size decides how a document is opened; opening stops reading the file twice | ADR-0027, `bp-ui` |
 | — | The recent list, the recovery journal and the security history stop roaming | `DirKind::State`, `bp-config` and `bp-ui` |
 | — | The Data menu's question is asked of the format, not of its class | `Format::has_data_operations`, `bp-formats` |
+| — | The application id is reverse-DNS, and is not the directory name | ADR-0032, `bp-platform` |
+| — | A view for a document the rope does not hold | ADR-0030, `bp-ui/viewer.rs` |
 
 Every library half now has its row.
 
-## Tier 0 — two crates with no way in, and one view
+## Tier 0 — two crates with no way in
 
-Still the largest block of ready work, and every item is the same shape: a
-tested library and a missing menu row. Read
-`prompts/rosettas/R011_WIRE_CAPABILITY_INTO_SHELL.md` before taking any of
-them. **Only one agent may add to `AppWindow` in `app.slint` at a time**, so
-batch by menu.
+Still the largest block of ready work, and **the shape of it changed with the
+last item to leave**. These are not tested libraries missing a menu row; each
+is a *mode* — a view, a set of interactions, and a decision about what the
+product is. The viewer for a huge document was the last of the ones that could
+be described as wiring, and even it turned out to be a feature: a scroll
+model, four keys, four refusals and a surface decision.
+
+Read `prompts/rosettas/R011_WIRE_CAPABILITY_INTO_SHELL.md` before taking
+either. **Only one agent may add to `AppWindow` in `app.slint` at a time.**
 
 | Item | What exists |
 | --- | --- |
-| A view for a document that is not in the rope | `bp_buffer::LargeFile` (ADR-0027) -- `display_lines`, `index_through_line`, `WindowReader`. The *classification* half is done. What is missing is the viewer, and **[ADR-0030](../docs/decisions/ADR-0030.md) says what shape it takes**: a huge document opens in the custom surface, read-only, in *every* build, regardless of `--editor-view`. Whatever chooses the surface must be one named function, not an `if` in two places |
+| ~~A view for a document that is not in the rope~~ | **Done** — [ADR-0030](../docs/decisions/ADR-0030.md). A huge document is served from disk as the reader scrolls, in the custom surface in *every* build. Measured: a 192 MiB log costs 0.8 MiB more than a small note. What is left of the large-file story is **find**, which `LargeFile::windows` exists for and which is a feature rather than wiring |
 | Notebook mode | `bp-notebook` (ADR-0025). A new view, not a menu row |
 | Research mode | `bp-research`. Same: a mode, not a row |
 
