@@ -236,9 +236,19 @@ Three sessions of evidence, worth reading before dispatching any:
   `Path::file_name()`, which splits by the platform the binary was compiled
   for — so on Linux `C:\Users\me\con.txt` is one file name containing no
   device, and the Windows rule passed by never being evaluated. Windows had
-  been green for an hour. `bp_platform::paths::components` is the split that
-  takes the platform, and the rule generalises to every `std::path` operation
-  in a parameterised function.
+  been green for an hour. **`bp_platform::paths::file_name(platform, path)`
+  exists now**, with `Path::file_name`'s exact semantics and the platform made
+  explicit, so the correct thing is a drop-in rather than something you have
+  to know to spell as `components(platform, p).last()`. `paths::join` was
+  already the same fix for the writing direction.
+
+  Not made into a gate check, and that was measured rather than assumed: a
+  grep for host-dependent `std::path` calls in files that mention `Platform`
+  returns five hits and all five are legitimate -- `str::strip_prefix`, and
+  `path.parent()` on paths that really are the host's. A stage that cries
+  wolf gets disabled wholesale, which `docs/governance/LOCAL_CI.md` already
+  says about gates that are wrong. The enforcement is the primitive being
+  there and obvious.
 
 ---
 
@@ -263,11 +273,27 @@ Three sessions of evidence, worth reading before dispatching any:
 - **All 59 commits live on `feat/phase-01-foundation-ui`.** `main` has none of
   them and 44 are unpushed, so a sixteen-phase product exists in exactly one
   place under a branch named for phase one.
-- **The panic discipline is real and unenforced.** Not one `unwrap()`,
-  `panic!`, `todo!` or `unimplemented!` in production library code across all
-  24 crates — every hit is a test module or a benchmark. There is no
-  `[workspace.lints]` table; clippy runs default lints under `-D warnings`.
-  One table would make the convention a rule.
+- ~~**The panic discipline is real and unenforced.**~~ **Enforced now.**
+  There was not one `unwrap()`, `panic!`, `todo!` or `unimplemented!` in
+  production library code across all 24 crates before the lints were switched
+  on, which is why switching them on cost no code changes.
+  `[workspace.lints.clippy]` carries the four at `warn`, the gate's
+  `-D warnings` makes them errors, and `clippy.toml` exempts test code
+  because `unwrap()` in a fixture *is* the assertion.
+
+  Three exemptions, each narrow and each with its reason on it: Slint's
+  generated code moved behind a `mod generated` so its ~400 machine-written
+  panics stop drowning the lint that guards the hand-written 209 tests'
+  worth of shell around it; `bp-buffer`'s benchmark and `bp-naming`'s
+  property-strategy helpers carry file-level allows, because clippy's
+  `allow-unwrap-in-tests` recognises `#[test]` functions and `#[cfg(test)]`
+  blocks and neither of those is either; and `tests/integration` does not
+  inherit the lints at all, being test code end to end.
+
+  `expect_used` (nine in library code, all with a message saying what was
+  assumed), `unreachable` (one) and `indexing_slicing` (thirty-six) are
+  **not** on. Each is a change to the code rather than to the policy and
+  wants its own pass.
 - **Native Linux timing.** WSLg's compositor makes startup numbers
   unrepresentative, so ADR-0015's evidence remains Windows-only.
 - **Scroll smoothness under CPU rasterisation** is the standing revert
