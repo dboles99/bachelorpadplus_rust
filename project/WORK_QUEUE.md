@@ -107,23 +107,26 @@ so whoever finishes an item updates them as part of it.
 | — | A view for a document the rope does not hold | ADR-0030, `bp-ui/viewer.rs` |
 | — | Security ▸ Sign Document, and a key store that seals rather than restricts | ADR-0031, `bp-integrity`, ids 202 |
 | — | `state.rs` splits four ways; the private fields stay private | `bp-ui/src/state/{security,data,encryption,find}.rs` |
+| — | `AuditLog` reads lazily instead of eagerly | ADR-0036, `bp-audit`, `24610f2` |
+| — | `bp-storage`: a related-notes panel and duplicate detection | ADR-0037, `Organize` menu, `b0c152a` (fixed: the store never existed on a fresh machine until `4b549a5`) |
+| — | `bp-execution`: a fresh subprocess per cell, three languages first | ADR-0040, `8c2dfab`. Standalone — nothing calls it yet |
+| — | Research Report, a synthesis layer over `bp-storage` | ADR-0041, `Research` menu, `d9bdf30` |
+| — | File ▸ New Window, Insert ▸ Markdown, Tools ▸ Inspector, Help ▸ Diagnostics | `354934d` |
 
 Every library half now has its row.
 
-## Tier 0 — three modes, and one thing an agent can take today
+## Tier 0 — two modes, and one thing an agent can take today
 
-**The shape of this tier changed with the last item to leave it.** What is
-here is not tested libraries missing a menu row; `bp-notebook` and
-`bp-research` are each a *mode* — a view, a set of interactions, and code that
-does not exist yet. What they are is no longer the open question: ADR-0038
-and ADR-0039 (2026-08-21, the latter with its foundation settled the same
-day as D12) answered it, fully, for both. What is missing now is scope, not a
-decision — an execution engine for notebooks that does not exist as a crate,
-a data model for research that has not been designed — which is why neither
-is a ready item below despite having an answer. The viewer for a huge
-document was the last item that could be described as wiring, and even it
-turned out to be a feature: a scroll model, four keys, four refusals and a
-surface decision.
+**The shape of this tier changed again.** `bp-storage` left it in full: both
+its menu rows are wired and its one latent defect (the store's directory was
+never created on a fresh machine) is fixed. Research mode has its first real
+feature — Research Report, reading `bp-storage` into four insight shapes —
+but that is a first slice of ADR-0039's promise, not all of it; the rest of
+`docs/product/MENU_MAP.md`'s Research section (citation metadata, evidence,
+findings, methods, datasets) is still `planned()`. Notebook mode has its
+engine now (`bp-execution`, ADR-0040) but nothing calls it — no cell-sequence
+view exists, and wiring `bp-notebook`'s `RunRequest` through it into a Run
+Cell row is real, unscoped UI work, not wiring.
 
 Read `prompts/rosettas/R011_WIRE_CAPABILITY_INTO_SHELL.md` before touching
 `bp-ui`. **Only one agent may add to `AppWindow` in `app.slint` at a time.**
@@ -140,18 +143,16 @@ private. A sibling module would have widened every field it touched to
 | Item | Shape |
 | --- | --- |
 | **Find, over a document served from disk** | The last piece of the large-file story. `bp_buffer::LargeFile::windows` gives overlapping text windows with a fresh file handle, so a background search does not disturb the scrolling viewport, and `bp-search` decides what a match is. A feature rather than wiring, and ADR-0030 names the two hard parts: a match found in a window has to become a scroll position, and a search over 2 GB has to be interruptible |
-| **`AuditLog` reads lazily instead of eagerly (ADR-0036)** | `AuditLog::read`'s `Vec<Record>` return becomes an iterator over records, decrypted one at a time rather than the whole file up front. `bp-ui`'s security inspector drives it two ways: paged for ordinary scrolling (pull the most recent N, older only on request), background-decrypt-with-progress for whole-history operations. Both consume the same iterator; there is one primitive, not two code paths. The exact UI while paging or background-decrypting — a "load more" row, a progress bar — is still `bp-ui`'s own call when this is taken, not settled by the ADR |
-| **`bp-storage`: a related-notes panel and duplicate detection (ADR-0037)** | Both purpose and presentation are settled now. Related Notes opens a collapsible panel, the same pattern `results_panel.slint` already established for cross-file search — a list of related documents below the editor, click one to open it, populated from the tag join schema v1 already has. Duplicate Detection is both automatic (a non-blocking notice at save, extending `record_document`'s existing save-path call) and on-demand (the `Organize` menu row runs the same check any time). Both rows already exist, unwired, in `docs/product/MENU_MAP.md` — this is a new panel component plus wiring two `planned_menu` rows to real callbacks, not a blank page |
 
 ### Answered 2026-08-21, blocked on scope rather than a design pass now
 
-Two design questions closed in this batch remain genuinely blocked on scope,
-not on a decision — read `project/NEXT_SESSION.md` §2 before taking either,
+One design question closed in this batch remains genuinely blocked on scope,
+not on a decision — read `project/NEXT_SESSION.md` §2 before taking it,
 since "the decision is made" is not the same as "ready for an agent."
 
 | Item | What's decided | What's still missing |
 | --- | --- | --- |
-| Notebook mode | **ADR-0038: a lightweight, one-cell-at-a-time utility.** No persistent kernel session, no "run all" | **An execution engine.** `bp-notebook` is the format half only; the crate that would run a cell, `bp-execution`, does not exist. The view can be built and tested against `bp-notebook` alone first |
+| Notebook mode's view | **ADR-0038: a lightweight, one-cell-at-a-time utility. ADR-0040: `bp-execution` runs a cell as a fresh subprocess, Python/PowerShell/Shell first** — both built, both standalone. No persistent kernel session, no "run all" | **A cell-sequence view.** Nothing in `bp-ui` calls `bp-execution` yet; there is no notebook UI at all, only the format crate and the engine that would run what it parses |
 | Research mode | **ADR-0039 (`Accepted`): synthesise gathered data into design insights and recommendations, offline, on a new data model separate from `bp-research`** | **The data model itself, and what "gathered data" and "an insight" mean concretely.** `bp-research`'s existing types are explicitly not it; nothing is scaffolded yet |
 
 ## Tier 0.5 — what the cross-crate tests found
@@ -229,8 +230,8 @@ All of it, in one pass. What is worth carrying forward:
 | ~~Word wrap in the editor surface~~ | **Done.** `bp_editor::wrap` owns the breaking rule; `view`'s wrapped half maps rows to characters; `Editor` moves Up and Down by visual row. The shell anchors scrolling to a line *and* a row within it, and Slint reports the column count because it owns the font. |
 | **Input-method composition** | **Slint 1.17.1, and this was checked rather than assumed.** `FocusScope` returns `EventResult::Reject` for `UpdateComposition` and `CommitComposition` in *both* `capture_key_event` and `key_event` (`i-slint-core/items/input_items.rs`), and exposes no callback for either. `TextInput` is the only item in the whole toolkit that consumes them, and `input_method_request` is a backend-internal trait, not an application hook. There is no route to pre-edit text from a `FocusScope`. Revisit on a Slint upgrade. |
 | ~~**Security ▸ Sign Document**~~ | **Done** — [ADR-0031](../docs/decisions/ADR-0031.md). The key is sealed in a `.bpadx` envelope under a passphrase rather than protected by file permissions Windows cannot narrow. One ceremony, not one per signature: the first signature creates the key, the second unlocks it, and the row says which before the click |
-| ~~Anything writing to `bp-storage`~~ | **Design done** — [ADR-0037](../docs/decisions/ADR-0037.md). A related-notes panel and duplicate detection, both purpose and presentation settled. Moved to `WORK_QUEUE.md`'s ready tier; only the code remains. |
-| ~~`bp-organize`~~ | **Same ADR.** Its two `Organize` menu rows (Related Notes, Duplicate Detection) are named in `docs/product/MENU_MAP.md` already, unwired — this is the item above, not a separate design pass. |
+| ~~Anything writing to `bp-storage`~~ | **Done** — [ADR-0037](../docs/decisions/ADR-0037.md), `b0c152a`. A related-notes panel and duplicate detection, both automatic at save and on-demand from the `Organize` menu. |
+| ~~`bp-organize`~~ | **Same ADR, same commit.** Its two `Organize` menu rows (Related Notes, Duplicate Detection) are wired. |
 | ~~YAML support~~ | **Done and unreachable.** ADR-0023 picked `saphyr`; `bp-data` validates, formats, minifies and converts, with nesting, alias expansion and duplicate keys all bounded. No `bp-ui` code calls any of it. This is now a wiring item, not a blocked one. |
 | Markdown preview | Slint has no HTML view. Needs a rendering decision first. |
 | ~~`.bpadx` encryption~~ | **Done.** ADR-0021 settled the envelope and it ships; ADR-0022 seals the recovery journal with it. |

@@ -1,9 +1,12 @@
 # Next session plan
 
-Rewritten 2026-08-21, at the end of the eighth build session.
+Rewritten 2026-08-21, at the end of the eighth build session. **Updated
+same day, later in the session**, once `bp-storage`'s two menu rows,
+`bp-execution`, and Research Report all landed — the numbers and §2 below
+now describe the state after `d9bdf30`, not before it.
 
-State: **24 crates, 1,758 tests, 0 ignored**, green on Windows and Linux
-across all ten gate stages. 85 commits, all on
+State: **25 crates, 1,812 tests, 0 ignored**, green on Windows and Linux
+across all ten gate stages. 97 commits, all on
 `feat/phase-01-foundation-ui`; all pushed.
 
 ---
@@ -15,10 +18,11 @@ ago they existed and were unreachable. Two sessions ago the record disagreed
 with the product. Last session the queue was gated on questions only a human
 could answer.
 
-**None of those is the gap now.** Four decisions were answered on 2026-08-20
-and three of them are built. Phase 4 is complete. Sign Document was the last
-row in the product greyed for a missing *decision* rather than a missing
-prerequisite, and it acts.
+**None of those is the gap now.** All nine decisions from 2026-08-20/21 are
+answered, and every one of them that had scope to build is built: `bp-storage`'s
+Organize menu, `bp-execution`, and Research Report all shipped the same day
+they were decided. Sign Document was the last row in the product greyed for a
+missing *decision* rather than a missing prerequisite, and it acts.
 
 What is left divides cleanly into three kinds, and only one of them is
 ordinary coding:
@@ -26,8 +30,8 @@ ordinary coding:
 | | What | Who can do it |
 | --- | --- | --- |
 | **1** | Drive the window and write down what is wrong | **Only a person.** No agent, no test |
-| **2** | Decide what `bp-storage`, notebooks and research *are* | **Only Daniel.** Product design, not implementation |
-| **3** | Find over a huge document | An agent, once 1 and 2 are not blocking |
+| **2** | Wire `bp-execution` into a notebook view; grow Research past its first insight | Scope, not a decision — see §2 |
+| **3** | Find over a huge document | An agent, once 1 is not blocking |
 
 That ordering is the plan. It is deliberately not the order of difficulty.
 
@@ -66,13 +70,13 @@ papercut there — it is the feature being broken.
 
 | Check | Why it matters now |
 | --- | --- |
-| **Scroll the wheel** | Direction, and whether it snaps back to the caret. **In an editor *and* in the viewer** — they share `EditorSurface` but take different paths through `scroll_by_rows` |
-| **Resize the window** | Whether the row count follows, or a blank strip appears. The viewer refetches on a size change, so this is also whether it refetches the right number |
-| **Open something enormous** | Rendered and measured on 2026-08-20; nobody has *read* one. Check the gutter numbers the document rather than the screen, that the status bar reads `Ln 4812006-4812035`, and that Save / Save As / Save a Copy / Reload are greyed with their reason |
-| **Sign a document** | Brand new and never clicked. Two passphrase entries the first time, one after; the message should carry your public key. Then Verify Signature on the same document, which should say ✓ |
-| Drag to select | Whether the selection rectangles land where the drag went |
-| Arrow down through a short line and back up | Whether the goal column survives |
-| **File ▸ Set as Default Editor** | **The only row that changes state outside this application.** It reports before it offers and writes nothing on Windows without a Save dialog first — so it wants *reading* rather than clicking through |
+| ~~**Resize the window**~~ | **Checked 2026-08-21, later in the session.** Whether the row count follows, or a blank strip appears — no gap, in the editor's default surface, in `EditorSurface` (`--editor-view`), and in the huge-file viewer, up to near-full-screen height. **One false alarm on the way, worth knowing**: driving it via `SetWindowPos` past the physical monitor's bounds makes the render surface stop growing at the screen edge and looks exactly like a resize-refetch defect. It is not one — re-tested fully on-screen and it is clean. See `resize-testing-must-stay-onscreen` in the agent's memory if this gets re-driven by script again |
+| ~~**Open something enormous**~~ | **Checked the same pass.** The 192 MiB fixture opens correctly: gutter numbers the document (not the screen), the status bar reads `Huge file (192.0 MiB)` and the correct `Ln` range, content is exactly what was written. Save-state greying not separately re-checked this pass |
+| **Scroll the wheel** | Direction, and whether it snaps back to the caret. **In an editor *and* in the viewer** — they share `EditorSurface` but take different paths through `scroll_by_rows`. **Still blocked**: needs real synthetic input (`SendKeys`/`mouse_event`), which silently no-ops while the session is locked — unlike `SetWindowPos`, which is a window-management call and works regardless |
+| **Sign a document** | Brand new and never clicked. Two passphrase entries the first time, one after; the message should carry your public key. Then Verify Signature on the same document, which should say ✓. **Still blocked**, same reason |
+| Drag to select | Whether the selection rectangles land where the drag went. **Still blocked**, same reason |
+| Arrow down through a short line and back up | Whether the goal column survives. **Still blocked**, same reason |
+| **File ▸ Set as Default Editor** | **The only row that changes state outside this application.** It reports before it offers and writes nothing on Windows without a Save dialog first — so it wants *reading* rather than clicking through. **Still blocked**, same reason |
 
 **There is a written-out version of this checklist**, with every command, the
 exact strings to expect and space to write findings, at
@@ -111,66 +115,62 @@ $fs = [System.IO.File]::Open($p, 'Open', 'Write'); $fs.SetLength(201326593); $fs
 
 ---
 
-## 2. Three decisions, answered 2026-08-21 — now design work rather than open questions
+## 2. Three decisions, answered 2026-08-21 — two now built in full, one has an engine and no view
 
 All three were the shape "what does the product *do* here", and none of them
-were implementation questions. They are answered now; what is left for each is
-building toward a description that exists, not guessing at one.
+were implementation questions.
 
-### `bp-storage` — 721 lines, 21 tests, called by nothing (phase 9)
+### `bp-storage` — done (phase 9)
 
-**Answered in full.** ADR-0037 -- a related-notes panel and duplicate
-detection, both reading the schema ADR-0019 already shipped (documents, tags,
-the join between them). Neither needs a new schema to start; a similarity
-measure beyond exact tag overlap is later work, not a blocker on shipping the
-panel with what already exists.
+**Built in full.** ADR-0037 -- a related-notes panel and duplicate
+detection, both reading the schema ADR-0019 shipped, landed as `b0c152a`.
+Related Notes opens a collapsible panel, the same pattern `results_panel.slint`
+established for cross-file search. Duplicate Detection is both automatic
+(a non-blocking save-time notice) and on-demand (the `Organize` menu row).
+**One latent defect found and fixed the same day** (`4b549a5`): the store's
+directory was never created before `Store::open`, so on a fresh machine
+Organize silently never persisted anything -- no test caught it, because the
+test path deliberately uses `Store::in_memory()`. Confirmed fixed by direct
+filesystem inspection after rebuild. A similarity measure beyond exact tag
+overlap is real future work, not a gap in what shipped.
 
-**Presentation is settled too.** Related Notes opens a collapsible panel --
-the same pattern `results_panel.slint` already established for cross-file
-search results. Duplicate Detection is both automatic (a non-blocking
-save-time notice) and on-demand (the `Organize` menu row runs the same check
-any time). Both rows already exist, unwired, in `docs/product/MENU_MAP.md`.
-This is now `project/WORK_QUEUE.md`'s ready tier, not its blocked one -- a new
-panel component and two callbacks, not a blank page.
+### `bp-notebook` and `bp-execution` — the engine is done, the view does not exist (phase 12)
 
-### `bp-notebook` — 3,627 lines, 59 tests, reached only by the fuzz harness (phase 12)
+**ADR-0038's shape, and ADR-0040's engine, are both built.** `bp-execution`
+(`8c2dfab`) runs a cell as a fresh subprocess -- no persistent kernel
+session, no "run all", matching ADR-0038 exactly -- for three languages
+(Python, PowerShell, Shell; Rust and SQL explicitly deferred, named honestly
+rather than attempted at a lower standard). A `UserGesture` is required to
+start a process, output is capped, a wall-clock timeout kills a hung cell.
+Tested standalone, the same way `bp-notebook` was before anything called it.
 
-**Answered: a lightweight, one-cell-at-a-time utility.** ADR-0038 -- run a
-cell on request, no persistent kernel session, no "run all". `bp-notebook`
-refuses to run a cell without a `UserGesture` that no parsed file can produce,
-which is the security half done and the reason the narrower shape fits: a run
-that starts and stops reads naturally against a gesture-per-cell rule; a
-persistent session would not.
+**What is missing is not an engine decision any more -- it is a whole UI.**
+Nothing in `bp-ui` calls `bp-execution`. There is no cell-sequence view, no
+Run Cell menu row, no rendering of a cell's output back into a notebook.
+Wiring `bp-notebook`'s `RunRequest` through `bp-execution` into a real view
+is real, unscoped work -- likely the largest single remaining item in the
+product, and nothing here has scoped it yet.
 
-**What is missing is not a view decision any more -- it is an engine.**
-`bp-notebook` is only the format half; the crate that would actually run a
-cell, named `bp-execution` in its own module docs, does not exist in this
-workspace. The view can be built and tested against `bp-notebook` alone
-before that engine exists, so the two are parallel-safe once both are
-scoped -- but the engine is real, likely substantial, separate work, and
-nothing here has scoped it yet.
+### `bp-research` — a first insight is built; the rest of the mode is not (phase 13)
 
-### `bp-research` — 5,208 lines, 161 tests, called by nothing (phase 13)
-
-**Answered, fully.** ADR-0039 (`Accepted`, foundation settled the same
-session as D12) -- research mode synthesises data already present in
-documents or the store into insights, options and recommendations that
-inform a design, a feature or a function, **on a data model of its own,
-separate from `bp-research`.** `bp-research`'s existing bibliography types
-(BibTeX, CSL, DOI/arXiv identifiers) stay exactly what they are; phase 13 is
-not built on top of them.
+**ADR-0039's foundation, and ADR-0041's data model, are both settled and
+built.** Research Report (`d9bdf30`) reads `bp-storage` directly -- no new
+schema, no new store -- through a synthesis layer of four plain, inspectable
+aggregate queries: dominant themes, stale clusters, under-connected
+documents, consolidation candidates. `bp-research`'s existing bibliography
+types (BibTeX, CSL, DOI/arXiv identifiers) stay exactly what they are;
+this is not built on top of them.
 
 Offline throughout: nothing here reverses ADR-0006's no-network guarantee,
 and if synthesis ever implies *generating* prose rather than arranging
 gathered material, that reaches for ADR-0033's OpenAI policy instead, not
 this one.
 
-What is left is real design work, not a decision waiting on Daniel: what
-"gathered data" means concretely (documents already open? a folder pointed
-at? `bp-storage`'s related-notes graph, once ADR-0037 is built?), and what an
-"insight" or "recommendation" looks like on screen. Nothing is scaffolded
-yet -- naming the crate or module set is an implementation choice at the
-point this is actually taken.
+**What is left is a fifth-and-beyond insight, not a first one.** Research
+Report is a single report-dialog menu row; the rest of
+`docs/product/MENU_MAP.md`'s Research section (citation metadata, evidence,
+findings, methods, datasets) is still `planned()`. ADR-0041 itself says the
+four shapes it named are a starting set, not an exhaustive design.
 
 ---
 
