@@ -34,7 +34,7 @@ session, and what is left of the list is the one nobody can delegate:
 | --- | --- | --- |
 | **1** | Drive the window and write down what is wrong | **Only a person.** No agent, no test |
 | ~~**2**~~ | ~~Fix Sign Document's passphrase-focus leak~~ | **Done**, and watched working rather than read — see §2 |
-| **3** | Wire `bp-execution` into a notebook view; grow Research past its first insight | Scope, not a decision — see §3 |
+| ~~**3**~~ | ~~Wire `bp-execution` into a notebook view~~; grow Research past its first insight | **Notebook is done** ([ADR-0043](../docs/decisions/ADR-0043.md)) — and it wanted a *purpose*, not a view. Research is still open — see §3 |
 | ~~**4**~~ | ~~Find over a huge document~~ | **Done** ([ADR-0042](../docs/decisions/ADR-0042.md)), and watched working against a 213.5 MiB log |
 
 That ordering is the plan. It is deliberately not the order of difficulty.
@@ -272,7 +272,34 @@ test path deliberately uses `Store::in_memory()`. Confirmed fixed by direct
 filesystem inspection after rebuild. A similarity measure beyond exact tag
 overlap is real future work, not a gap in what shipped.
 
-### `bp-notebook` and `bp-execution` — the engine is done, the view does not exist (phase 12)
+### `bp-notebook` and `bp-execution` — reachable, and it was never a view that was missing (phase 12)
+
+**Done 2026-08-21** ([ADR-0043](../docs/decisions/ADR-0043.md), `ce633eb`
+and `b8acd58`). Open an `.ipynb` and the Run menu lists its runnable cells;
+choosing one runs it and shows `stdout`, `stderr`, the exit code and the
+duration in a panel, with a Stop that keeps what the cell had already
+printed.
+
+**What had actually been blocking it was the question "what is this mode
+for", and the answer decided the size of the work.** ADR-0038's
+no-persistent-session model is fatal to data exploration and free to a
+*literate document* -- a runbook whose examples are verified rather than
+asserted -- because every cell in one is self-contained by intent. Pick that
+purpose and a cell view is not needed at all: the notebook stays its own
+JSON in the ordinary editor, which `bp-notebook` had anticipated all along
+(`raw_json_view` exists because the JSON "is the thing the user might want
+to hand-edit"), and the whole surface is a menu.
+
+Three sessions of calling this "the largest unscoped item" were three
+sessions of sizing a cell-sequence view. The item was never that large; it
+was undecided, and undecided reads like large.
+
+`bp-execution` gained a resumable run for it -- `Run::start`/`poll`/`stop`,
+with the blocking `run` now written over them -- because a window cannot
+block for a cell's timeout. Same shape as ADR-0042's scan, and the same
+reason.
+
+### What the old note said, kept because the estimate is the lesson
 
 **ADR-0038's shape, and ADR-0040's engine, are both built.** `bp-execution`
 (`8c2dfab`) runs a cell as a fresh subprocess -- no persistent kernel
@@ -369,7 +396,9 @@ is confirmed by driving the window.
 | ~~Focus in the custom surface~~ | **Done, same session.** It turned out to want evidence rather than a decision: `forward-focus` is resolved at *compile* time by `i-slint-compiler`'s `focus_handling` pass into the component's init code, so it is one fixed element and no binding can move it, and there is no re-activation subtlety to weigh. `focus-editor-soon()` hands the caret over instead, guarded so a tab switch cannot take it out of an open find box |
 | ~~The status bar goes stale after a jump~~ | **Done, same session**, and it was all five jump paths rather than the one it was noticed in. `sync_cursor_label` in `draw_editor_view` |
 | ~~`--editor-view`'s find box drops keystrokes~~ | **Withdrawn: it was the harness.** `SendKeys` goes to whatever holds the foreground, and losing it is silent. Reproduced on demand by minimising the window mid-sequence |
-| **A notebook view** | Still the largest unscoped thing in the product: `bp-execution` runs a cell and nothing calls it |
+| **Research mode past its first insight** | The largest thing left. Research Report is one report-dialog row; the rest of `docs/product/MENU_MAP.md`'s Research section (citation metadata, evidence, findings, methods, datasets) is still `planned()`, and ADR-0041 says its four shapes were a starting set |
+| **Markdown fences that run** | The obvious next step from ADR-0043 and deliberately not in it: the same purpose wants ` ```python ` blocks in an ordinary `.md` to be runnable. Needs a fence parser and a decision about what names a block |
+| ~~A notebook view~~ | **Not needed for the purpose chosen** — see §3. A cell-sequence view remains a real option and is now a thing to design against evidence rather than guess at |
 
 ---
 
