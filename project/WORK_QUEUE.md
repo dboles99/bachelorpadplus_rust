@@ -109,7 +109,7 @@ so whoever finishes an item updates them as part of it.
 | — | `state.rs` splits four ways; the private fields stay private | `bp-ui/src/state/{security,data,encryption,find}.rs` |
 | — | `AuditLog` reads lazily instead of eagerly | ADR-0036, `bp-audit`, `24610f2` |
 | — | `bp-storage`: a related-notes panel and duplicate detection | ADR-0037, `Organize` menu, `b0c152a` (fixed: the store never existed on a fresh machine until `4b549a5`) |
-| — | `bp-execution`: a fresh subprocess per cell, three languages first | ADR-0040, `8c2dfab`. Standalone — nothing calls it yet |
+| — | `bp-execution`: a fresh subprocess per cell, three languages first | ADR-0040, `8c2dfab`. Reachable since ADR-0043 |
 | — | Research Report, a synthesis layer over `bp-storage` | ADR-0041, `Research` menu, `d9bdf30` |
 | — | File ▸ New Window, Insert ▸ Markdown, Tools ▸ Inspector, Help ▸ Diagnostics | `354934d` |
 | — | A bar takes the caret a tick after the row that opened it | `34f02e4`, and `prompts/rosettas/R011` rule 9 |
@@ -125,66 +125,44 @@ so whoever finishes an item updates them as part of it.
 | — | Go to Line works in both surfaces | It never needed the caret *read*, only *moved*. The refusal outlived the reason for it |
 | — | `bp-execution` gains a resumable run: `Run::start`, `poll`, `stop` | ADR-0043. `run` is now written over it, so there is one implementation |
 | — | Run ▸ a notebook cell, over an `.ipynb` | ADR-0043. `bp-notebook` and `bp-execution` are reachable |
+| — | Research Report names the documents behind each insight, and states the rules it applied | ADR-0046. The truncation it used to leave silent is now said out loud |
+| — | Research ▸ Open Questions, and `bp_semantic::questions` | ADR-0046. Not "Research Question": a question has a grammar, and which one you are asking does not |
+| — | Research ▸ What the Store Holds | ADR-0046, and `bp_storage::Store::summary` |
+| — | `forget_document` does what its doc comment had promised for two sessions | ADR-0046. Orphaned `tags` rows were never cleared, and its own test said so while the doc comment said otherwise |
 
 Every library half now has its row.
 
-## Tier 0 — two modes, and one thing an agent can take today
+## Tier 0 — empty
 
-**The shape of this tier changed again.** `bp-storage` left it in full: both
-its menu rows are wired and its one latent defect (the store's directory was
-never created on a fresh machine) is fixed. Research mode has its first real
-feature — Research Report, reading `bp-storage` into four insight shapes —
-but that is a first slice of ADR-0039's promise, not all of it; the rest of
-`docs/product/MENU_MAP.md`'s Research section (citation metadata, evidence,
-findings, methods, datasets) is still `planned()`. Notebook mode has its
-engine now (`bp-execution`, ADR-0040) but nothing calls it — no cell-sequence
-view exists, and wiring `bp-notebook`'s `RunRequest` through it into a Run
-Cell row is real, unscoped UI work, not wiring.
+**This tier held three modes for four sessions, then one scoping job, and now
+holds nothing.** `bp-storage` left under ADR-0037, `bp-notebook`/`bp-execution`
+under ADR-0043, `bp-research` under ADR-0044, and research mode's synthesis
+half under ADR-0046. No crate in this workspace is unreachable, and
+`docs/product/MENU_MAP.md`'s Research section has no planned row left in it.
+
+None of the four needed the work it had been sized for, and that is recorded
+in `DECISIONS.md` because the estimate was the error each time. The first
+three were waiting on a question about what the mode was *for*: **undecided
+reads like large.** The fourth was the mirror image, and the more dangerous of
+the two — five row names sitting in `MENU_MAP.md` since the scaffold commit,
+looking decided because they were written in a table. **A name that has sat in
+a plan long enough starts to read like a specification.** Asking where each
+came from resolved all five in an afternoon, two of them by deletion.
 
 Read `prompts/rosettas/R011_WIRE_CAPABILITY_INTO_SHELL.md` before touching
-`bp-ui`. **Only one agent may add to `AppWindow` in `app.slint` at a time.**
-
-**Splitting `state.rs` has left this tier**, which is why there is one row
-below rather than two. It is worth knowing what it cost, because the same
-shape will come round again: the split was possible only because the new
-modules are *children* of `state`, so `AppState`'s private fields stayed
-private. A sibling module would have widened every field it touched to
-`pub(crate)`.
+`bp-ui` — **rule 9** cost a session's worth of confusion. **Only one agent
+may add to `AppWindow` in `app.slint` at a time.**
 
 ### Ready for an agent, now
 
-**Empty, for the first time.** Everything that was here has landed, and what
-is left in the product is scope rather than effort -- a notebook view, and
-research mode past its first insight. Both are in Tier 0's blocked table
-below with the size of what is missing named.
+Nothing. What remains is in `project/DECISIONS_NEEDED.md` (three questions
+only a person can answer), a manual pass at the window, and the outside review
+of `bp-crypto`'s envelope that D4 asked for four sessions ago.
 
-A withdrawn item, kept because withdrawing it was the finding:
-**`--editor-view`'s find box does not drop keystrokes.** It was listed here
-on 2026-08-21 as an unexplained defect, on the evidence of two runs where
-some of the characters typed into the box never appeared and the document was
-not touched either. It was the *harness*. Driving the window sends keys with
-`SendKeys`, which delivers to whatever window has the foreground at that
-moment, silently -- and this repository's own notes already say
-`SetForegroundWindow` fails without an error. Sending each key with the
-foreground checked on both sides of it delivered 34 of 34 across five runs,
-and **the artefact reproduces on demand**: minimise the window mid-sequence
-and the characters sent during the gap vanish with the document untouched,
-which is exactly the signature that had been recorded as a defect. Confirmed
-by reproducing the cause, not by failing to reproduce the symptom.
-
-| Item | Shape |
-| --- | --- |
-
-### Answered 2026-08-21, blocked on scope rather than a design pass now
-
-One design question closed in this batch remains genuinely blocked on scope,
-not on a decision — read `project/NEXT_SESSION.md` §2 before taking it,
-since "the decision is made" is not the same as "ready for an agent."
-
-| Item | What's decided | What's still missing |
-| --- | --- | --- |
-| Notebook mode's view | **ADR-0038: a lightweight, one-cell-at-a-time utility. ADR-0040: `bp-execution` runs a cell as a fresh subprocess, Python/PowerShell/Shell first** — both built, both standalone. No persistent kernel session, no "run all" | **A cell-sequence view.** Nothing in `bp-ui` calls `bp-execution` yet; there is no notebook UI at all, only the format crate and the engine that would run what it parses |
-| Research mode | **ADR-0039 (`Accepted`): synthesise gathered data into design insights and recommendations, offline, on a new data model separate from `bp-research`** | **The data model itself, and what "gathered data" and "an insight" mean concretely.** `bp-research`'s existing types are explicitly not it; nothing is scaffolded yet |
+**That is not the same as "the product is finished."** It means every item
+whose shape is known has been taken, and the next one needs a decision before
+it can be sized — which is the state this queue has now reached three
+times, each time briefly.
 
 ## Tier 0.5 — what the cross-crate tests found
 
@@ -307,14 +285,17 @@ order, is the wheel and the resize, because the huge-file viewer inherits both
 and does nothing else. `NEXT_SESSION.md` has the full checklist and a
 four-line recipe for a 192 MiB fixture.
 
-## Also not a queue item, any more: two design passes, down from three
+## Also not a queue item, any more: no design passes, down from three
 
 `bp-storage`, notebook mode and research mode were each blocked on a decision
-about **what the product is**, not on effort -- and that decision is what
-made an item premature to take, since building one without an answer
-produces a feature nobody asked for. `bp-storage`'s is done: ADR-0037 settled
-both purpose and presentation, and it now has a row in Tier 0's ready table
-instead of this section. Notebook mode and research mode are still here,
-listed in Tier 0 above so the size of what is missing (an execution engine;
-a data model) stays visible. `project/DECISIONS_NEEDED.md` carries what is
-still genuinely open, which as of 2026-08-21 is one row.
+about **what the product is**, not on effort -- and that decision is what made
+an item premature to take, since building one without an answer produces a
+feature nobody asked for. All three are settled: ADR-0037, ADR-0043 and
+ADR-0044 in turn, and ADR-0046 for the last of research mode's planned rows.
+
+**What this section is kept for** is the pattern rather than the three
+instances, because it will come round again: an item whose *purpose* is
+undecided cannot be estimated, and an estimate made anyway measures the
+question. `project/DECISIONS_NEEDED.md` carries what is still genuinely open,
+which as of 2026-08-22 is three rows — and none of them blocks a queue item
+today, which is why this queue is empty rather than blocked.
