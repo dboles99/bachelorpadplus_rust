@@ -7,8 +7,8 @@ now describe the state after `d9bdf30`, not before it. **Updated again at
 the start of the ninth session**: §2's defect is fixed and confirmed by
 driving the window, and §2 now records what it was and what it cost.
 
-State: **25 crates, 1,812 tests, 0 ignored**, green on Windows and Linux
-across all ten gate stages. 97 commits, all on
+State: **25 crates, 1,846 tests, 0 ignored**, green on Windows and Linux
+across all ten gate stages. 102 commits, all on
 `feat/phase-01-foundation-ui`; all pushed.
 
 ---
@@ -27,14 +27,15 @@ they were decided. Sign Document was the last row in the product greyed for a
 missing *decision* rather than a missing prerequisite, and it acts.
 
 What is left divides cleanly into four kinds, and only one of them is
-ordinary coding:
+ordinary coding. **Three of the four are now closed**, all in the ninth
+session, and what is left of the list is the one nobody can delegate:
 
 | | What | Who can do it |
 | --- | --- | --- |
 | **1** | Drive the window and write down what is wrong | **Only a person.** No agent, no test |
 | ~~**2**~~ | ~~Fix Sign Document's passphrase-focus leak~~ | **Done**, and watched working rather than read — see §2 |
 | **3** | Wire `bp-execution` into a notebook view; grow Research past its first insight | Scope, not a decision — see §3 |
-| **4** | Find over a huge document | An agent, and nothing blocks it now |
+| ~~**4**~~ | ~~Find over a huge document~~ | **Done** ([ADR-0042](../docs/decisions/ADR-0042.md)), and watched working against a 213.5 MiB log |
 
 That ordering is the plan. It is deliberately not the order of difficulty.
 
@@ -305,26 +306,73 @@ four shapes it named are a starting set, not an exhaustive design.
 
 ---
 
-## 4. What an agent can take now
+## 4. Find over a document served from disk — done, and it found two defects
 
-One item, real, not urgent. The other one — splitting `state.rs` — is done.
+**Built in the ninth session, engine and shell** ([ADR-0042](../docs/decisions/ADR-0042.md),
+`011ca6d` and `7717a71`), and watched working rather than read: against a
+213.5 MiB log of 4.8 million lines, `searching 86%` while the scan ran and
+`1 of 1` at line 4,800,001 when it finished, with the match highlighted on
+its own characters.
 
-### Find, over a document served from disk
+ADR-0030's two hard parts are both answered, and neither needed what it
+looked like it needed. **A hit does not have to *become* a scroll position**
+-- it is one, if a hit is reported as a document line and a column in it,
+which is the only thing a view with no caret can act on anyway.
+**Interruptible did not need a thread**: `advance(windows)` does a few
+megabytes and returns, so cancelling is the absence of the next call, and a
+scan cannot outlive its document because it lives on the `HugeView`.
 
-The last piece of the large-file story. `bp_buffer::LargeFile::windows`
-exists for exactly this — overlapping text windows, with a fresh file handle
-so a background search does not disturb the scrolling viewport — and
-`bp-search` decides what a match is.
+### Two defects it turned up, both older than it
 
-It is a feature rather than wiring, and the two hard parts are named in
-ADR-0030: a match found in a window has to become a scroll position, and a
-search over 2 GB has to be interruptible. Neither is solved.
+**One is fixed, in the same commit, because without it the feature could not
+be reached at all: a huge document had no keyboard shortcuts.** Not Ctrl+F --
+the only route to Find here, since there is no Find menu row -- and not
+Ctrl+S, Ctrl+O or any other. `scroll_for_command` returned `true`,
+"handled", for every key it was given, including the `Command::Ignore` that
+`bp_editor::keys::command_for` produces for exactly the keys its own comment
+calls out as the window's. `EditorSurface`'s `FocusScope` accepts whatever
+that reports as handled, and an accepted key never bubbles to the
+`KeyBinding` waiting for it. It had been that way since the viewer shipped.
+
+**The other is diagnosed and deliberately unfixed, and it is the next
+item in `project/WORK_QUEUE.md`: a document drawn in the custom surface has
+no keyboard focus until you click in it.** `AppWindow`'s
+`forward-focus: editor` names the `TextInput`, which is invisible whenever
+`use-editor-view` is true -- so a huge document, *and every document under
+`--editor-view`*, opens with nothing holding the keyboard. It is wider than
+the feature that found it and it wants a decision rather than a patch:
+Slint's `forward-focus` takes an element rather than an expression, so it
+cannot follow the flag, and the candidate answers differ in whether they
+survive the window being re-activated. **Check that by driving the window,
+not by reading the diff** -- this is the fourth defect in a row to live in
+that exact seam.
+
+---
+
+## 5. What an agent can take next
+
+`project/WORK_QUEUE.md` has the full list. In the order they are worth doing:
+
+| Item | Why it is first |
+| --- | --- |
+| **Focus in the custom surface** | The defect above. It makes Ctrl+F -- and every other shortcut -- dead on the first keystroke after opening a huge document or any document under `--editor-view`, and it wants a decision about how `forward-focus` follows the surface |
+| **The status bar goes stale after a jump** | Small. Go to Line moves the caret and the view and the readout still says where the caret used to be, because `dispatch::select` redraws without a `refresh`. The other `select` callers want checking in the same pass rather than one line changed where it was noticed |
+| **`--editor-view`'s find box drops keystrokes, sometimes** | Unexplained, present on binaries with and without the focus fix, so not a regression from it. The first job is logging what Slint actually delivers rather than inferring it from a screenshot |
+| **A notebook view** | Still the largest unscoped thing in the product: `bp-execution` runs a cell and nothing calls it |
 
 ---
 
 ## What is no longer on this list
 
 Recorded so nobody re-derives them.
+
+- **Find, over a document served from disk** — shipped (ADR-0042), and §4
+  above says what it cost.
+- **A signing passphrase typing itself into the document** — shipped
+  (`34f02e4`). Two focus-stealers ran after the callback that asked for the
+  caret, and one of them was a `MenuPopup` restoring focus on close, which is
+  Slint's own behaviour with no way to opt out. A bar now asks for the caret
+  a tick late, through `focus-timer`.
 
 - **The viewer for a document the rope does not hold** — shipped (ADR-0030). A
   192 MiB log costs 0.8 MiB more than a small note, measured.
