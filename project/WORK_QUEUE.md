@@ -118,6 +118,8 @@ so whoever finishes an item updates them as part of it.
 | — | A huge document had no keyboard shortcuts at all | Same change. `scroll_for_command` claimed to handle `Command::Ignore` |
 | — | Nothing held the keyboard until you clicked, in the custom surface | `focus-editor-soon()`, because `forward-focus` is resolved at compile time and cannot follow a property |
 | — | The status bar went stale after every jump | `sync_cursor_label`, in `draw_editor_view`, where drawing and saying where it is are one act |
+| — | `bp-execution` gains a resumable run: `Run::start`, `poll`, `stop` | ADR-0043. `run` is now written over it, so there is one implementation |
+| — | Run ▸ a notebook cell, over an `.ipynb` | ADR-0043. `bp-notebook` and `bp-execution` are reachable |
 
 Every library half now has its row.
 
