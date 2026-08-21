@@ -113,7 +113,9 @@ so whoever finishes an item updates them as part of it.
 | — | Research Report, a synthesis layer over `bp-storage` | ADR-0041, `Research` menu, `d9bdf30` |
 | — | File ▸ New Window, Insert ▸ Markdown, Tools ▸ Inspector, Help ▸ Diagnostics | `354934d` |
 | — | A bar takes the caret a tick after the row that opened it | `34f02e4`, and `prompts/rosettas/R011` rule 9 |
-| — | `bp_search::StreamSearch`: find in a file too large to hold | ADR-0042. Standalone — nothing calls it yet |
+| — | `bp_search::StreamSearch`: find in a file too large to hold | ADR-0042 |
+| — | Find, over a document served from disk — the shell half | ADR-0042. Driven against a 213.5 MiB log |
+| — | A huge document had no keyboard shortcuts at all | Same change. `scroll_for_command` claimed to handle `Command::Ignore` |
 
 Every library half now has its row.
 
@@ -144,7 +146,7 @@ private. A sibling module would have widened every field it touched to
 
 | Item | Shape |
 | --- | --- |
-| **Find, over a document served from disk -- the shell half** | **The engine is built and tested** ([ADR-0042](../docs/decisions/ADR-0042.md)): `bp_search::StreamSearch` scans a file a window at a time, reports each hit as a document line and a column within it, caps at `MAX_HITS` and says when it did. Both of ADR-0030's hard parts are answered -- a hit *is* a scroll position, and interruptible means the shell stops calling `advance`. **Nothing calls it yet.** What is left is the shell: start a scan when the find bar has a query and the active document is a viewer, tick it from a `Timer`, report progress that is not a total, and make Find Next/Previous scroll the viewer and highlight the line |
+| **A document in the custom surface has no keyboard focus until you click it** | Found 2026-08-21 by driving the window. `forward-focus: editor` on `AppWindow` names the `TextInput`, which is invisible whenever `use-editor-view` is true -- so a huge document, and every document under `--editor-view`, opens with nothing holding the keyboard and Ctrl+F does nothing until the reader clicks. Diagnosed but deliberately unfixed: `forward-focus` takes an element rather than an expression, so it cannot follow the flag, and the alternatives (calling `focus-editor()` at startup and on every surface change; a wrapper that routes focus) differ in whether they survive the window being re-activated -- which wants checking rather than assuming. See README's "Known gaps" |
 | **The status bar goes stale after a jump** | Small, and found by driving the window on 2026-08-21. Go to Line moves the caret and the view, and the readout still says where the caret used to be: `on_goto_submitted` (`lib.rs`) calls `dispatch::select`, which redraws the surface but never `refresh`, and `cursor_label` is only ever set in `refresh`. The other `select` callers -- Find Next/Previous, a cross-file result -- reach it the same way and want checking in the same pass, rather than one line changed where it was noticed |
 | **`--editor-view`'s find box drops keystrokes, sometimes** | Observed on 2026-08-21 while confirming an unrelated fix, on the binary **with and without** that fix, so it is not a regression from it: one run took 4 of 6 typed characters, another 1 of 6, two others all of theirs. The document was never touched, so the characters are lost rather than misrouted -- which is the opposite of the Find and Sign Document defects and probably a different cause. Unexplained, and the first job is to log what the Slint side actually receives instead of inferring it from a screenshot |
 
