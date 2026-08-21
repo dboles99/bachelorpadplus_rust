@@ -117,6 +117,7 @@ so whoever finishes an item updates them as part of it.
 | — | Find, over a document served from disk — the shell half | ADR-0042. Driven against a 213.5 MiB log |
 | — | A huge document had no keyboard shortcuts at all | Same change. `scroll_for_command` claimed to handle `Command::Ignore` |
 | — | Nothing held the keyboard until you clicked, in the custom surface | `focus-editor-soon()`, because `forward-focus` is resolved at compile time and cannot follow a property |
+| — | The status bar went stale after every jump | `sync_cursor_label`, in `draw_editor_view`, where drawing and saying where it is are one act |
 
 Every library half now has its row.
 
@@ -145,10 +146,27 @@ private. A sibling module would have widened every field it touched to
 
 ### Ready for an agent, now
 
+**Empty, for the first time.** Everything that was here has landed, and what
+is left in the product is scope rather than effort -- a notebook view, and
+research mode past its first insight. Both are in Tier 0's blocked table
+below with the size of what is missing named.
+
+A withdrawn item, kept because withdrawing it was the finding:
+**`--editor-view`'s find box does not drop keystrokes.** It was listed here
+on 2026-08-21 as an unexplained defect, on the evidence of two runs where
+some of the characters typed into the box never appeared and the document was
+not touched either. It was the *harness*. Driving the window sends keys with
+`SendKeys`, which delivers to whatever window has the foreground at that
+moment, silently -- and this repository's own notes already say
+`SetForegroundWindow` fails without an error. Sending each key with the
+foreground checked on both sides of it delivered 34 of 34 across five runs,
+and **the artefact reproduces on demand**: minimise the window mid-sequence
+and the characters sent during the gap vanish with the document untouched,
+which is exactly the signature that had been recorded as a defect. Confirmed
+by reproducing the cause, not by failing to reproduce the symptom.
+
 | Item | Shape |
 | --- | --- |
-| **The status bar goes stale after a jump** | Small, and found by driving the window on 2026-08-21. Go to Line moves the caret and the view, and the readout still says where the caret used to be: `on_goto_submitted` (`lib.rs`) calls `dispatch::select`, which redraws the surface but never `refresh`, and `cursor_label` is only ever set in `refresh`. The other `select` callers -- Find Next/Previous, a cross-file result -- reach it the same way and want checking in the same pass, rather than one line changed where it was noticed |
-| **`--editor-view`'s find box drops keystrokes, sometimes** | Observed on 2026-08-21 while confirming an unrelated fix, on the binary **with and without** that fix, so it is not a regression from it: one run took 4 of 6 typed characters, another 1 of 6, two others all of theirs. The document was never touched, so the characters are lost rather than misrouted -- which is the opposite of the Find and Sign Document defects and probably a different cause. Unexplained, and the first job is to log what the Slint side actually receives instead of inferring it from a screenshot |
 
 ### Answered 2026-08-21, blocked on scope rather than a design pass now
 

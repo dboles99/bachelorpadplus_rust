@@ -218,19 +218,25 @@ Everything below was driven from PowerShell against a release build --
 
 ### Two things found on the way, neither fixed, both real
 
-- **After Go to Line, the status bar keeps reporting the old `Ln`/`Col`.**
-  The jump works -- the view moved to line 3 -- but the readout still said
-  `Ln 1, Col 1`. `on_goto_submitted` (`lib.rs`) calls `dispatch::select`,
-  which redraws the surface and never calls `refresh`, and `cursor_label` is
-  only set in `refresh`. Small, pre-existing, and out of scope for a focus
-  fix; it is its own item.
-- **`--editor-view`'s find box dropped keystrokes intermittently, on both
-  binaries.** One unfixed run took 4 of 6 characters and one fixed run took 1
-  of 6, while two later fixed runs took all of theirs. Present without the
-  change as well as with it, so it is not a regression, but it is not
-  explained either, and the two clean runs are not enough to call it a
-  harness artefact. Worth its own pass with the keystrokes logged at the
-  Slint end rather than inferred from a screenshot.
+- **After Go to Line, the status bar kept reporting the old `Ln`/`Col`.**
+  Fixed. It was never only Go to Line: Find Next and Previous, opening a
+  cross-file result, and stepping a scan all jump and then draw the surface
+  directly, and `cursor_label` was only ever set in `refresh`. Nothing
+  corrected it either -- both background pollers refresh only when *they*
+  found a change, so a stale readout stayed stale. `sync_cursor_label` now
+  runs at the end of `draw_editor_view`, which is the one function all of
+  them go through: drawing the surface and saying where it is are one act.
+- **`--editor-view`'s find box dropping keystrokes was the harness, and this
+  is the third false result the same cause has produced.** `SendKeys`
+  delivers to whatever window has the foreground *at that moment*, and
+  `SetForegroundWindow` fails silently. Sending each key with the foreground
+  checked on both sides of it landed 34 of 34 across five runs -- and the
+  artefact reproduces on demand: minimise the window mid-sequence and the
+  characters sent during the gap vanish, with the document untouched, which
+  is exactly the signature that had been written down as a defect. **Settled
+  by reproducing the cause rather than by failing to reproduce the symptom**,
+  which is the only way round that distinguishes a fixed defect from a quiet
+  one.
 
 ### And one thing about driving the window that cost two false results
 
@@ -361,8 +367,8 @@ is confirmed by driving the window.
 | Item | Why it is first |
 | --- | --- |
 | ~~Focus in the custom surface~~ | **Done, same session.** It turned out to want evidence rather than a decision: `forward-focus` is resolved at *compile* time by `i-slint-compiler`'s `focus_handling` pass into the component's init code, so it is one fixed element and no binding can move it, and there is no re-activation subtlety to weigh. `focus-editor-soon()` hands the caret over instead, guarded so a tab switch cannot take it out of an open find box |
-| **The status bar goes stale after a jump** | Small. Go to Line moves the caret and the view and the readout still says where the caret used to be, because `dispatch::select` redraws without a `refresh`. The other `select` callers want checking in the same pass rather than one line changed where it was noticed |
-| **`--editor-view`'s find box drops keystrokes, sometimes** | Unexplained, present on binaries with and without the focus fix, so not a regression from it. The first job is logging what Slint actually delivers rather than inferring it from a screenshot |
+| ~~The status bar goes stale after a jump~~ | **Done, same session**, and it was all five jump paths rather than the one it was noticed in. `sync_cursor_label` in `draw_editor_view` |
+| ~~`--editor-view`'s find box drops keystrokes~~ | **Withdrawn: it was the harness.** `SendKeys` goes to whatever holds the foreground, and losing it is silent. Reproduced on demand by minimising the window mid-sequence |
 | **A notebook view** | Still the largest unscoped thing in the product: `bp-execution` runs a cell and nothing calls it |
 
 ---
