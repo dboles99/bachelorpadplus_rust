@@ -143,6 +143,8 @@ private. A sibling module would have widened every field it touched to
 | Item | Shape |
 | --- | --- |
 | **Find, over a document served from disk** | The last piece of the large-file story. `bp_buffer::LargeFile::windows` gives overlapping text windows with a fresh file handle, so a background search does not disturb the scrolling viewport, and `bp-search` decides what a match is. A feature rather than wiring, and ADR-0030 names the two hard parts: a match found in a window has to become a scroll position, and a search over 2 GB has to be interruptible |
+| **The status bar goes stale after a jump** | Small, and found by driving the window on 2026-08-21. Go to Line moves the caret and the view, and the readout still says where the caret used to be: `on_goto_submitted` (`lib.rs`) calls `dispatch::select`, which redraws the surface but never `refresh`, and `cursor_label` is only ever set in `refresh`. The other `select` callers -- Find Next/Previous, a cross-file result -- reach it the same way and want checking in the same pass, rather than one line changed where it was noticed |
+| **`--editor-view`'s find box drops keystrokes, sometimes** | Observed on 2026-08-21 while confirming an unrelated fix, on the binary **with and without** that fix, so it is not a regression from it: one run took 4 of 6 typed characters, another 1 of 6, two others all of theirs. The document was never touched, so the characters are lost rather than misrouted -- which is the opposite of the Find and Sign Document defects and probably a different cause. Unexplained, and the first job is to log what the Slint side actually receives instead of inferring it from a screenshot |
 
 ### Answered 2026-08-21, blocked on scope rather than a design pass now
 
@@ -241,19 +243,33 @@ All of it, in one pass. What is worth carrying forward:
 ## Not a queue item, and it is the top of `NEXT_SESSION.md`
 
 **A person driving the window and writing down what is wrong.** No agent can
-do it, and the argument is no longer theoretical: three manual passes have
+do it, and the argument is no longer theoretical: four manual passes have
 happened and each found a defect no test could — a menu bar where twelve of
 fourteen menus swallowed clicks, a tab drawn as one glyph while every column
-was computed as though it reached the next stop, and **Find typing the query
-into the document**. All three were fixed the same way as they were found:
-by somebody watching the window rather than reading a green test suite.
+was computed as though it reached the next stop, **Find typing the query
+into the document**, and **Sign Document typing a passphrase into the
+document in plain text**. All four were fixed the same way as they were
+found: by somebody watching the window rather than reading a green test
+suite.
 
-All three lived in the same seam, and it is the one a test in this repository
+All four lived in the same seam, and it is the one a test in this repository
 cannot see: **what a toolkit does with what it is handed.** 1,754 tests did not
-find the third either — `AppState::find` was correct throughout and every test
-of it passed. The defect was entirely in who held the focus afterwards, and
-its fix and the crash-recovery encoding/line-ending defect found the same
-session are both closed — see `README.md`'s "Recently closed" section.
+find the third — `AppState::find` was correct throughout and every test
+of it passed. 1,812 did not find the fourth either, and the reason is sharper:
+`PassphraseBar`, its `focus-input()` and the Rust that invokes it are each
+correct alone, and the defect lived in *when* two other things took the caret
+back — one of them `dispatch`'s own last line, the other a `MenuPopup`
+restoring focus after the row's callback returns. Both are closed — see
+`README.md`'s "Recently closed" section, and `project/NEXT_SESSION.md` §2 for
+the mechanism.
+
+**A trap for anything opening a bar from a menu row**, since this will come
+round again: a menu row's callback cannot take the keyboard focus for itself.
+`dispatch` calls `focus-editor()` right after it, and closing the popup
+restores the focus the popup took when it opened. `ui/app.slint`'s
+`focus-timer` is how a bar asks for the caret; anything new that wants it
+should go through the same `pending-focus` property rather than calling
+`.focus()` inside the click.
 
 The caret question that used to head this section is answered — a click at the
 end of `line 30` reported `Ln 30, Col 8`, exactly its length plus one — so W1,

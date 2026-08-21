@@ -3,7 +3,9 @@
 Rewritten 2026-08-21, at the end of the eighth build session. **Updated
 same day, later in the session**, once `bp-storage`'s two menu rows,
 `bp-execution`, and Research Report all landed — the numbers and §2 below
-now describe the state after `d9bdf30`, not before it.
+now describe the state after `d9bdf30`, not before it. **Updated again at
+the start of the ninth session**: §2's defect is fixed and confirmed by
+driving the window, and §2 now records what it was and what it cost.
 
 State: **25 crates, 1,812 tests, 0 ignored**, green on Windows and Linux
 across all ten gate stages. 97 commits, all on
@@ -30,9 +32,9 @@ ordinary coding:
 | | What | Who can do it |
 | --- | --- | --- |
 | **1** | Drive the window and write down what is wrong | **Only a person.** No agent, no test |
-| **2** | Fix Sign Document's passphrase-focus leak, found 2026-08-21 | An agent, but the fix must be watched working, not just read — see §2 |
+| ~~**2**~~ | ~~Fix Sign Document's passphrase-focus leak~~ | **Done**, and watched working rather than read — see §2 |
 | **3** | Wire `bp-execution` into a notebook view; grow Research past its first insight | Scope, not a decision — see §3 |
-| **4** | Find over a huge document | An agent, once 1 and 2 are not blocking |
+| **4** | Find over a huge document | An agent, and nothing blocks it now |
 
 That ordering is the plan. It is deliberately not the order of difficulty.
 
@@ -58,10 +60,9 @@ happened and each found a defect no test could**, all in the same seam:
   a passphrase immediately after clicking the row types it in plain text
   into the document instead.** Worse than Find's version of this bug, because
   the leaked text is a passphrase, and it lands in a document that can then
-  be saved with the passphrase sitting in it in the clear. **Confirmed,
-  reproduced twice, not yet fixed** — full detail and a root-cause hypothesis
-  in "2. A confirmed, unfixed defect" below, moved ahead of the notebook/
-  research scoping work because of what it is.
+  be saved with the passphrase sitting in it in the clear. **Fixed at the
+  start of the ninth session, and the fix was watched working** — see §2
+  below, which now records the mechanism rather than a hypothesis.
 
 **None was findable from a test in this repository**, because all four live
 in what a toolkit does with what it is handed. 1,812 tests do not find the
@@ -84,7 +85,7 @@ papercut there — it is the feature being broken.
 | ~~**Resize the window**~~ | **Checked 2026-08-21, later in the session.** Whether the row count follows, or a blank strip appears — no gap, in the editor's default surface, in `EditorSurface` (`--editor-view`), and in the huge-file viewer, up to near-full-screen height. **One false alarm on the way, worth knowing**: driving it via `SetWindowPos` past the physical monitor's bounds makes the render surface stop growing at the screen edge and looks exactly like a resize-refetch defect. It is not one — re-tested fully on-screen and it is clean. See `resize-testing-must-stay-onscreen` in the agent's memory if this gets re-driven by script again |
 | ~~**Open something enormous**~~ | **Checked the same pass.** The 192 MiB fixture opens correctly: gutter numbers the document (not the screen), the status bar reads `Huge file (192.0 MiB)` and the correct `Ln` range, content is exactly what was written. Save-state greying not separately re-checked this pass |
 | ~~**Scroll the wheel**~~ | **Checked 2026-08-21, later in the session, once the session unlocked.** Direction correct both ways, in the default surface's editor and in the huge-file viewer, which takes a different path through `scroll_by_rows`. One false-alarm status-bar staleness on the way, resolved by waiting slightly longer before the screenshot — not a real defect |
-| ~~**Sign a document**~~ | **Attempted 2026-08-21, later in the session — found a real defect before reaching the signature itself.** The passphrase bar opens but does not take keyboard focus, so the passphrase types into the document instead. Not yet possible to complete this check until that is fixed — see "2. A confirmed, unfixed defect" above |
+| **Sign a document** | **Attempted 2026-08-21 — found a real defect before reaching the signature itself, and that defect is now fixed (§2).** The passphrase bar takes the caret: typing straight after the menu row lands six dots in the field with the document untouched, and the confirm step keeps it too. **The signature itself is still unclicked**, deliberately: completing the ceremony writes a real Ed25519 key into `%LOCALAPPDATA%` and a `.sig` beside the document, which is a person's call rather than a script's. Everything before that point is now known to work |
 | ~~Drag to select~~ | **Checked the same pass.** Correct in `EditorSurface` (`--editor-view`) — the selection rectangle landed exactly where the drag went, status bar read the right `Ln`/`Col` at the end. Not re-checked in the default `TextInput` surface, which uses Slint's own built-in selection rather than this codebase's drag logic |
 | ~~Arrow down through a short line and back up~~ | **Checked the same pass.** Goal column survives correctly: end of a 59-character line (Col 60) → clamped to a 5-character line (Col 6) → clamped again to a 52-character line, shorter than the goal (Col 53) → back up two lines restores exactly Col 60 |
 | **File ▸ Set as Default Editor** | **The only row that changes state outside this application.** It reports before it offers and writes nothing on Windows without a Save dialog first — so it wants *reading* rather than clicking through. **Deliberately not attempted this pass**: it changes OS-level file associations, which is a different category of risk from everything else on this list and wants a person's explicit go-ahead before a script clicks it, not just an unlocked session |
@@ -135,75 +136,113 @@ $fs = [System.IO.File]::Open($p, 'Open', 'Write'); $fs.SetLength(201326593); $fs
 
 ---
 
-## 2. A confirmed, unfixed defect: Sign Document's passphrase leaks into the document
+## 2. Fixed: Sign Document's passphrase leaked into the document
 
-**Found 2026-08-21, later in the session, the first time anyone drove Sign
-Document from the menu rather than calling the underlying function directly.**
-`Security ▸ Sign Document` opens the passphrase bar with the correct prompt
-("New signing key passphrase") -- the menu click, the dispatch, and the
-`begin_signing`/`answer_passphrase` logic all work. **But the bar does not
-take keyboard focus when it opens this way.** Typing the passphrase
-immediately -- the obvious thing to do the moment a prompt appears -- lands
-every character in the document instead, in plain text, and marks the
-document dirty. A user who does not notice and saves has written their own
-signing passphrase into the file they meant to sign.
+**Found 2026-08-21, the first time anyone drove Sign Document from the menu
+rather than calling the underlying function directly. Fixed at the start of
+the ninth session, and the fix was watched working rather than read.**
 
-### Reproduction
+`Security ▸ Sign Document` opened the passphrase bar with the right prompt
+and then let the editor keep the caret, so typing the passphrase -- the
+obvious thing to do the moment a prompt appears -- put every character into
+the open document in plain text, and marked it dirty. A user who did not
+notice and saved had written their own signing passphrase into the file they
+meant to sign.
 
-1. `cargo run --release -- <any small file>`
-2. Click `Security ▸ Sign Document…`. The passphrase bar opens at the
-   bottom, prompt reading "New signing key passphrase".
-3. Type anything, without clicking into the passphrase field first.
+**Reproduced against the unfixed binary while confirming the fix**, so the
+before-and-after is a measured pair rather than a memory: `secret`, typed at
+1.6 s per keystroke with the passphrase bar reading "New signing key
+passphrase", turned `alpha beta gamma` into `siecalpha beta gamma`, left the
+field empty and the tab dirty. After the fix, the same sequence puts six dots
+in the field and leaves the document untouched.
 
-**Result:** the typed text appears as new content in the document (visible
-in the tab as unsaved, `Ln`/status bar reflecting the edit), and the
-passphrase field stays empty. Confirmed twice independently.
+### It was two focus-stealers, and neither is in the code that looked wrong
 
-### What is ruled out
+The previous session ruled out `PassphraseBar`, its `focus-input()`, the
+`SIGN_DOCUMENT` arm and `refresh()` one at a time and was right about every
+one of them. What it had not read is that **both things that take the caret
+back run after the callback that asks for it**:
 
-**Explicitly clicking into the passphrase input field first works
-correctly** -- typing then lands in the field, masked as dots. This isolates
-the defect to the auto-focus step, not the field itself: `PassphraseBar`'s
-own Slint (`passphrase_bar.slint`) is correct, its `focus-input()` function
-does the right thing (`input.text = ""; input.focus();`), and the Rust call
-site is correct too -- `dispatch.rs`'s `SIGN_DOCUMENT` arm calls
-`ui.invoke_focus_passphrase()` exactly once `begin_signing()` returns `true`,
-the same pattern `ENCRYPT_DOCUMENT` and the encrypted-file-`OPEN` path both
-use successfully. `refresh()` (`lib.rs`) was read in full and calls no
-`.focus()` of any kind, so it is not the cause despite running immediately
-after in `SIGN_DOCUMENT`'s case (`ENCRYPT_DOCUMENT` and `OPEN` both skip it
-via an early `return None`; `SIGN_DOCUMENT` does not, but that difference
-was checked and is not what breaks this).
+1. **`dispatch` in `ui/app.slint` ends every menu action with
+   `root.focus-editor()`.** It is the last line of the function that
+   `security-menu`'s `chosen` forwards to, it runs immediately after
+   `menu-action` returns, and it is *right* for every row that is not opening
+   a bar.
+2. **Closing a `MenuPopup` restores the focus the popup took when it opened**,
+   and this one was the actual surprise. In `i-slint-core-1.17.1`,
+   `WindowInner::show_popup` calls `take_focus_item` and stores the result in
+   `focus_item_in_parent`; `process_mouse_input` decides *before* dispatching
+   the click which popup to close, dispatches the click (running the row's
+   callback, and everything this repository does inside it), and only then
+   calls `close_popup` -- whose `close_popup_impl` hands the caret back to
+   `focus_item_in_parent`. **Read in the toolkit's source, not inferred from
+   the symptom**, and it belongs in the same "checked rather than assumed"
+   category as the IME-composition and drag-and-drop findings. There is no
+   API to opt a popup out of it, which rules out direction (2) of the two the
+   previous session proposed.
 
-### Hypothesis, not yet confirmed by a fix
+### The fix is direction (1): one tick of patience
 
-`Security ▸ Sign Document` is reached by clicking a row inside
-`security-menu`, a `MenuPopup` (`menu.slint`, `PopupWindow`-derived). No
-`.close()` is called anywhere in the click's path -- `menu.slint`'s
-`MenuRow` fires `chosen(action)`, which `app.slint`'s `security-menu`
-forwards straight to `root.dispatch(a)`, and Rust's `SIGN_DOCUMENT` arm runs
-synchronously inside that same callback, including the `input.focus()` call
-several layers down. The popup still visibly closes (confirmed in
-screenshots), which must be Slint's own default `PopupWindow` behaviour, not
-anything this codebase calls explicitly. **The most likely explanation**:
-closing a `PopupWindow` restores focus to whatever had it before the popup
-opened -- the editor -- and that restoration runs *after* the row's `chosen`
-callback (and therefore after `input.focus()`) has already completed,
-winning the race. This would be a Slint framework behaviour, in the same
-"checked rather than assumed" category as the IME-composition and
-drag-and-drop findings already in `project/WORK_QUEUE.md`'s blocked table --
-not confirmed by reading Slint's source, only inferred from the symptom.
+`focus-find`, `focus-goto` and `focus-passphrase` no longer call into their
+bar. Each records *which* bar wants the caret in a private `pending-focus`
+property, and a 1 ms `Timer` -- whose `running` is bound to that property, so
+clearing the request is what stops it -- hands the caret over on the next
+turn of the event loop, once both stealers have had theirs. All three go
+through the same mechanism deliberately: which route opened a bar is not
+knowable from inside it, and `Ctrl+G` and `Edit ▸ Go to Line` must not
+behave differently.
 
-**Not fixed.** A blind fix could not be trusted without watching it work,
-the same standard this session has held every agent's self-report to, and
-the session was locked before a fix could be tried and screenshotted. Two
-directions worth trying first, in order: (1) deferring the `focus-input()`
-call by a tick (Slint's `Timer`, firing after the popup's own close
-completes) rather than calling it synchronously inside `chosen`; (2) finding
-whether `MenuPopup` has a way to suppress or opt out of its own
-focus-restore-on-close, if Slint exposes one. Whichever fixes it, confirm by
-driving the window exactly as reproduced above, not by reading the diff and
-trusting it.
+**`Edit ▸ Go to Line` had the identical defect**, and that was confirmed
+rather than assumed: against the same unfixed binary, `9` typed straight
+after the menu row landed in the document as `third line of text9`. The two
+encrypted-document paths (`Security ▸ Encrypt Document`, and opening an
+encrypted file) reach `focus-passphrase` the same way and were exposed to the
+same race; neither was driven, because both put a native `rfd` dialog in
+front of the bar and a native dialog swallows synthetic input.
+
+### What was checked, and with what
+
+Everything below was driven from PowerShell against a release build --
+`PrintWindow` for screenshots, `SendKeys` at 1.6 s per keystroke.
+
+| Check | Result |
+| --- | --- |
+| Sign Document, default surface, unfixed binary | Passphrase into the document. **The defect** |
+| Sign Document, default surface, fixed | Six dots in the field, document untouched, tab clean |
+| Its confirm step ("Confirm key passphrase") | Keeps the caret too -- the re-ask path defers the same way |
+| Go to Line, `--editor-view`, unfixed | `9` into the document. **The same defect** |
+| Go to Line, `--editor-view`, fixed | `3` into the box; Go moved the view to line 3 |
+| Ctrl+F Find, default surface, fixed | `second` fully in the box, document untouched. No regression |
+| Ctrl+F Find, `--editor-view`, fixed | Two clean runs, `second` and `third` |
+
+### Two things found on the way, neither fixed, both real
+
+- **After Go to Line, the status bar keeps reporting the old `Ln`/`Col`.**
+  The jump works -- the view moved to line 3 -- but the readout still said
+  `Ln 1, Col 1`. `on_goto_submitted` (`lib.rs`) calls `dispatch::select`,
+  which redraws the surface and never calls `refresh`, and `cursor_label` is
+  only set in `refresh`. Small, pre-existing, and out of scope for a focus
+  fix; it is its own item.
+- **`--editor-view`'s find box dropped keystrokes intermittently, on both
+  binaries.** One unfixed run took 4 of 6 characters and one fixed run took 1
+  of 6, while two later fixed runs took all of theirs. Present without the
+  change as well as with it, so it is not a regression, but it is not
+  explained either, and the two clean runs are not enough to call it a
+  harness artefact. Worth its own pass with the keystrokes logged at the
+  Slint end rather than inferred from a screenshot.
+
+### And one thing about driving the window that cost two false results
+
+**`SetForegroundWindow` fails silently, and `GetForegroundWindow() != 0` does
+not mean your window has the focus.** Two runs in this session produced
+"the passphrase went nowhere" and "the menu did not open", both of which were
+the input going to a different window entirely. The existing note says a
+locked session reads as `GetForegroundWindow() == 0`; the missing half is
+that an *unlocked* session can still refuse the foreground, and every
+keystroke is then lost without an error. Compare the handle against the
+target window before trusting any synthetic-input result, tap ALT to release
+Windows' foreground lock before asking for it, and expect the first click
+after a window gains the foreground to be swallowed by activation.
 
 ---
 
