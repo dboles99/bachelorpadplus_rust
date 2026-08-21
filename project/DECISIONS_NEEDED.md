@@ -26,7 +26,6 @@ is not how fast code gets written, it is how long a question sits.
 | # | Question | Blocks | Why it cannot be defaulted |
 | --- | --- | --- | --- |
 | D2 | **Is `--editor-view`'s two-view fork worth keeping indefinitely?** IME cannot work on Slint 1.17.1, so parity is unreachable until Slint changes. | Every future wiring item pays a small tax; five features work in only one view | Answered once already (keep opt-in). Re-ask only if the tax becomes visible, or Slint ships composition support |
-| D12 | **Is `bp-research`'s existing bibliography model the right foundation for research mode, or does phase 13 need its own data model?** ADR-0039 settled *what research mode is for* (synthesise gathered data into design insights and recommendations); it explicitly left open whether that rides on the citation-management code already built, or needs something built alongside it. | Phase 13, and whether the 5,208 lines already in `bp-research` are load-bearing for the mode or a separate concern next to it | ADR-0039 is `Proposed` rather than `Accepted` specifically because of this gap. Picking a foundation before deciding what "gathered data" and "an insight" concretely mean would be building toward a guess |
 
 ## Answered, for context
 
@@ -44,7 +43,9 @@ ADRs.
 | D8: how does Windows default-editor registration get written? | Confirmed as already shipped: a `.reg` handoff plus `ms-settings:defaultapps`, never a `winreg`/`unsafe` dependency | ADR-0034 |
 | D10: where does the `.bpadx` validation ceiling sit? | Lowered from 1 GiB/64 iterations to 256 MiB/16 iterations -- still 13x/8x the OWASP-baseline default | ADR-0035 |
 | Notebook mode: what is it? | A lightweight utility -- cells run one at a time, on request, no persistent kernel session | ADR-0038 |
-| Research mode: what is it for? | Synthesising gathered data into design insights and recommendations, offline. Foundation (existing crate vs. new data model) is D12, still open | ADR-0039 |
+| Research mode: what is it for? | Synthesising gathered data into design insights and recommendations, offline | ADR-0039 |
+| D12: is `bp-research`'s bibliography model the right foundation for research mode? | No -- a new data model, separate from it. `bp-research` stays scholarly citation infrastructure, untouched | ADR-0039 |
+| ADR-0036's lazy `AuditLog` read: what shape? | An iterator as the one primitive; `bp-ui` drives it two ways -- paged for ordinary scrolling, background-decrypt-with-progress for whole-history operations (export, full-history search) | ADR-0036 |
 | `.bpadx` AEAD | Both XChaCha20-Poly1305 and AES-256-GCM, versioned in the envelope | ADR-0021 |
 | `.bpadx` envelope shape | Chunked from the start, chunk index bound into the AAD | ADR-0021 |
 | Argon2id cost | OWASP baseline (19 MiB, t=2, p=1), recorded per document | ADR-0021 |

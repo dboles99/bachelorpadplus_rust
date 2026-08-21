@@ -116,12 +116,14 @@ Every library half now has its row.
 here is not tested libraries missing a menu row; `bp-notebook` and
 `bp-research` are each a *mode* — a view, a set of interactions, and code that
 does not exist yet. What they are is no longer the open question: ADR-0038
-and ADR-0039 (2026-08-21) answered it. What is missing now is scope — an
-execution engine for notebooks, a foundation decision (D12) for research —
-which is why neither is a ready item below despite having an answer. The
-viewer for a huge document was the last item that could be described as
-wiring, and even it turned out to be a feature: a scroll model, four keys,
-four refusals and a surface decision.
+and ADR-0039 (2026-08-21, the latter with its foundation settled the same
+day as D12) answered it, fully, for both. What is missing now is scope, not a
+decision — an execution engine for notebooks that does not exist as a crate,
+a data model for research that has not been designed — which is why neither
+is a ready item below despite having an answer. The viewer for a huge
+document was the last item that could be described as wiring, and even it
+turned out to be a feature: a scroll model, four keys, four refusals and a
+surface decision.
 
 Read `prompts/rosettas/R011_WIRE_CAPABILITY_INTO_SHELL.md` before touching
 `bp-ui`. **Only one agent may add to `AppWindow` in `app.slint` at a time.**
@@ -138,6 +140,7 @@ private. A sibling module would have widened every field it touched to
 | Item | Shape |
 | --- | --- |
 | **Find, over a document served from disk** | The last piece of the large-file story. `bp_buffer::LargeFile::windows` gives overlapping text windows with a fresh file handle, so a background search does not disturb the scrolling viewport, and `bp-search` decides what a match is. A feature rather than wiring, and ADR-0030 names the two hard parts: a match found in a window has to become a scroll position, and a search over 2 GB has to be interruptible |
+| **`AuditLog` reads lazily instead of eagerly (ADR-0036)** | `AuditLog::read`'s `Vec<Record>` return becomes an iterator over records, decrypted one at a time rather than the whole file up front. `bp-ui`'s security inspector drives it two ways: paged for ordinary scrolling (pull the most recent N, older only on request), background-decrypt-with-progress for whole-history operations. Both consume the same iterator; there is one primitive, not two code paths. The exact UI while paging or background-decrypting — a "load more" row, a progress bar — is still `bp-ui`'s own call when this is taken, not settled by the ADR |
 
 ### Answered 2026-08-21, blocked on scope rather than a design pass now
 
@@ -150,7 +153,7 @@ agent."
 | --- | --- | --- |
 | `bp-storage` | **ADR-0037: a related-notes panel and duplicate detection**, both on the schema ADR-0019 already shipped | How the two are presented — a panel, a menu row, a status-bar affordance. `bp-organize`'s own pass |
 | Notebook mode | **ADR-0038: a lightweight, one-cell-at-a-time utility.** No persistent kernel session, no "run all" | **An execution engine.** `bp-notebook` is the format half only; the crate that would run a cell, `bp-execution`, does not exist. The view can be built and tested against `bp-notebook` alone first |
-| Research mode | **ADR-0039: synthesise gathered data into design insights and recommendations, offline.** `Proposed`, not `Accepted` | **D12: whether `bp-research`'s existing bibliography model is the right foundation**, or phase 13 needs its own data model. `project/DECISIONS_NEEDED.md` |
+| Research mode | **ADR-0039 (`Accepted`): synthesise gathered data into design insights and recommendations, offline, on a new data model separate from `bp-research`** | **The data model itself, and what "gathered data" and "an insight" mean concretely.** `bp-research`'s existing types are explicitly not it; nothing is scaffolded yet |
 
 ## Tier 0.5 — what the cross-crate tests found
 

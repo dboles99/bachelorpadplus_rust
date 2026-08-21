@@ -148,20 +148,25 @@ nothing here has scoped it yet.
 
 ### `bp-research` — 5,208 lines, 161 tests, called by nothing (phase 13)
 
-**Answered in part.** ADR-0039 -- research mode synthesises data already
-present in documents or the store into insights, options and recommendations
-that inform a design, a feature or a function. Offline throughout: nothing
-here reverses ADR-0006's no-network guarantee, and if synthesis ever implies
-*generating* prose rather than arranging gathered material, that reaches for
-ADR-0033's OpenAI policy instead, not this one.
+**Answered, fully.** ADR-0039 (`Accepted`, foundation settled the same
+session as D12) -- research mode synthesises data already present in
+documents or the store into insights, options and recommendations that
+inform a design, a feature or a function, **on a data model of its own,
+separate from `bp-research`.** `bp-research`'s existing bibliography types
+(BibTeX, CSL, DOI/arXiv identifiers) stay exactly what they are; phase 13 is
+not built on top of them.
 
-**Still open, as D12:** whether `bp-research`'s existing bibliography model
-(BibTeX, CSL, DOI/arXiv identifiers) is the right foundation, or phase 13
-needs a data model of its own. The answer given describes product/design
-research synthesis; what is already built is scholarly citation management,
-and they are not obviously the same feature. ADR-0039 is `Proposed` rather
-than `Accepted` for this reason -- it is not yet buildable work until D12 has
-an answer.
+Offline throughout: nothing here reverses ADR-0006's no-network guarantee,
+and if synthesis ever implies *generating* prose rather than arranging
+gathered material, that reaches for ADR-0033's OpenAI policy instead, not
+this one.
+
+What is left is real design work, not a decision waiting on Daniel: what
+"gathered data" means concretely (documents already open? a folder pointed
+at? `bp-storage`'s related-notes graph, once ADR-0037 is built?), and what an
+"insight" or "recommendation" looks like on screen. Nothing is scaffolded
+yet -- naming the crate or module set is an implementation choice at the
+point this is actually taken.
 
 ---
 
@@ -322,15 +327,18 @@ for the trap in each function that has fallen into it.
 
 ## Housekeeping
 
-- **Seven decisions were answered in one batch on 2026-08-21** (D1, D3, D4,
-  D7, D8, D10, plus notebook mode and research mode's purpose), recorded as
-  ADR-0033 through ADR-0039. **ADR-0035 is now built**: `KdfParams::validate`'s
-  two constants are lowered, a test pins the tightening itself, and the new
-  worst case is measured in release at ~5.56 s (was ~75 s). Two others still
-  describe code that does not exist: ADR-0036's lazy `AuditLog` read (real,
-  separate work -- and the harder half, how a partial history is shown, is
-  still undecided) and ADR-0033's OpenAI integration (nothing calls it, phase
-  8 has not started).
+- **Nine decisions were answered across 2026-08-21** (D1, D3, D4, D7, D8,
+  D10, D12, plus notebook mode and research mode's purpose), recorded as
+  ADR-0033 through ADR-0039 -- all `Accepted` now; ADR-0039 moved off
+  `Proposed` once D12 settled its foundation. **ADR-0035 is built**:
+  `KdfParams::validate`'s two constants are lowered, a test pins the
+  tightening itself, and the new worst case is measured in release at
+  ~5.56 s (was ~75 s). **ADR-0036's shape is settled** -- an iterator
+  primitive in `bp-audit`, driven paged or as a background decrypt depending
+  on the interaction -- and is now `project/WORK_QUEUE.md`'s ready tier, not
+  its blocked one; the code itself is not written. ADR-0033's OpenAI
+  integration remains purely a policy: nothing calls it, phase 8 has not
+  started.
 - **D4: get an outside review of `bp-crypto`'s `.bpadx` envelope before
   trusting real documents to it.** Answered yes; not done. Every primitive is
   vetted RustCrypto, but the envelope composition is this project's own
