@@ -334,18 +334,23 @@ calls out as the window's. `EditorSurface`'s `FocusScope` accepts whatever
 that reports as handled, and an accepted key never bubbles to the
 `KeyBinding` waiting for it. It had been that way since the viewer shipped.
 
-**The other is diagnosed and deliberately unfixed, and it is the next
-item in `project/WORK_QUEUE.md`: a document drawn in the custom surface has
-no keyboard focus until you click in it.** `AppWindow`'s
+**The other was fixed straight after, and the reason it looked harder than
+it was is worth keeping: a document drawn in the custom surface had no
+keyboard focus until you clicked in it.** `AppWindow`'s
 `forward-focus: editor` names the `TextInput`, which is invisible whenever
 `use-editor-view` is true -- so a huge document, *and every document under
-`--editor-view`*, opens with nothing holding the keyboard. It is wider than
-the feature that found it and it wants a decision rather than a patch:
-Slint's `forward-focus` takes an element rather than an expression, so it
-cannot follow the flag, and the candidate answers differ in whether they
-survive the window being re-activated. **Check that by driving the window,
-not by reading the diff** -- this is the fourth defect in a row to live in
-that exact seam.
+`--editor-view`*, opened with nothing holding the keyboard.
+
+It was written up here as wanting "a decision rather than a patch", on the
+grounds that the candidate fixes differed in whether they survived the window
+being re-activated. **That premise was wrong, and reading the toolkit is what
+showed it**: `forward-focus` is resolved at *compile* time by
+`i-slint-compiler`'s `focus_handling` pass into the component's init code, so
+it fires once, is one fixed element, and no binding will ever move it. There
+was no re-activation behaviour to weigh -- only a hand-over to write.
+`focus-editor-soon()` is it, guarded so that a surface change cannot take the
+caret out of an open find box, which was the only real risk in the change and
+is confirmed by driving the window.
 
 ---
 
@@ -355,7 +360,7 @@ that exact seam.
 
 | Item | Why it is first |
 | --- | --- |
-| **Focus in the custom surface** | The defect above. It makes Ctrl+F -- and every other shortcut -- dead on the first keystroke after opening a huge document or any document under `--editor-view`, and it wants a decision about how `forward-focus` follows the surface |
+| ~~Focus in the custom surface~~ | **Done, same session.** It turned out to want evidence rather than a decision: `forward-focus` is resolved at *compile* time by `i-slint-compiler`'s `focus_handling` pass into the component's init code, so it is one fixed element and no binding can move it, and there is no re-activation subtlety to weigh. `focus-editor-soon()` hands the caret over instead, guarded so a tab switch cannot take it out of an open find box |
 | **The status bar goes stale after a jump** | Small. Go to Line moves the caret and the view and the readout still says where the caret used to be, because `dispatch::select` redraws without a `refresh`. The other `select` callers want checking in the same pass rather than one line changed where it was noticed |
 | **`--editor-view`'s find box drops keystrokes, sometimes** | Unexplained, present on binaries with and without the focus fix, so not a regression from it. The first job is logging what Slint actually delivers rather than inferring it from a screenshot |
 | **A notebook view** | Still the largest unscoped thing in the product: `bp-execution` runs a cell and nothing calls it |
