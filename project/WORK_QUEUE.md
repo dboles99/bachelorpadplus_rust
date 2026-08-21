@@ -110,7 +110,7 @@ so whoever finishes an item updates them as part of it.
 
 Every library half now has its row.
 
-## Tier 0 — three modes, and three things an agent can take today
+## Tier 0 — three modes, and one thing an agent can take today
 
 **The shape of this tier changed with the last item to leave it.** What is
 here is not tested libraries missing a menu row; `bp-notebook` and
@@ -133,8 +133,6 @@ private. A sibling module would have widened every field it touched to
 
 | Item | Shape |
 | --- | --- |
-| **Find must stop editing the document while you type the query** | **Found by driving the window on 2026-08-21, and it destroys text.** Ctrl+F, type `replicas`: the `r` reaches the box (`1 of 3`), and `eplicas` is typed into the document over the match the `r` selected. Reproduced at 1.5 s between keystrokes, so it is not a race. `on_find_changed` (`lib.rs`) runs on every query keystroke and calls `dispatch::select`, which ends in `editor.focus()` — right for its other caller, Find Next, wrong for a preview. Probably splits `dispatch::select` into "show it" and "go to it". Touches `lib.rs`, `dispatch.rs` and `ui/app.slint`, so **it serialises against everything else in `bp-ui`** |
-| **Crash recovery restores the text and forgets the encoding and line ending** | `AppState::restore` never calls `set_line_ending` or `set_encoding`, so a recovered document gets `LineEnding::default()` — CRLF on Windows. An LF file recovered on Windows is rewritten CRLF throughout on the next save; a UTF-16 one comes back UTF-8. Contradicts `saving_a_mixed_document_does_not_rewrite_the_minority_line_break`, which passes. The open question is where the value comes from: `bp_history::Checkpoint` gains two fields, or recovery re-detects — which cannot work for encoding, because the text is already decoded. `bp-history` plus `state.rs` |
 | **Find, over a document served from disk** | The last piece of the large-file story. `bp_buffer::LargeFile::windows` gives overlapping text windows with a fresh file handle, so a background search does not disturb the scrolling viewport, and `bp-search` decides what a match is. A feature rather than wiring, and ADR-0030 names the two hard parts: a match found in a window has to become a scroll position, and a search over 2 GB has to be interruptible |
 
 ### Blocked on a design pass, not on effort
@@ -235,12 +233,15 @@ do it, and the argument is no longer theoretical: three manual passes have
 happened and each found a defect no test could — a menu bar where twelve of
 fourteen menus swallowed clicks, a tab drawn as one glyph while every column
 was computed as though it reached the next stop, and **Find typing the query
-into the document**, which is the two rows at the top of Tier 0.
+into the document**. All three were fixed the same way as they were found:
+by somebody watching the window rather than reading a green test suite.
 
 All three lived in the same seam, and it is the one a test in this repository
-cannot see: **what a toolkit does with what it is handed.** 1,754 tests do not
-find the third either — `AppState::find` is correct and every test of it
-passes. The defect is entirely in who holds the focus afterwards.
+cannot see: **what a toolkit does with what it is handed.** 1,754 tests did not
+find the third either — `AppState::find` was correct throughout and every test
+of it passed. The defect was entirely in who held the focus afterwards, and
+its fix and the crash-recovery encoding/line-ending defect found the same
+session are both closed — see `README.md`'s "Recently closed" section.
 
 The caret question that used to head this section is answered — a click at the
 end of `line 30` reported `Ln 30, Col 8`, exactly its length plus one — so W1,

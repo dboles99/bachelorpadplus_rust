@@ -1,10 +1,10 @@
 # Next session plan
 
-Rewritten 2026-08-21, at the end of the seventh build session.
+Rewritten 2026-08-21, at the end of the eighth build session.
 
-State: **24 crates, 1,754 tests, 0 ignored**, green on Windows and Linux
-across all ten gate stages. 80 commits, all on
-`feat/phase-01-foundation-ui`; 8 unpushed.
+State: **24 crates, 1,758 tests, 0 ignored**, green on Windows and Linux
+across all ten gate stages. 85 commits, all on
+`feat/phase-01-foundation-ui`; all pushed.
 
 ---
 
@@ -33,66 +33,6 @@ That ordering is the plan. It is deliberately not the order of difficulty.
 
 ---
 
-## 0. Two open defects, both found by driving the window on 2026-08-21
-
-These jump the queue because one of them destroys the user's text during the
-most ordinary thing in an editor.
-
-### Find edits the document while you type the query
-
-**Reproduce:** open any file, Ctrl+F, type `replicas`. The `r` reaches the find
-box, which correctly reports `1 of 3`. Every character after it goes **into the
-document**, replacing the match the `r` had just selected. `alpha replicas
-beta` becomes `alpha eeplicas beta`; the tab goes dirty; the find box still
-reads `r`. Reproduced with **1.5 seconds between keystrokes**, so it is not a
-race and not an artefact of synthetic input.
-
-**Cause, and it is one line with a comment saying what it does.**
-`on_find_changed` in `crates/bp-ui/src/lib.rs` runs on *every* keystroke in the
-query box and calls `dispatch::select`, which ends in `editor.focus()` —
-`select-range` in `ui/app.slint` says "Just take the focus back from the find
-box". That is right for its **other** caller, Find Next, where the user does
-want the caret in the document afterwards. It is wrong for the preview that
-runs while they are still typing, and the two share one function.
-
-**What needs deciding before it is fixed**, which is why this is not a
-one-liner: the preview still has to *show* the match. Selecting without
-focusing is the obvious answer for `TextInput`
-(`set-selection-offsets` without `editor.focus()`), and the custom surface's
-branch calls `ui.invoke_focus_editor()` for the same reason and wants the same
-treatment. Splitting `dispatch::select` into "show it" and "go to it" is
-probably the shape.
-
-**The `--editor-view` half is by inspection, not by driving.** The recovery
-dialog blocked synthetic input before that run finished. The branch is
-`state.editor_view` in `dispatch::select` and it steals the focus by a
-different call, so it is very likely the same defect — but it has not been
-seen.
-
-### Crash recovery restores the text and forgets the encoding and line ending
-
-`AppState::restore` opens the document and inserts the checkpoint's text, but
-never calls `set_line_ending` or `set_encoding` the way `open` does. The
-document therefore falls back to `LineEnding::default()`, which is
-`platform_default()`, which is **CRLF on Windows**.
-
-So an LF file that is recovered on Windows is rewritten CRLF throughout on the
-next save, and a UTF-16 document comes back as UTF-8. Seen in the status bar —
-`LF` before the crash, `CRLF` on the recovered tab — and confirmed in the code.
-
-This one contradicts a test that already exists and is passing:
-`saving_a_mixed_document_does_not_rewrite_the_minority_line_break`. The
-document's convention is respected on every path except the one that runs
-after a crash.
-
-**The fix is small; the question is where the value comes from.** The
-checkpoint does not carry the encoding or the line ending, so either
-`bp_history::Checkpoint` gains two fields (and old journals need a default), or
-recovery re-detects from the text — which is wrong for encoding, because the
-text has already been decoded.
-
----
-
 ## 1. Drive the window — the top of the list, and it has been for four sessions
 
 The argument for this is no longer theoretical. **Three manual passes have
@@ -106,7 +46,8 @@ happened and each found a defect no test could**, all in the same seam:
   caret on any tab-bearing line sat where the character was not, and the error
   grew with every tab further along;
 - **the third, on 2026-08-21, found that typing a query into Find edits the
-  document.** It is the worst of the three and it is open — see §0 below.
+  document.** It was the worst of the three, and it is fixed — see "What is no
+  longer on this list" below.
 
 **None was findable from a test in this repository**, because all three lived
 in what a toolkit does with what it is handed. 1,754 tests do not find the
@@ -237,6 +178,30 @@ Recorded so nobody re-derives them.
   `state`, and a child can see its parent's private items, so `editors`,
   `stamps`, `gutter_lines` and `match_index` stayed private instead of being
   widened to `pub(crate)` for the whole crate to reach.
+- **Find edited the document while you typed the query.** `on_find_changed`
+  (`lib.rs`) fired `dispatch::select` on every keystroke, which ended in
+  `editor.focus()` — right for Find Next, wrong for a live preview, so the
+  character after the one that found a match landed in the document instead of
+  the box. Fixed by splitting the focus-stealing "jump to it" path
+  (`dispatch::select` / `select-range`) from a new focus-preserving "preview
+  it" path (`dispatch::preview_match` / `preview-range`), covering both the
+  `TextInput` and `--editor-view` branches. Confirmed by driving the window:
+  four clean full-speed and slow-paced repro runs against the exact sequence
+  that broke it, both before and after the fix. One further run corrupted a
+  line anyway, immediately after the app had been killed via Task Manager and
+  relaunched without clearing the stale recovery journal first; it did not
+  reproduce again across three more attempts under the same or harsher timing,
+  so it reads as a one-off tied to that unclean relaunch rather than a
+  residual defect -- recorded rather than quietly dropped, since it was not
+  run to ground with certainty.
+- **Crash recovery restored the text and forgot the encoding and line
+  ending.** `AppState::restore` never called `set_line_ending`/`set_encoding`,
+  so a recovered document fell back to the platform default — an LF file came
+  back reporting CRLF on Windows. Fixed by adding `encoding`/`line_ending` to
+  `bp_history::Checkpoint` (`#[serde(default)]`, so journals already on disk
+  still deserialize); line ending is re-detected from the text for a
+  pre-upgrade checkpoint, encoding honestly falls back to a guess since it
+  cannot be recovered from already-decoded text.
 - **The two latent defects** — the three files that roamed on Windows, and
   `Profile::is_data` answering a question it could not.
 - **Parity, or retire `--editor-view`** — settled and not in the view's
@@ -337,10 +302,10 @@ for the trap in each function that has fallen into it.
 
 ## Housekeeping
 
-- **All 80 commits live on `feat/phase-01-foundation-ui`.** `main` has none of
-  them and 8 are unpushed, so a twenty-phase product exists in exactly one
-  place under a branch named for phase one. This is the item most likely to
-  hurt and least likely to be noticed.
+- **All 85 commits live on `feat/phase-01-foundation-ui`, and all are
+  pushed.** `main` still has none of them, so a twenty-phase product exists
+  in exactly one place under a branch named for phase one. This is the item
+  most likely to hurt and least likely to be noticed.
 - **Three orphaned files sit in `%APPDATA%\bachelorpad\`**: `recent.toml`,
   `security-history.log`, and an empty `recovery` folder. Left behind
   deliberately when all three moved to `DirKind::State` — a ten-path recent
