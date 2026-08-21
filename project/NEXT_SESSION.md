@@ -119,15 +119,19 @@ building toward a description that exists, not guessing at one.
 
 ### `bp-storage` — 721 lines, 21 tests, called by nothing (phase 9)
 
-**Answered: both.** ADR-0037 -- a related-notes panel and duplicate
+**Answered in full.** ADR-0037 -- a related-notes panel and duplicate
 detection, both reading the schema ADR-0019 already shipped (documents, tags,
 the join between them). Neither needs a new schema to start; a similarity
 measure beyond exact tag overlap is later work, not a blocker on shipping the
 panel with what already exists.
 
-Not yet designed: how the two are presented -- a panel, a menu row, a
-status-bar affordance -- which ADR-0037 explicitly left to `bp-organize`'s own
-pass.
+**Presentation is settled too.** Related Notes opens a collapsible panel --
+the same pattern `results_panel.slint` already established for cross-file
+search results. Duplicate Detection is both automatic (a non-blocking
+save-time notice) and on-demand (the `Organize` menu row runs the same check
+any time). Both rows already exist, unwired, in `docs/product/MENU_MAP.md`.
+This is now `project/WORK_QUEUE.md`'s ready tier, not its blocked one -- a new
+panel component and two callbacks, not a blank page.
 
 ### `bp-notebook` — 3,627 lines, 59 tests, reached only by the fuzz harness (phase 12)
 
@@ -245,17 +249,17 @@ Recorded so nobody re-derives them.
 
 ## Decisions still waiting on a human
 
-`project/DECISIONS_NEEDED.md` is the register. **Nothing here blocks work that
-is otherwise ready**, which is new: for four sessions something always did.
+`project/DECISIONS_NEEDED.md` is the register. **Down to one row.** D1, D3,
+D4, D7, D8, D10 and D12 were all answered on 2026-08-21 -- this table used to
+list every one of them and none is still open. What is left:
 
 | # | Question | What it holds up |
 | --- | --- | --- |
-| D1 | What may leave the machine — which providers, if any | Phases 8 and 10 |
-| D3 | What `bp-storage` records, and what the user sees for it | Phase 9, `bp-organize`. See §2 above |
-| D4 | An outside review of the `.bpadx` envelope | Trusting it with real documents. **Larger than it was**: ADR-0031 puts the signing key in the same envelope |
-| D7 | A derive-once API for `bp-crypto` | A long security history staying readable — one Argon2id derivation per line |
-| D8 | Applying Windows default-editor registration needs Win32 or a dependency | specs §19's Windows half |
-| D10 | Where the `.bpadx` validation ceiling sits | Opening a hostile or corrupt file |
+| D2 | Is `--editor-view`'s two-view fork worth keeping indefinitely | Nothing right now. Its own row says not to re-ask unless the tax becomes visible or Slint ships composition support |
+
+D4's answer was "yes, get an outside review of the `.bpadx` envelope" --
+that is not a question waiting on Daniel any more, but it is also not done.
+See Housekeeping, below.
 
 ---
 

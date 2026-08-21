@@ -141,17 +141,16 @@ private. A sibling module would have widened every field it touched to
 | --- | --- |
 | **Find, over a document served from disk** | The last piece of the large-file story. `bp_buffer::LargeFile::windows` gives overlapping text windows with a fresh file handle, so a background search does not disturb the scrolling viewport, and `bp-search` decides what a match is. A feature rather than wiring, and ADR-0030 names the two hard parts: a match found in a window has to become a scroll position, and a search over 2 GB has to be interruptible |
 | **`AuditLog` reads lazily instead of eagerly (ADR-0036)** | `AuditLog::read`'s `Vec<Record>` return becomes an iterator over records, decrypted one at a time rather than the whole file up front. `bp-ui`'s security inspector drives it two ways: paged for ordinary scrolling (pull the most recent N, older only on request), background-decrypt-with-progress for whole-history operations. Both consume the same iterator; there is one primitive, not two code paths. The exact UI while paging or background-decrypting — a "load more" row, a progress bar — is still `bp-ui`'s own call when this is taken, not settled by the ADR |
+| **`bp-storage`: a related-notes panel and duplicate detection (ADR-0037)** | Both purpose and presentation are settled now. Related Notes opens a collapsible panel, the same pattern `results_panel.slint` already established for cross-file search — a list of related documents below the editor, click one to open it, populated from the tag join schema v1 already has. Duplicate Detection is both automatic (a non-blocking notice at save, extending `record_document`'s existing save-path call) and on-demand (the `Organize` menu row runs the same check any time). Both rows already exist, unwired, in `docs/product/MENU_MAP.md` — this is a new panel component plus wiring two `planned_menu` rows to real callbacks, not a blank page |
 
 ### Answered 2026-08-21, blocked on scope rather than a design pass now
 
-Three design questions closed in one batch. None is buildable yet, but for a
-different reason each — read `project/NEXT_SESSION.md` §2 before taking any
-of these, since "the decision is made" is not the same as "ready for an
-agent."
+Two design questions closed in this batch remain genuinely blocked on scope,
+not on a decision — read `project/NEXT_SESSION.md` §2 before taking either,
+since "the decision is made" is not the same as "ready for an agent."
 
 | Item | What's decided | What's still missing |
 | --- | --- | --- |
-| `bp-storage` | **ADR-0037: a related-notes panel and duplicate detection**, both on the schema ADR-0019 already shipped | How the two are presented — a panel, a menu row, a status-bar affordance. `bp-organize`'s own pass |
 | Notebook mode | **ADR-0038: a lightweight, one-cell-at-a-time utility.** No persistent kernel session, no "run all" | **An execution engine.** `bp-notebook` is the format half only; the crate that would run a cell, `bp-execution`, does not exist. The view can be built and tested against `bp-notebook` alone first |
 | Research mode | **ADR-0039 (`Accepted`): synthesise gathered data into design insights and recommendations, offline, on a new data model separate from `bp-research`** | **The data model itself, and what "gathered data" and "an insight" mean concretely.** `bp-research`'s existing types are explicitly not it; nothing is scaffolded yet |
 
@@ -230,8 +229,8 @@ All of it, in one pass. What is worth carrying forward:
 | ~~Word wrap in the editor surface~~ | **Done.** `bp_editor::wrap` owns the breaking rule; `view`'s wrapped half maps rows to characters; `Editor` moves Up and Down by visual row. The shell anchors scrolling to a line *and* a row within it, and Slint reports the column count because it owns the font. |
 | **Input-method composition** | **Slint 1.17.1, and this was checked rather than assumed.** `FocusScope` returns `EventResult::Reject` for `UpdateComposition` and `CommitComposition` in *both* `capture_key_event` and `key_event` (`i-slint-core/items/input_items.rs`), and exposes no callback for either. `TextInput` is the only item in the whole toolkit that consumes them, and `input_method_request` is a backend-internal trait, not an application hook. There is no route to pre-edit text from a `FocusScope`. Revisit on a Slint upgrade. |
 | ~~**Security ▸ Sign Document**~~ | **Done** — [ADR-0031](../docs/decisions/ADR-0031.md). The key is sealed in a `.bpadx` envelope under a passphrase rather than protected by file permissions Windows cannot narrow. One ceremony, not one per signature: the first signature creates the key, the second unlocks it, and the row says which before the click |
-| Anything writing to `bp-storage` | **A design pass, and only that.** D3 is answered: it may be wired, *after* somebody decides what it records and what the user sees for it. ADR-0019 stands as written, and "just wire it up" is still the wrong move -- now by confirmation rather than by default. |
-| `bp-organize` | The above, plus a design pass. |
+| ~~Anything writing to `bp-storage`~~ | **Design done** — [ADR-0037](../docs/decisions/ADR-0037.md). A related-notes panel and duplicate detection, both purpose and presentation settled. Moved to `WORK_QUEUE.md`'s ready tier; only the code remains. |
+| ~~`bp-organize`~~ | **Same ADR.** Its two `Organize` menu rows (Related Notes, Duplicate Detection) are named in `docs/product/MENU_MAP.md` already, unwired — this is the item above, not a separate design pass. |
 | ~~YAML support~~ | **Done and unreachable.** ADR-0023 picked `saphyr`; `bp-data` validates, formats, minifies and converts, with nesting, alias expansion and duplicate keys all bounded. No `bp-ui` code calls any of it. This is now a wiring item, not a blocked one. |
 | Markdown preview | Slint has no HTML view. Needs a rendering decision first. |
 | ~~`.bpadx` encryption~~ | **Done.** ADR-0021 settled the envelope and it ships; ADR-0022 seals the recovery journal with it. |
@@ -262,9 +261,14 @@ order, is the wheel and the resize, because the huge-file viewer inherits both
 and does nothing else. `NEXT_SESSION.md` has the full checklist and a
 four-line recipe for a 192 MiB fixture.
 
-## Also not a queue item: three design passes
+## Also not a queue item, any more: two design passes, down from three
 
-`bp-storage`, notebook mode and research mode are each blocked on a decision
-about **what the product is**, not on effort. They are listed in Tier 0 above
-so the size of them is visible, but taking one without an answer produces a
-feature nobody asked for. `project/DECISIONS_NEEDED.md` carries the questions.
+`bp-storage`, notebook mode and research mode were each blocked on a decision
+about **what the product is**, not on effort -- and that decision is what
+made an item premature to take, since building one without an answer
+produces a feature nobody asked for. `bp-storage`'s is done: ADR-0037 settled
+both purpose and presentation, and it now has a row in Tier 0's ready table
+instead of this section. Notebook mode and research mode are still here,
+listed in Tier 0 above so the size of what is missing (an execution engine;
+a data model) stays visible. `project/DECISIONS_NEEDED.md` carries what is
+still genuinely open, which as of 2026-08-21 is one row.
