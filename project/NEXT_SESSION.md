@@ -324,13 +324,13 @@ for the trap in each function that has fallen into it.
 
 - **Seven decisions were answered in one batch on 2026-08-21** (D1, D3, D4,
   D7, D8, D10, plus notebook mode and research mode's purpose), recorded as
-  ADR-0033 through ADR-0039. Three of them describe code that does not exist
-  yet: ADR-0035's lowered `.bpadx` ceiling
-  (`crates/bp-crypto/src/header.rs`'s two constants -- small, mechanical,
-  already covered by `an_absurd_work_factor_is_refused_rather_than_attempted`),
-  ADR-0036's lazy `AuditLog` read (real, separate work), and ADR-0033's OpenAI
-  integration (nothing calls it, phase 8 has not started). None are built by
-  the ADRs themselves.
+  ADR-0033 through ADR-0039. **ADR-0035 is now built**: `KdfParams::validate`'s
+  two constants are lowered, a test pins the tightening itself, and the new
+  worst case is measured in release at ~5.56 s (was ~75 s). Two others still
+  describe code that does not exist: ADR-0036's lazy `AuditLog` read (real,
+  separate work -- and the harder half, how a partial history is shown, is
+  still undecided) and ADR-0033's OpenAI integration (nothing calls it, phase
+  8 has not started).
 - **D4: get an outside review of `bp-crypto`'s `.bpadx` envelope before
   trusting real documents to it.** Answered yes; not done. Every primitive is
   vetted RustCrypto, but the envelope composition is this project's own
