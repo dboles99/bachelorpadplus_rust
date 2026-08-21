@@ -111,37 +111,57 @@ $fs = [System.IO.File]::Open($p, 'Open', 'Write'); $fs.SetLength(201326593); $fs
 
 ---
 
-## 2. Three decisions, and they are about what the product *is*
+## 2. Three decisions, answered 2026-08-21 — now design work rather than open questions
 
-Every one of these is a design question rather than an implementation one, and
-each gates a whole phase. `project/DECISIONS_NEEDED.md` is the register.
+All three were the shape "what does the product *do* here", and none of them
+were implementation questions. They are answered now; what is left for each is
+building toward a description that exists, not guessing at one.
 
 ### `bp-storage` — 721 lines, 21 tests, called by nothing (phase 9)
 
-D3 is answered as far as *permission* goes: it may be wired, **after** a
-design pass. ADR-0019 stands as written and ADR-0020 settled the security half
-— `record_document` honours the policy, dropping the title under `PathOnly`
-and recording nothing under `Disabled`.
+**Answered: both.** ADR-0037 -- a related-notes panel and duplicate
+detection, both reading the schema ADR-0019 already shipped (documents, tags,
+the join between them). Neither needs a new schema to start; a similarity
+measure beyond exact tag overlap is later work, not a blocker on shipping the
+panel with what already exists.
 
-What is open is the design, and it is one question: **what does the user get
-for it?** A related-notes panel, duplicate detection, a "documents like this
-one" list, something else. Recording something before deciding what it is for
-is how a metadata store becomes a liability.
+Not yet designed: how the two are presented -- a panel, a menu row, a
+status-bar affordance -- which ADR-0037 explicitly left to `bp-organize`'s own
+pass.
 
 ### `bp-notebook` — 3,627 lines, 59 tests, reached only by the fuzz harness (phase 12)
 
-ADR-0025 settled the format questions. What is missing is a **mode**: a view
-where a document is a sequence of cells rather than a rope, which is the same
-shape of problem the huge-file viewer just turned out to be — and that one took
-a scroll model, four keys, four refusals and a surface decision.
+**Answered: a lightweight, one-cell-at-a-time utility.** ADR-0038 -- run a
+cell on request, no persistent kernel session, no "run all". `bp-notebook`
+refuses to run a cell without a `UserGesture` that no parsed file can produce,
+which is the security half done and the reason the narrower shape fits: a run
+that starts and stops reads naturally against a gesture-per-cell rule; a
+persistent session would not.
 
-Worth knowing before starting: `bp-notebook` refuses to run a cell without a
-`UserGesture` that no parsed file can produce. That is the security half done
-and it constrains the UI, because the gesture has to come from somewhere real.
+**What is missing is not a view decision any more -- it is an engine.**
+`bp-notebook` is only the format half; the crate that would actually run a
+cell, named `bp-execution` in its own module docs, does not exist in this
+workspace. The view can be built and tested against `bp-notebook` alone
+before that engine exists, so the two are parallel-safe once both are
+scoped -- but the engine is real, likely substantial, separate work, and
+nothing here has scoped it yet.
 
 ### `bp-research` — 5,208 lines, 161 tests, called by nothing (phase 13)
 
-The largest unreachable crate and the least specified. Same shape: a mode.
+**Answered in part.** ADR-0039 -- research mode synthesises data already
+present in documents or the store into insights, options and recommendations
+that inform a design, a feature or a function. Offline throughout: nothing
+here reverses ADR-0006's no-network guarantee, and if synthesis ever implies
+*generating* prose rather than arranging gathered material, that reaches for
+ADR-0033's OpenAI policy instead, not this one.
+
+**Still open, as D12:** whether `bp-research`'s existing bibliography model
+(BibTeX, CSL, DOI/arXiv identifiers) is the right foundation, or phase 13
+needs a data model of its own. The answer given describes product/design
+research synthesis; what is already built is scholarly citation management,
+and they are not obviously the same feature. ADR-0039 is `Proposed` rather
+than `Accepted` for this reason -- it is not yet buildable work until D12 has
+an answer.
 
 ---
 
@@ -302,6 +322,23 @@ for the trap in each function that has fallen into it.
 
 ## Housekeeping
 
+- **Seven decisions were answered in one batch on 2026-08-21** (D1, D3, D4,
+  D7, D8, D10, plus notebook mode and research mode's purpose), recorded as
+  ADR-0033 through ADR-0039. Three of them describe code that does not exist
+  yet: ADR-0035's lowered `.bpadx` ceiling
+  (`crates/bp-crypto/src/header.rs`'s two constants -- small, mechanical,
+  already covered by `an_absurd_work_factor_is_refused_rather_than_attempted`),
+  ADR-0036's lazy `AuditLog` read (real, separate work), and ADR-0033's OpenAI
+  integration (nothing calls it, phase 8 has not started). None are built by
+  the ADRs themselves.
+- **D4: get an outside review of `bp-crypto`'s `.bpadx` envelope before
+  trusting real documents to it.** Answered yes; not done. Every primitive is
+  vetted RustCrypto, but the envelope composition is this project's own
+  design, and that is exactly the kind of format-level mistake an author
+  cannot fully catch by re-reading their own work. Blocks nothing today —
+  `.bpadx` is already in use for the recovery journal and Sign Document — but
+  should happen before phase 15 asks anyone to trust it with something that
+  would hurt to lose.
 - **All 85 commits live on `feat/phase-01-foundation-ui`, and all are
   pushed.** `main` still has none of them, so a twenty-phase product exists
   in exactly one place under a branch named for phase one. This is the item

@@ -114,10 +114,14 @@ Every library half now has its row.
 
 **The shape of this tier changed with the last item to leave it.** What is
 here is not tested libraries missing a menu row; `bp-notebook` and
-`bp-research` are each a *mode* — a view, a set of interactions, and a
-decision about what the product is. The viewer for a huge document was the
-last item that could be described as wiring, and even it turned out to be a
-feature: a scroll model, four keys, four refusals and a surface decision.
+`bp-research` are each a *mode* — a view, a set of interactions, and code that
+does not exist yet. What they are is no longer the open question: ADR-0038
+and ADR-0039 (2026-08-21) answered it. What is missing now is scope — an
+execution engine for notebooks, a foundation decision (D12) for research —
+which is why neither is a ready item below despite having an answer. The
+viewer for a huge document was the last item that could be described as
+wiring, and even it turned out to be a feature: a scroll model, four keys,
+four refusals and a surface decision.
 
 Read `prompts/rosettas/R011_WIRE_CAPABILITY_INTO_SHELL.md` before touching
 `bp-ui`. **Only one agent may add to `AppWindow` in `app.slint` at a time.**
@@ -135,13 +139,18 @@ private. A sibling module would have widened every field it touched to
 | --- | --- |
 | **Find, over a document served from disk** | The last piece of the large-file story. `bp_buffer::LargeFile::windows` gives overlapping text windows with a fresh file handle, so a background search does not disturb the scrolling viewport, and `bp-search` decides what a match is. A feature rather than wiring, and ADR-0030 names the two hard parts: a match found in a window has to become a scroll position, and a search over 2 GB has to be interruptible |
 
-### Blocked on a design pass, not on effort
+### Answered 2026-08-21, blocked on scope rather than a design pass now
 
-| Item | What exists | What is missing |
+Three design questions closed in one batch. None is buildable yet, but for a
+different reason each — read `project/NEXT_SESSION.md` §2 before taking any
+of these, since "the decision is made" is not the same as "ready for an
+agent."
+
+| Item | What's decided | What's still missing |
 | --- | --- | --- |
-| Notebook mode | `bp-notebook`, 3,627 lines, 59 tests (ADR-0025). Format questions settled; a run needs a `UserGesture` no parsed file can produce, which is the security half done and a real constraint on the UI | A **view** where a document is a sequence of cells rather than a rope |
-| Research mode | `bp-research`, 5,208 lines, 161 tests. The largest unreachable crate and the least specified | Same: a mode, and a decision about what it is for |
-| `bp-storage` | 721 lines, 21 tests. ADR-0020 settled the security half — `record_document` honours the policy | **What the user gets for it.** D3 permits wiring *after* a design pass; recording something before deciding what it is for is how a metadata store becomes a liability |
+| `bp-storage` | **ADR-0037: a related-notes panel and duplicate detection**, both on the schema ADR-0019 already shipped | How the two are presented — a panel, a menu row, a status-bar affordance. `bp-organize`'s own pass |
+| Notebook mode | **ADR-0038: a lightweight, one-cell-at-a-time utility.** No persistent kernel session, no "run all" | **An execution engine.** `bp-notebook` is the format half only; the crate that would run a cell, `bp-execution`, does not exist. The view can be built and tested against `bp-notebook` alone first |
+| Research mode | **ADR-0039: synthesise gathered data into design insights and recommendations, offline.** `Proposed`, not `Accepted` | **D12: whether `bp-research`'s existing bibliography model is the right foundation**, or phase 13 needs its own data model. `project/DECISIONS_NEEDED.md` |
 
 ## Tier 0.5 — what the cross-crate tests found
 
