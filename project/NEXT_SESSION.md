@@ -249,10 +249,13 @@ Honest inventory, for whoever wants to size something:
 - **Phase 20, packaging and release.** Not started, and the first thing that
   would make "does `main` get this" matter.
 - **Print.** Platform work with no cross-platform story yet.
-- **`benches/` holds a README and no benchmark**, which is why Tools ▸
-  Benchmarks was deleted rather than built. ADR-0017's scroll-smoothness
-  revert condition still has no capture rig, and that is the benchmark most
-  worth having.
+- ~~**`benches/` holds a README and no benchmark**~~ **Done, 2026-08-22.**
+  `cargo bench -p bp-editor --bench scroll` measures the half of ADR-0017's
+  revert condition that can be measured without a capture rig -- the
+  application's own per-frame work -- and pins the claim in `Anchor`'s doc
+  comment that scrolling "costs only what is on screen". A thousand-fold
+  document is **1.19x** the cost. The compositor half still needs the rig and
+  the bench says so in its own output.
 
 ---
 
