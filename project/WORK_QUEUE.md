@@ -160,6 +160,13 @@ so whoever finishes an item updates them as part of it.
 | — | Research ▸ Open Questions, and `bp_semantic::questions` | ADR-0046. Not "Research Question": a question has a grammar, and which one you are asking does not |
 | — | Research ▸ What the Store Holds | ADR-0046, and `bp_storage::Store::summary` |
 | — | `forget_document` does what its doc comment had promised for two sessions | ADR-0046. Orphaned `tags` rows were never cleared, and its own test said so while the doc comment said otherwise |
+| — | Every menu row works or is a readout | ADR-0048. Ten built, eleven deleted; `planned_menu` and `arrives` gone |
+| — | Tools ▸ Security Inspector, File Analysis, Configuration | ADR-0048, ids 721-723 |
+| — | Note ▸ Tags, Recovery Checkpoints | ADR-0048, ids 87-88 |
+| — | Notebook ▸ Export as .ipynb | ADR-0048, id 747 |
+| — | Organize ▸ Suggested Folder | ADR-0048, id 702 |
+| — | Run ▸ Run Document, Interpreters | ADR-0048, ids 751-752, and `Language::{all,interpreter}` |
+| — | Security ▸ Lock Document | ADR-0048, id 212 |
 
 Every library half now has its row.
 
@@ -186,9 +193,15 @@ may add to `AppWindow` in `app.slint` at a time.**
 
 ### Ready for an agent, now
 
-Nothing. What remains is in `project/DECISIONS_NEEDED.md` (three questions
-only a person can answer), a manual pass at the window, and the outside review
-of `bp-crypto`'s envelope that D4 asked for four sessions ago.
+Nothing. What remains is in `project/DECISIONS_NEEDED.md`, a manual pass at
+the window, and the outside review of `bp-crypto`'s envelope that D4 asked for
+five sessions ago.
+
+**One item came back and was taken the same session**: every menu row working
+(ADR-0048). It is worth remembering how it looked before it was measured --
+38 planned rows, sized as a phase of work -- and what it actually was: mostly
+finished features nobody had pruned from a list, plus eleven rows that were
+better deleted than built. **Take the inventory before the estimate.**
 
 **That is not the same as "the product is finished."** It means every item
 whose shape is known has been taken, and the next one needs a decision before

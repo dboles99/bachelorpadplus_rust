@@ -18,7 +18,7 @@ reason these rows sit unanswered is that a session opens by *reading* rather
 than by *asking*. Do not wait for the answer before starting; do not stop
 halfway through an item to ask one thing.
 
-> Three decisions are open, none of them blocking today's work:
+> Two decisions are open, neither blocking today's work:
 >
 > 1. **Does `main` get this product, and how?** ~120 commits live on
 >    `feat/phase-01-foundation-ui`; `main` has none of them. Fast-forward
@@ -26,11 +26,7 @@ halfway through an item to ask one thing.
 >    history, loses a record this project has been unusually careful to
 >    build), or leave it — which is also a decision and should be a stated
 >    one. **(D13, five sessions old.)**
-> 2. **What should Markdown preview be?** Slint has no HTML view. Render to
->    styled Slint elements (real work, full control), shell out to the system
->    browser (leaves the app), or decline permanently and say so — which is
->    honest if a `.md` is meant to be read as its own source. **(D14.)**
-> 3. **Is `--editor-view`'s two-view fork still worth keeping?** Answered once
+> 2. **Is `--editor-view`'s two-view fork still worth keeping?** Answered once
 >    as "keep it opt-in". Four features work in only one view, down from five.
 >    IME cannot work on Slint 1.17.1, so parity is unreachable until Slint
 >    changes. **(D2 — re-ask only if the tax has become visible.)**
@@ -62,7 +58,6 @@ halfway through an item to ask one thing.
 | --- | --- | --- | --- |
 | D2 | **Is `--editor-view`'s two-view fork worth keeping indefinitely?** IME cannot work on Slint 1.17.1, so parity is unreachable until Slint changes. | Every future wiring item pays a small tax; **four** features work in only one view, down from five | Answered once already (keep opt-in). Re-ask only if the tax becomes visible, or Slint ships composition support. **The count fell on 2026-08-22** and the reason is worth weighing before re-asking: Go to Line was on that list by mistake, needing the caret *moved* rather than *read*. The remaining four genuinely need it read |
 | D13 | **Does `main` get this product, and how?** 111 commits live on `feat/phase-01-foundation-ui`; `main` has none of them. | Nothing today. Everything, the first time a clone is made from `main`, or the branch is lost | `README.md`, `ROADMAP.md` and this project's own housekeeping have called it "the item most likely to hurt and least likely to be noticed" for four sessions. It is not defaultable because the options differ in what they say: a fast-forward merge keeps every commit and admits the branch name was wrong; a squash makes `main` a clean history and loses a record this project has been unusually careful to build; leaving it is a decision too, and should be a stated one rather than a habit |
-| D14 | **What should Markdown preview be?** Slint has no HTML view. | `MENU_MAP.md`'s preview row, and how far the literate-document work of ADR-0043/0045 can go | Three shapes, none obviously right: render to styled Slint elements (real work, no HTML, full control); shell out to the system browser (leaves the app, and ADR-0006 says core editing works offline — a local file is not a network call, but it is a second window); or decline it permanently and say so, which is honest if a `.md` is meant to be read as its own source. ADR-0045 made a `.md` more useful without touching this, which makes the question less urgent and no less open |
 
 ## Answered, for context
 
@@ -71,6 +66,7 @@ ADRs.
 
 | Question | Answer | Where it landed |
 | --- | --- | --- |
+| D14: what should Markdown preview be? | **Declined, with the reason.** Slint 1.17.1 has no rich-text item, so inline formatting is not representable and a preview that dropped it would be worse than none; HTML in the browser means a plaintext temp file, which `Policy::temporary_files` forbids for a Confidential document. Revisit if Slint ships styled text | ADR-0048 |
 | Custom cryptography — compose or implement? | Compose vetted primitives; never implement them | ADR-0011, clarified |
 | D6: what is a line? | `\n` or `\r\n` and nothing else; the rope drops `unicode_lines`, which was ropey's default and never a choice | ADR-0029 |
 | D1: what may leave the machine? | OpenAI's API, opt-in per use, never automatic. Does not authorise `bp-research` -- that stays offline under ADR-0006 | ADR-0033 |
