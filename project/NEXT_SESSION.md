@@ -5,12 +5,13 @@ Written 2026-08-22, at the end of the twelfth build session.
 State: **25 crates, 1,972 tests, 0 ignored**, green on Windows and Linux
 across all eleven gate stages. 52 ADRs. The gate takes ~7 minutes.
 
-> **Start here.** [ADR-0052](../docs/decisions/ADR-0052.md) fixes a
-> text-destroying defect -- Enter twice in the find box replaced the match
-> with a line break -- and **the fix could not be confirmed in the window**,
-> because this machine lost its foreground and `SendKeys` with it. The defect
-> is confirmed; the fix is reasoned. Thirty seconds with a foreground settles
-> it, and §3 has the exact command.
+> [ADR-0052](../docs/decisions/ADR-0052.md) fixed a text-destroying defect --
+> Enter twice in the find box replaced the match with a line break -- and it
+> is **confirmed at the keyboard**, both bars. It needed two people: the
+> session found it by driving and then lost the desktop's foreground, so
+> `SendKeys` was gone before the fix could be checked. That constraint will
+> recur; the ADR says what to do about it, which is not to invent another
+> input path.
 
 ---
 
@@ -86,8 +87,9 @@ doc comment asserting that Find Next, Go to Line and a cross-file result are
 "each a single deliberate jump the user makes once" -- three claims, one true,
 with Go to Line's own call site contradicting it three lines away. The fix is
 `reveal` (formerly `preview_match`), which already did the right thing for the
-typing case and had never been asked about the others. **See §a2: it is not
-confirmed in the window.**
+typing case and had never been asked about the others. **Confirmed at the
+keyboard**, after this session lost the foreground and could not check its own
+work.
 
 ### The eleventh session, for context
 
@@ -158,29 +160,6 @@ and a "no" to any of them is an ADR and a format version:
 3. no domain separation -- a document, a recovery checkpoint, an audit line
    and an Ed25519 signing seed share one construction with nothing telling
    them apart.
-
-### a2. Confirm ADR-0052's fix, which is thirty seconds and needs a foreground
-
-**The only thing in this file that is genuinely urgent.** Find Next was
-editing the document -- Enter twice in the find box replaced the match with a
-line break, and kept going one per press, with nothing to say so but the dirty
-dot and a line count going up off-screen. Ctrl+S would have saved it.
-
-The fix routes Find Next/Previous and Go to Line through `dispatch::reveal`,
-which selects and scrolls without taking the caret. It builds and the whole
-gate is green, and **no test can cover it** -- this is the seam `CLAUDE.md`
-calls the one no test can catch, and the sixth defect to live there.
-
-```powershell
-./scripts/Drive-Window.ps1 -File <a document taller than the window> `
-    -Keys "^f","<a token in it>","{ENTER}","{ENTER}","{ENTER}" -Out ./shots -Kill
-```
-
-The line count must not change and the document must still read "Never saved".
-Then `-Keys "^g","300{ENTER}","500{ENTER}"`: the second jump must land on line
-500 rather than typing `500` into the document. **Go to Line's half was never
-observed failing** -- it is the same call path and the same open bar, and it
-was fixed on that reasoning rather than on a capture.
 
 ### b. Drive the window over things that are not dialogs
 
