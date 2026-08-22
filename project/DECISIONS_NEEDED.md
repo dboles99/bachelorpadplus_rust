@@ -20,9 +20,9 @@ halfway through an item to ask one thing.
 
 > Two decisions are open, neither blocking today's work:
 >
-> 1. **Does `main` get the last 48 commits, and by PR again?** `main` already
+> 1. **Does `main` get the last 49 commits, and by PR again?** `main` already
 >    holds this work up to `31f6858`, "Merge phases 1-19 into main (PR #1)";
->    the branch has run 48 commits past it since. So the established pattern
+>    the branch has run 49 commits past it since. So the established pattern
 >    is a pull request, and the question is only whether to open the second
 >    one now or keep going. **A fast-forward is not available** — the merge
 >    commit is on `main` and not on the branch. **(D13, five sessions old,
@@ -32,11 +32,14 @@ halfway through an item to ask one thing.
 >    IME cannot work on Slint 1.17.1, so parity is unreachable until Slint
 >    changes. **(D2 — re-ask only if the tax has become visible.)**
 >
-> Not a question, but the largest unstarted work in the project: **D4, an
-> outside review of `bp-crypto`'s `.bpadx` envelope**, answered yes five
-> sessions ago and never done. Every primitive is vetted RustCrypto; the
-> *composition* is this project's own design, which is exactly what an author
-> cannot catch by re-reading their own work.
+> Not a question, and no longer unstarted: **D4, an outside review of
+> `bp-crypto`'s `.bpadx` envelope**. The brief is written --
+> [`docs/architecture/BPADX_ENVELOPE_REVIEW.md`](../docs/architecture/BPADX_ENVELOPE_REVIEW.md),
+> ADR-0050 -- so what remains is **finding a reviewer**, which is the half only
+> you can do. It is an hour of somebody's time now, not a project. Every
+> primitive is vetted RustCrypto; the *composition* is this project's own
+> design, which is exactly what an author cannot catch by re-reading their own
+> work.
 
 ---
 
@@ -58,7 +61,7 @@ halfway through an item to ask one thing.
 | # | Question | Blocks | Why it cannot be defaulted |
 | --- | --- | --- | --- |
 | D2 | **Is `--editor-view`'s two-view fork worth keeping indefinitely?** IME cannot work on Slint 1.17.1, so parity is unreachable until Slint changes. | Every future wiring item pays a small tax; **four** features work in only one view, down from five | Answered once already (keep opt-in). Re-ask only if the tax becomes visible, or Slint ships composition support. **The count fell on 2026-08-22** and the reason is worth weighing before re-asking: Go to Line was on that list by mistake, needing the caret *moved* rather than *read*. The remaining four genuinely need it read |
-| D13 | **Does `main` get the last 48 commits, and by PR again?** `main` is at `31f6858` — "Merge phases 1-19 into main (PR #1)" — so it already holds this work up to that point; the branch has run 48 commits past it. | Nothing today. Everything, the first time a clone is made from `main` | **The record had this wrong for five sessions and nobody checked.** It said "111 commits live on the branch; `main` has none of them", which is false: `git merge-base --is-ancestor` puts most of the branch's history inside `main` already. Corrected 2026-08-22. What remains is genuinely a choice — open PR #2 now, or keep accumulating and merge at a milestone — but it is a much smaller one than the framing implied, and a fast-forward is simply unavailable because the merge commit sits on `main` alone |
+| D13 | **Does `main` get the last 49 commits, and by PR again?** `main` is at `31f6858` — "Merge phases 1-19 into main (PR #1)" — so it already holds this work up to that point; the branch has run 49 commits past it. **The premise was re-checked on 2026-08-22 before the question was re-asked**, which is the habit trap 6 exists to install: `git log --oneline main..HEAD` counts 49 and `git merge-base --is-ancestor main HEAD` is false. | Nothing today. Everything, the first time a clone is made from `main` | **The record had this wrong for five sessions and nobody checked.** It said "111 commits live on the branch; `main` has none of them", which is false: `git merge-base --is-ancestor` puts most of the branch's history inside `main` already. Corrected 2026-08-22. What remains is genuinely a choice — open PR #2 now, or keep accumulating and merge at a milestone — but it is a much smaller one than the framing implied, and a fast-forward is simply unavailable because the merge commit sits on `main` alone |
 
 ## Answered, for context
 
@@ -71,7 +74,7 @@ ADRs.
 | Custom cryptography — compose or implement? | Compose vetted primitives; never implement them | ADR-0011, clarified |
 | D6: what is a line? | `\n` or `\r\n` and nothing else; the rope drops `unicode_lines`, which was ropey's default and never a choice | ADR-0029 |
 | D1: what may leave the machine? | OpenAI's API, opt-in per use, never automatic. Does not authorise `bp-research` -- that stays offline under ADR-0006 | ADR-0033 |
-| D4: outside review of `bp-crypto`'s envelope before trusting real documents? | Yes, before phase 15 trusts real documents to it. Not yet done -- see `project/NEXT_SESSION.md`'s housekeeping | this file, and NEXT_SESSION.md |
+| D4: outside review of `bp-crypto`'s envelope before trusting real documents? | Yes, before phase 15 trusts real documents to it. **Prepared, not discharged** -- the brief, the self-audit and the ten questions are written; a reviewer has still to be found | ADR-0050, `docs/architecture/BPADX_ENVELOPE_REVIEW.md` |
 | D3: what does `bp-storage` record, and what does the user see? | Both a related-notes panel and duplicate detection, on the schema ADR-0019 already shipped | ADR-0037 |
 | bp-storage's presentation: how do Related Notes and Duplicate Detection actually behave? | Related Notes opens a collapsible panel, the same pattern as cross-file search results. Duplicate Detection is both automatic (a save-time notice) and on-demand (the menu row) | ADR-0037 |
 | D7: should `bp-crypto` expose a derive-once API? | No -- each line's salt is independently random by design, so no single derived key opens more than one line regardless of the API. The actual fix is reading `AuditLog` lazily, not a faster key | ADR-0036 |

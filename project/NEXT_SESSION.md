@@ -1,9 +1,9 @@
 # Next session plan
 
-Written 2026-08-22, at the end of the eleventh build session.
+Written 2026-08-22, at the end of the twelfth build session.
 
 State: **25 crates, 1,972 tests, 0 ignored**, green on Windows and Linux
-across all eleven gate stages. 49 ADRs. The gate takes ~7 minutes.
+across all eleven gate stages. 50 ADRs. The gate takes ~7 minutes.
 
 ---
 
@@ -33,6 +33,31 @@ already shipped under other names, and eleven were better deleted than built.
 ---
 
 ## 1. What the last session did, so nobody re-derives it
+
+**The twelfth session took `NEXT_SESSION.md` §3a and finished it.**
+[ADR-0050](../docs/decisions/ADR-0050.md):
+[BPADX_ENVELOPE_REVIEW.md](../docs/architecture/BPADX_ENVELOPE_REVIEW.md) is
+the brief D4 needed -- the byte layout, the four call sites, a self-audit
+against fourteen standard pitfalls each naming the test behind it, and ten
+questions stated explicitly. **Four of the fourteen are conceded rather than
+mitigated** -- no key commitment, no domain separation, no padding, no
+streaming API -- which is the point: a brief claiming fourteen for fourteen is
+one a reviewer stops trusting at the first gap they find themselves.
+
+Writing it found two things, both in the seam ADR-0049 was already about:
+
+- **Nothing tested that a document written by an earlier build still opens.**
+  Every round trip in the workspace seals and opens with the *same* build,
+  which proves the two halves agree with each other and nothing about what is
+  on somebody's disk. Three golden vectors had been checked into
+  `fuzz/corpus/envelope/` since the corpus was seeded and the survival harness
+  fed all three to `open` and discarded the result. Two tests now assert them.
+- **`fuzz/` was still measuring a ceiling ADR-0035 lowered a session earlier.**
+  Three rows of its cost table were past the bound, so they timed an instant
+  refusal rather than the work -- real measurements of the wrong thing. The
+  control is now one KiB past the ceiling instead of sixteen times past it.
+
+### The eleventh session, for context
 
 Four commits, four ADRs. `16af4d6`, `f097cd5`, `c94806d`, `b6603e3`.
 
@@ -66,40 +91,41 @@ gone** (no Markdown preview; Slint has no rich text).
 result.** For five sessions the record said "111 commits live on the branch;
 `main` has none of them". `main` is at `31f6858` — *"Merge phases 1-19 into
 main (PR #1)"* — so most of the branch's history is already there and the
-branch is **48 commits past that merge**. One `git merge-base` settles it and
-nobody had run it.
+branch is **49 commits past that merge**. One `git merge-base` settles it and
+nobody had run it -- and it was re-checked again on 2026-08-22 before the
+question was asked a sixth time, which is the habit trap 6 exists to install.
 
 So the real question is small: **open PR #2 now, or keep accumulating?** A
 fast-forward is not available; the merge commit is on `main` alone.
 
-**D4 is not a question and is the largest unstarted work in the project.** An
-outside review of `bp-crypto`'s `.bpadx` envelope, answered *yes* five
-sessions ago and never done. Every primitive is vetted RustCrypto; the
-*composition* is this project's own design, which is exactly what an author
-cannot catch by re-reading their own work. **With the queue empty it has
-nothing in front of it.**
+**D4 was the largest unstarted work in the project and is now prepared.** The
+outside review of `bp-crypto`'s `.bpadx` envelope is written up as a brief
+(ADR-0050) so that what remains is **finding a reviewer** -- an hour of
+somebody's time rather than a project, and the half no agent can do.
+
+Why it waited five sessions is the more useful part. An agent cannot
+*discharge* D4, so every session correctly declined to do the thing and then
+did nothing else about it either. **"I cannot do this" is not the same as
+"there is nothing to do."**
 
 ---
 
 ## 3. What to do, in priority order
 
-### a. D4 — prepare the envelope review
+### a. ~~D4 — prepare the envelope review~~ **Done, ADR-0050**
 
-The only substantial work that needs no new decision. An agent cannot
-*discharge* D4 — a reviewer in this session is not an outside one — but it can
-make the review cheap for whoever does it:
+What is left of it is Daniel's: send
+[BPADX_ENVELOPE_REVIEW.md](../docs/architecture/BPADX_ENVELOPE_REVIEW.md) and
+`crates/bp-crypto/` to somebody who did not write them. The brief names ten
+questions; **three are live design questions rather than rhetorical ones**,
+and a "no" to any of them is an ADR and a format version:
 
-- a written description of the `.bpadx` composition: Argon2id parameters, the
-  two AEADs, the chunking, what goes in the AAD and why the chunk index is
-  bound into it;
-- the questions a reviewer should be asked to answer, listed explicitly;
-- a self-audit against the standard composition pitfalls — nonce reuse across
-  chunks, truncation and reordering, the header's authentication, what a
-  wrong passphrase reveals — with each answer pointing at the test that holds
-  it.
-
-Ship that as a document, and D4 becomes an hour of somebody's time rather than
-a project.
+1. nonce uniqueness rests entirely on the 16-byte salt -- AES-256-GCM
+   contributes only 4 random nonce bytes of its own;
+2. no key commitment, so a partitioning oracle is available in principle;
+3. no domain separation -- a document, a recovery checkpoint, an audit line
+   and an Ed25519 signing seed share one construction with nothing telling
+   them apart.
 
 ### b. Drive the window over things that are not dialogs
 
