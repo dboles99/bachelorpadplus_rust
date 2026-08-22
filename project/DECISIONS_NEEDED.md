@@ -1,25 +1,60 @@
 # Decisions waiting on a human
 
-The standing queue of questions only Daniel can answer. **Kept current as work
-happens**, so that a session can open by asking everything at once rather than
-stopping halfway through to ask one thing.
+The standing queue of questions only Daniel can answer.
 
-Why this file exists: across four sessions, work has been blocked by decisions
-far more often than by effort. Four open questions gated three sessions; they
-were answered in a single message and unblocked a day of work. The bottleneck
-is not how fast code gets written, it is how long a question sits.
+**Why this file exists:** across five sessions, work has been blocked by
+decisions far more often than by effort. Four open questions once gated three
+sessions; they were answered in a single message and unblocked a day of work.
+The bottleneck is not how fast code gets written, it is how long a question
+sits.
+
+---
+
+## The batch — ask this first, verbatim, then start work anyway
+
+**This section is written to be pasted into a message.** `CLAUDE.md`'s "How a
+session opens" makes asking it the first thing a session does, because the
+reason these rows sit unanswered is that a session opens by *reading* rather
+than by *asking*. Do not wait for the answer before starting; do not stop
+halfway through an item to ask one thing.
+
+> Three decisions are open, none of them blocking today's work:
+>
+> 1. **Does `main` get this product, and how?** ~120 commits live on
+>    `feat/phase-01-foundation-ui`; `main` has none of them. Fast-forward
+>    (keeps every commit, admits the branch name was wrong), squash (clean
+>    history, loses a record this project has been unusually careful to
+>    build), or leave it — which is also a decision and should be a stated
+>    one. **(D13, five sessions old.)**
+> 2. **What should Markdown preview be?** Slint has no HTML view. Render to
+>    styled Slint elements (real work, full control), shell out to the system
+>    browser (leaves the app), or decline permanently and say so — which is
+>    honest if a `.md` is meant to be read as its own source. **(D14.)**
+> 3. **Is `--editor-view`'s two-view fork still worth keeping?** Answered once
+>    as "keep it opt-in". Four features work in only one view, down from five.
+>    IME cannot work on Slint 1.17.1, so parity is unreachable until Slint
+>    changes. **(D2 — re-ask only if the tax has become visible.)**
+>
+> Not a question, but the largest unstarted work in the project: **D4, an
+> outside review of `bp-crypto`'s `.bpadx` envelope**, answered yes five
+> sessions ago and never done. Every primitive is vetted RustCrypto; the
+> *composition* is this project's own design, which is exactly what an author
+> cannot catch by re-reading their own work.
+
+---
 
 ## How this is used
 
-- **Anything here blocks something.** If a question stops mattering, delete it
-  rather than leaving it to be re-read.
-- **Before a long session, everything here is asked in one batch.** Not one at
-  a time as each is reached.
-- **An answer goes into the ADR or the doc it belongs in immediately**, and
-  the row is deleted. This file is a queue, not a record — `DECISIONS.md` is
-  the record.
+- **Anything here blocks something, or will.** If a question stops mattering,
+  delete it rather than leaving it to be re-read.
+- **An answer goes into the ADR it belongs in immediately**, and the row is
+  deleted from both the batch above and the table below. This file is a queue,
+  not a record — `DECISIONS.md` is the record.
 - A question that turns out to have an obvious default is not a question. Pick
   the default, say so, and move on.
+- **Keep the batch and the table in step.** They are the same three questions
+  written twice, once to ask and once to reason about, and a batch that has
+  drifted from the table is worse than no batch.
 
 ## Open
 

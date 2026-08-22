@@ -173,20 +173,20 @@ before that.
 
 ## How to work in this repository
 
-- `./scripts/Invoke-LocalCI.ps1 -Linux` is the gate. No hosted CI (ADR-0016).
-  **It takes ~13 minutes, which is longer than a single tool call may run** —
-  background it, and *do not edit files while it runs*: the Linux leg re-runs
-  `cargo fmt --check` from scratch and a mid-run edit fails it for a reason
-  that has nothing to do with the change.
-- `./scripts/Install-GitHooks.ps1` once per clone. Pre-commit runs the quick
-  gate; pre-push runs the full Windows one. **Neither runs the Linux leg.**
-- Every commit in this repository has passed the gate. Keep it that way.
-- `docs/decisions/` is the register; add an ADR when a decision has
-  consequences beyond one file, and **amend it in place when the build changes
-  the answer**.
-- **Read `prompts/rosettas/R011_WIRE_CAPABILITY_INTO_SHELL.md` before touching
-  `bp-ui`.** Rule 9 cost a session's worth of confusion: a menu row's callback
-  cannot take the keyboard focus for itself.
+**`CLAUDE.md` owns this now** -- the gate, the standing authorities, the
+ownership table saying which file holds which kind of fact, and the house
+style. It was written on 2026-08-22 because none of that had an entry point:
+it was spread across this file, `WORK_QUEUE.md` and `R011`, to be found by
+reading. [ADR-0047](../docs/decisions/ADR-0047.md) has why.
+
+Three things worth repeating here anyway, because they are what a session gets
+wrong:
+
+- **The gate takes ~7 minutes. Background it, and do not edit while it runs.**
+- **Ask `project/DECISIONS_NEEDED.md`'s batch first**, then start work without
+  waiting for the answer.
+- **You may commit and push once the full gate is green.** You do not need to
+  ask.
 
 ### The traps this repository springs repeatedly
 

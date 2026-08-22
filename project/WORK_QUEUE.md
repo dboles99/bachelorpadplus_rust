@@ -8,14 +8,45 @@ which is not the same list.
 
 ## How to take an item
 
-1. Read `prompts/rosettas/R011_WIRE_CAPABILITY_INTO_SHELL.md` first if the
-   item touches `crates/bp-ui/`. It encodes the traps that have already cost
-   somebody a session — action-id ranges, the two editor views, Slint `if`
+1. Read `CLAUDE.md` first -- it grants the standing authorities, so you do not
+   have to ask whether to start, whether to commit, or whether a planned row
+   may be deleted.
+2. Read `prompts/rosettas/R011_WIRE_CAPABILITY_INTO_SHELL.md` if the item
+   touches `crates/bp-ui/`. It encodes the traps that have already cost
+   somebody a session -- action-id ranges, the two editor views, Slint `if`
    scoping.
-2. Take the whole item. Each one below is already the smallest thing worth
-   doing; splitting one further produces a half-feature.
-3. Run the gate before saying it is done:
+3. **Take more than one.** See below.
+4. Run the gate before saying it is done:
    `./scripts/Invoke-LocalCI.ps1 -Linux`
+
+### How big a bite
+
+This list used to say: *take the whole item; each one is already the smallest
+thing worth doing, and splitting one further produces a half-feature.* Both
+halves of that are still true, and the advice built on them stopped being
+right.
+
+**What changed is the fixed cost of *entering* this repository.** Learning
+enough to work here safely -- the record, the traps, the two editor views, the
+action-id blocks -- now costs more than most individual items do. An agent
+that takes one small item pays that cost in full and amortises it over one
+change.
+
+So: **take a batch that shares an entry cost, and finish all of it.** The
+natural seams, in order of how well they work:
+
+- **one menu, several rows** -- the builder, the ids and the dispatch arms are
+  read once and edited once;
+- **one crate's whole surface** -- a library item and every row that reaches
+  it, so nothing lands unreachable;
+- **one subject across crates** -- the shape ADR-0046 took: a library
+  capability, a store query, two rows, and the scoping that decided which rows
+  should exist at all.
+
+**The floor has not moved.** A batch is still made of whole items, and
+splitting one to make a batch smaller produces the same half-feature it always
+did. What is discouraged is stopping after one because the queue happened to
+list it separately.
 
 ## Collision rules
 
@@ -164,73 +195,25 @@ whose shape is known has been taken, and the next one needs a decision before
 it can be sized — which is the state this queue has now reached three
 times, each time briefly.
 
-## Tier 0.5 — what the cross-crate tests found
+## Tiers 0.5, 1 and 2 — all empty
 
-Eleven files of cross-crate tests found seven defects. **All seven are fixed,
-the decision behind the last of them is made (ADR-0029), and there is no
-`#[ignore]`d test left anywhere in the tree.** The two latent items that
-remained -- neither wrong today, both wrong the moment anything depended on
-them -- **are fixed too, and this tier is empty.**
+Nothing is left in any of them. What each held, and what it cost to learn, is
+in [DECISIONS.md](../DECISIONS.md) under "What the tiers taught" — those were
+631 words of pure *lesson* sitting in the file an agent has to read to find
+work, which is the wrong place for them twice over.
 
-| Item | Landed as |
-| --- | --- |
-| The recent-files list, the recovery journal and the security history all roamed on Windows | All three resolve through `DirKind::State`; `bp-config` and `bp-ui` in one change, because splitting it would have scattered the product's files |
-| `Profile::is_data` was true for `Ini` and `Xml` | `Profile::is_data_class` for the class, `Format::has_data_operations` for the menu, `Format::ALL` and a test holding the second against `menus::data` |
+The headlines, so somebody knows whether to go and look:
 
-What that pair is worth remembering for:
-
-- **A path built by subtracting another path's last component moves when that
-  one does.** The security history was `recovery_dir()` with `with_file_name`.
-  Renaming the recovery folder would have moved it silently, and a history
-  that moves starts again at sequence one.
-- **Separate the rule from the edge that reads the environment.**
-  `recovery_dir_under` and `audit_path_under` take the state directory as an
-  argument, so both are assertable without a real profile -- the same split
-  `bp_config::config_path` and `config_path_in` already made.
-- **A predicate on the wrong type is a trap with no name.** `is_data` was
-  asked of the *profile*, and `Profile::StructuredData` holds six formats of
-  which `bp-data` parses four. The fix was not a better `match`; it was
-  asking the question of the format.
-
-## Tier 1 — pure wiring (the capability exists and is tested)
-
-**All three original Tier 1 items are done** (W4, W6, W7 — see the table
-above). What was learned doing them, for whoever wires the next row:
-
-- `EditorSurface` had **two** constants that had to start following
-  `font-size`, not one: `line-height` and `gutter-width`. Both feed
-  `row-at` / `column-at`, so a constant left behind does not merely look
-  wrong — it moves the caret away from the pointer, and further the further
-  down or across the click is. Anything else that scales has the same trap.
-- `menus::view` now takes the font size, so **every menu builder whose rows
-  depend on a value must be handed that value**; there is no ambient state
-  in `menus.rs` and there should not be.
-- A row that exists but cannot act right now uses `row_enabled(.., false)`,
-  which is deliberately *not* `planned()`. `planned` means "does not exist
-  yet"; greying for a reason the user can act on is a different statement.
-
-## Tier 2 — done
-
-All of it, in one pass. What is worth carrying forward:
-
-- **`Command::Indent` is not `Command::Insert("	")`.** What a soft tab
-  inserts depends on the caret's visual column -- at column 3 with width 4 it
-  is one space, not four -- so `command_for` cannot decide it and
-  `Editor::apply` expands it instead. Any future key whose text depends on
-  where the caret is has the same shape.
-- **Save Copy shares nothing with `save_document` except the encoder.** The
-  three things it must not do -- move the path, clear the dirty flag, touch
-  Open Recent -- are the three that one does. Calling it and subtracting three
-  behaviours is how Save Copy becomes Save As; there is a test for each.
-- **A `PopupWindow`'s `x` cannot be assigned from outside it.** The tab
-  context menu positions itself through a property the popup binds to. The
-  compiler catches this, but only once you try.
-- **`menus::insert` is rebuilt on every refresh**, because its row hints are
-  rendered from the clock. A menu built once at startup would offer this
-  morning's time all afternoon.
-- **The tab menu's target is stored, not passed.** Opening the menu and
-  clicking a row are separate events, and by the second one the pointer has
-  moved.
+- **Tier 0.5** — eleven files of cross-crate tests found seven defects. A path
+  built by subtracting another path's last component moves when that one does;
+  separate the rule from the edge that reads the environment; a predicate on
+  the wrong type is a trap with no name.
+- **Tier 1** — pure wiring. Two constants had to start following `font-size`,
+  not one; a menu builder whose rows depend on a value must be handed it;
+  `row_enabled(.., false)` and `planned()` are different statements.
+- **Tier 2** — `Command::Indent` is not `Command::Insert("\t")`; Save a Copy
+  shares nothing with Save but the encoder; a `PopupWindow`'s `x` cannot be
+  assigned from outside it.
 
 ## Blocked, and by what
 
@@ -250,40 +233,19 @@ All of it, in one pass. What is worth carrying forward:
 ## Not a queue item, and it is the top of `NEXT_SESSION.md`
 
 **A person driving the window and writing down what is wrong.** No agent can
-do it, and the argument is no longer theoretical: four manual passes have
-happened and each found a defect no test could — a menu bar where twelve of
-fourteen menus swallowed clicks, a tab drawn as one glyph while every column
-was computed as though it reached the next stop, **Find typing the query
-into the document**, and **Sign Document typing a passphrase into the
-document in plain text**. All four were fixed the same way as they were
-found: by somebody watching the window rather than reading a green test
-suite.
+finish it: `rfd` modals swallow synthetic input, and the rows that most need
+watching are the ones behind a native dialog.
 
-All four lived in the same seam, and it is the one a test in this repository
-cannot see: **what a toolkit does with what it is handed.** 1,754 tests did not
-find the third — `AppState::find` was correct throughout and every test
-of it passed. 1,812 did not find the fourth either, and the reason is sharper:
-`PassphraseBar`, its `focus-input()` and the Rust that invokes it are each
-correct alone, and the defect lived in *when* two other things took the caret
-back — one of them `dispatch`'s own last line, the other a `MenuPopup`
-restoring focus after the row's callback returns. Both are closed — see
-`README.md`'s "Recently closed" section, and `project/NEXT_SESSION.md` §2 for
-the mechanism.
+Five manual passes have happened and every one found a defect no test could --
+a menu bar where twelve of fourteen menus swallowed clicks, a tab drawn as one
+glyph while every column was computed as though it reached the next stop, Find
+typing the query into the document, and Sign Document typing a passphrase into
+the document in plain text.
 
-**A trap for anything opening a bar from a menu row**, since this will come
-round again: a menu row's callback cannot take the keyboard focus for itself.
-`dispatch` calls `focus-editor()` right after it, and closing the popup
-restores the focus the popup took when it opened. `ui/app.slint`'s
-`focus-timer` is how a bar asks for the caret; anything new that wants it
-should go through the same `pending-focus` property rather than calling
-`.focus()` inside the click.
-
-The caret question that used to head this section is answered — a click at the
-end of `line 30` reported `Ln 30, Col 8`, exactly its length plus one — so W1,
-W5, W6 and W7 are no longer waiting on it. What is unchecked now, in priority
-order, is the wheel and the resize, because the huge-file viewer inherits both
-and does nothing else. `NEXT_SESSION.md` has the full checklist and a
-four-line recipe for a 192 MiB fixture.
+**The checklist lives in `project/NEXT_SESSION.md` §3** and the lesson from
+each defect in `DECISIONS.md`. Neither is repeated here; this section exists
+only so that somebody reading the queue for something to do knows that the
+most valuable thing available is not in it.
 
 ## Also not a queue item, any more: no design passes, down from three
 
