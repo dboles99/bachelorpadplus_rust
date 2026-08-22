@@ -190,13 +190,24 @@ and a "no" to any of them is an ADR and a format version:
 | --- | --- |
 | **Notebook ▸ Export as .ipynb** | Opens a save dialog, which `rfd` will not let a script past. Reading the dialog is possible; completing it is not. **A person's job** |
 | **Typing, resizing, the wheel** | Checked clean 2026-08-21, before five sessions of change |
-| **Find Next / Previous, cross-file results, cell-outline jumps** | The tall fixture now exists (`601` lines). Go to Line and Find were checked on it; these three were not |
+| **Cross-file results** | Reached through the find bar's "In Folder…", which opens an `rfd` folder picker. **A person's job** |
 
 **Confirmed working on a document taller than the window**, so nobody
 re-checks them: Go to Line scrolls and highlights; Find puts the query in the
-box rather than the document, scrolls to the match and counts it; Run ▸ Run
+box rather than the document, scrolls to the match and counts it; Find Next
+steps between matches without editing the document (ADR-0052); Run ▸ Run
 Document runs a real `.py` in a fresh subprocess and reports the right answer
-in a panel rather than a dialog.
+in a panel rather than a dialog; and **Notebook ▸ Cell Outline jumps to a cell
+below the fold**, scrolling the document and highlighting the fence.
+
+That last one is worth more than it looks. It is the `dispatch::select` path
+ADR-0052 deliberately **left alone** while routing three others to `reveal`,
+and it is the check that the split was drawn in the right place: a panel click
+still takes the caret, because there is no box to take it from.
+
+**It is also drivable with no foreground**, which is how it got checked at all
+— clicks are *posted* to the window and need nothing in front, so a menu, a
+panel and a row in it are all reachable when `SendKeys` is not.
 
 The reasons the rest is a person's job have not changed: **`rfd` modals
 swallow synthetic input**, and File ▸ Set as Default Editor changes state
@@ -270,6 +281,21 @@ Honest inventory, for whoever wants to size something:
   fresh clone works without it, more slowly.
 - **Three orphaned files sit in `%APPDATA%\bachelorpad\`**: `recent.toml`,
   `security-history.log`, and an empty `recovery` folder. Safe to delete.
+- **A single stray recovery journal blocks every launch, and therefore all
+  window-driving.** `rfd`'s "Unsaved work recovered" is its own top-level
+  window (class `#32770`); the application's own window never appears behind
+  it, so `Drive-Window.ps1` fails with *"no usable window appeared within
+  30s"* -- which reads like a driver fault and is not one. It cost two runs
+  on 2026-08-22 before it was diagnosed by enumerating the process's windows.
+
+  **The obvious filter does not work.** Clearing journals whose `path`
+  matches a scratch directory misses the ones that matter most: an *Untitled*
+  buffer has `"path": null`, so it matches nothing and survives every sweep.
+  The one found on 2026-08-22 held the three characters `D13`.
+
+  Look in `%LOCALAPPDATA%\bachelorpad\state\recovery\*.json`, read each one --
+  they are small and name their own document -- and **preserve before
+  removing**: it is somebody's unsaved work, however little of it.
 - **Idle memory drifted from ~20 MB to ~32 MB** after dialogs are opened.
   Below the 50 MB target, observed three times, never investigated.
 - **A clipboard menu row decodes its id against the history at click time.**
