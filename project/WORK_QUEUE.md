@@ -174,6 +174,9 @@ so whoever finishes an item updates them as part of it.
 | — | Every menu row works or is a readout | ADR-0048. Ten built, eleven deleted; `planned_menu` and `arrives` gone |
 | — | D4's envelope review, prepared as a brief a stranger can act on | ADR-0050, `docs/architecture/BPADX_ENVELOPE_REVIEW.md` |
 | — | Golden vectors: a document sealed by an earlier build must still open | ADR-0050, `fuzz/tests/envelope.rs`. Nothing had ever asserted it |
+| — | Run's readout stops denying there is anything to run while Run Document runs it | ADR-0051, `menus.rs`. Found by driving the window |
+| — | `every_menu()` finally holds the Run menu, six times over | ADR-0051. The sweep's own comment named the failure mode it had |
+| — | The window driver waits for the window it will photograph | ADR-0051, `scripts/Drive-Window.ps1`. `-Keys` takes a list now |
 | — | Tools ▸ Security Inspector, File Analysis, Configuration | ADR-0048, ids 721-723 |
 | — | Note ▸ Tags, Recovery Checkpoints | ADR-0048, ids 87-88 |
 | — | Notebook ▸ Export as .ipynb | ADR-0048, id 747 |

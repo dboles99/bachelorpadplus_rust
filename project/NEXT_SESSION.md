@@ -3,7 +3,7 @@
 Written 2026-08-22, at the end of the twelfth build session.
 
 State: **25 crates, 1,972 tests, 0 ignored**, green on Windows and Linux
-across all eleven gate stages. 50 ADRs. The gate takes ~7 minutes.
+across all eleven gate stages. 51 ADRs. The gate takes ~7 minutes.
 
 ---
 
@@ -56,6 +56,21 @@ Writing it found two things, both in the seam ADR-0049 was already about:
   Three rows of its cost table were past the bound, so they timed an instant
   refusal rather than the work -- real measurements of the wrong thing. The
   control is now one KiB past the ceiling instead of sixteen times past it.
+
+**Then it drove the window at §3b**, which had three rows no script had ever
+been pointed at. [ADR-0051](../docs/decisions/ADR-0051.md), four defects:
+
+- **Run's greyed readout denied there was anything to run** while an enabled
+  Run Document three rows below ran the file correctly. `document_runnable`
+  was already a parameter and unused;
+- that readout was **52 characters against a `LABEL_BUDGET` of 42**, and two
+  more were around 70 -- all three *reasons*, the worst text to lose;
+- **`every_menu()` never held the Run menu**, which is why a test asserting 42
+  passed over a 52-character label every run. Its doc comment names that
+  failure mode in as many words;
+- **`Drive-Window.ps1` photographed the wrong window again** -- the 1x1
+  capture ADR-0049 was written to prevent, because it fixed the *selection*
+  rule and left the *wait* condition asking a different question.
 
 ### The eleventh session, for context
 
@@ -129,20 +144,32 @@ and a "no" to any of them is an ADR and a format version:
 
 ### b. Drive the window over things that are not dialogs
 
-`scripts/Drive-Window.ps1` exists now and found a defect within an hour of
-being written. What it has **not** been pointed at:
+**Three of the four rows here were done on 2026-08-22 and found four defects**
+([ADR-0051](../docs/decisions/ADR-0051.md)). What is left:
 
 | Check | Why it matters |
 | --- | --- |
-| **A document taller than the window** | Find, Find Next/Previous, Go to Line, a cross-file result, a cell-outline row. All fixed once and never re-checked; a fixture that fits on one screen cannot test anything about scrolling |
-| **Run ▸ Run Document on a real `.py`** | New, and the only new row that *executes* something rather than reporting. `-Kill` after, and read the run panel rather than a dialog |
-| **Notebook ▸ Export as .ipynb** | Opens a save dialog, which `rfd` will not let a script past. Reading the dialog is possible; completing it is not |
-| **Typing, resizing, the wheel** | Checked clean 2026-08-21, before four sessions of change |
+| **Notebook ▸ Export as .ipynb** | Opens a save dialog, which `rfd` will not let a script past. Reading the dialog is possible; completing it is not. **A person's job** |
+| **Typing, resizing, the wheel** | Checked clean 2026-08-21, before five sessions of change |
+| **Find Next / Previous, cross-file results, cell-outline jumps** | The tall fixture now exists (`601` lines). Go to Line and Find were checked on it; these three were not |
 
-Still a person's job, and the reasons have not changed: **`rfd` modals swallow
-synthetic input**, and File ▸ Set as Default Editor changes state outside this
-application. Completing a signature writes a real Ed25519 key into
-`%LOCALAPPDATA%`.
+**Confirmed working on a document taller than the window**, so nobody
+re-checks them: Go to Line scrolls and highlights; Find puts the query in the
+box rather than the document, scrolls to the match and counts it; Run ▸ Run
+Document runs a real `.py` in a fresh subprocess and reports the right answer
+in a panel rather than a dialog.
+
+The reasons the rest is a person's job have not changed: **`rfd` modals
+swallow synthetic input**, and File ▸ Set as Default Editor changes state
+outside this application. Completing a signature writes a real Ed25519 key
+into `%LOCALAPPDATA%`.
+
+**`Drive-Window.ps1` got two fixes in the doing**, and both are worth knowing
+before using it: it now waits for the window it will actually photograph
+rather than for `MainWindowHandle` (which transiently names a 0x0 window, and
+produced a 1x1 capture on the first run of the session), and `-Keys` takes a
+**list** -- `-Keys "^g","555{ENTER}"` -- because one send cannot drive a bar
+that takes the caret a tick later.
 
 ### c. The one unexplained failure
 
