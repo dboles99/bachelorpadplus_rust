@@ -113,8 +113,12 @@ person.
 
 ### What an agent can and cannot do here
 
-An agent *can* drive this window — PowerShell, `PrintWindow`, `SendKeys`.
-Two things it cannot, both learned the hard way:
+**`./scripts/Drive-Window.ps1` is the plumbing now** ([ADR-0049](../docs/decisions/ADR-0049.md)),
+rather than something each session rebuilds: it launches, finds the window,
+posts clicks, sends keys and captures to a PNG — including a dialog, which is
+its own top-level window and needs `-Screen`.
+
+Two things it still cannot do, both learned the hard way:
 
 - **`rfd` modals swallow synthetic input.** Every row added this session opens
   one, so *reading* the dialog is possible and dismissing it may not be.
@@ -150,6 +154,12 @@ before that.
   of that is tests. It now owns two menu rows rather than one. If it grows
   again the seam is the four insight functions against the two report
   renderers.
+- **One Linux gate run failed once and never again**, on 2026-08-22.
+  `nextest` exits 100 for a test failure, so something genuinely failed;
+  five whole-suite Linux runs and the following gate were all clean. The name
+  was lost because the gate's output had been truncated. If a Linux-only
+  failure appears again, that is the second data point -- keep the full
+  output. [ADR-0049](../docs/decisions/ADR-0049.md) has the detail.
 - **The Win32 device-name rule has been missed four times.**
   `bp_platform::paths::reserved_device_name` is the one home for the answer;
   the recurring mistake is not asking it.
