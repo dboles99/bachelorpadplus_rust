@@ -177,6 +177,7 @@ so whoever finishes an item updates them as part of it.
 | — | Run's readout stops denying there is anything to run while Run Document runs it | ADR-0051, `menus.rs`. Found by driving the window |
 | — | `every_menu()` finally holds the Run menu, six times over | ADR-0051. The sweep's own comment named the failure mode it had |
 | — | The window driver waits for the window it will photograph | ADR-0051, `scripts/Drive-Window.ps1`. `-Keys` takes a list now |
+| — | Enter twice in the find box no longer replaces the match with a line break | ADR-0052, `dispatch::reveal`. **Fix unconfirmed in the window** -- see `NEXT_SESSION.md` §a2 |
 | — | Tools ▸ Security Inspector, File Analysis, Configuration | ADR-0048, ids 721-723 |
 | — | Note ▸ Tags, Recovery Checkpoints | ADR-0048, ids 87-88 |
 | — | Notebook ▸ Export as .ipynb | ADR-0048, id 747 |
