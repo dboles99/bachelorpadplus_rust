@@ -160,6 +160,17 @@ so whoever finishes an item updates them as part of it.
 | — | Research ▸ Open Questions, and `bp_semantic::questions` | ADR-0046. Not "Research Question": a question has a grammar, and which one you are asking does not |
 | — | Research ▸ What the Store Holds | ADR-0046, and `bp_storage::Store::summary` |
 | — | `forget_document` does what its doc comment had promised for two sessions | ADR-0046. Orphaned `tags` rows were never cleared, and its own test said so while the doc comment said otherwise |
+| — | `CLAUDE.md`, three standing authorities, and one home per kind of fact | ADR-0047 |
+| — | pre-push checks for a full gate instead of repeating it; `cargo-nextest` with a doctest stage | ADR-0047. 15.0 min to 7.2 |
+| — | Tools ▸ Security Inspector, File Analysis, Configuration | ADR-0048, ids 721-723 |
+| — | Note ▸ Tags, Recovery Checkpoints | ADR-0048, ids 87-88 |
+| — | Notebook ▸ Export as .ipynb | ADR-0048, id 747 |
+| — | Organize ▸ Suggested Folder | ADR-0048, id 702 |
+| — | Run ▸ Run Document, Interpreters | ADR-0048, ids 751-752, and `Language::{all,interpreter}` |
+| — | Security ▸ Lock Document | ADR-0048, id 212 |
+| — | `scripts/Drive-Window.ps1`: the window is driven by a script, not re-derived | ADR-0049 |
+| — | A clipped menu label is elided, and the reasons are short enough not to need it | ADR-0049. Found by driving |
+| — | `crate::testpaths`: a temp path a recycled pid cannot reuse | ADR-0049. A flake that got worse the more the suite was run |
 | — | Every menu row works or is a readout | ADR-0048. Ten built, eleven deleted; `planned_menu` and `arrives` gone |
 | — | Tools ▸ Security Inspector, File Analysis, Configuration | ADR-0048, ids 721-723 |
 | — | Note ▸ Tags, Recovery Checkpoints | ADR-0048, ids 87-88 |

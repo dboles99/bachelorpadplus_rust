@@ -1,178 +1,185 @@
 # Next session plan
 
-Written 2026-08-22, at the end of the tenth build session.
+Written 2026-08-22, at the end of the eleventh build session.
 
-State: **25 crates, 1,941 tests, 0 ignored**, green on Windows and Linux
-across all ten gate stages. 46 ADRs.
-
----
-
-## The queue is empty, and that is the whole of the news
-
-Five sessions ago capabilities did not exist. Four sessions ago they existed
-and were unreachable. Three sessions ago the record disagreed with the
-product. Two sessions ago the queue was gated on questions only a human could
-answer. Last session the last three unreachable crates became reachable.
-
-**This session took the one item that was ready, and there is no next one.**
-`project/WORK_QUEUE.md`'s Tier 0 is empty. `docs/product/MENU_MAP.md`'s
-Research section has no planned row left in it. Every item whose *shape* was
-known has been taken.
-
-That is not "the product is finished". It is a specific, checkable state:
-**the next piece of work needs a decision before it can be sized**, and the
-three decisions are in `project/DECISIONS_NEEDED.md`.
+State: **25 crates, 1,972 tests, 0 ignored**, green on Windows and Linux
+across all eleven gate stages. 49 ADRs. The gate takes ~7 minutes.
 
 ---
 
-## 1. What this session did, so nobody re-derives it
+## Where this leaves things
 
-Research mode's synthesis half, which `MENU_MAP.md` had listed as five
-planned rows — research question, evidence, findings, methods, datasets —
-since the scaffold commit.
+**Every menu row in the product either does something or is a readout**, and a
+test says so ([ADR-0048](../docs/decisions/ADR-0048.md)). `WORK_QUEUE.md`'s
+Tier 0 is empty. Nothing anywhere says "not implemented yet".
 
-**None of the five became a row named for itself**, and the scoping is
-[ADR-0046](../docs/decisions/ADR-0046.md):
+That is not "finished". It is a specific state, and it is the third time this
+project has reached it: **the next piece of work needs a decision before it
+can be sized.** The difference this time is that the queue emptied for a
+reason worth remembering — of 38 rows that looked like a backlog, most had
+already shipped under other names, and eleven were better deleted than built.
 
-| Name | What it turned out to be |
+---
+
+## Read this first, then start
+
+1. `CLAUDE.md` — the entry point, and the three standing authorities. **You do
+   not need to ask to take work, to commit after a green gate, or to delete a
+   planned row with an ADR.**
+2. `project/DECISIONS_NEEDED.md` — ask its batch in your first message, then
+   start work without waiting.
+3. This file, for what matters most.
+
+---
+
+## 1. What the last session did, so nobody re-derives it
+
+Four commits, four ADRs. `16af4d6`, `f097cd5`, `c94806d`, `b6603e3`.
+
+| | |
 | --- | --- |
-| Evidence | Not a row. The documents each insight is drawn from, named *on* the insight |
-| Methods | Not a row. Research Report's closing section, stating every threshold it applied |
-| Datasets | Not a row in the report; the same closing section carries the numbers, and it *is* a row as **What the Store Holds** |
-| Findings | Dropped. A second name for what Research Report already is |
-| Research question | **Open Questions** — a document reading, because a question has a grammar and can be found, while which one you are asking is not something the document says |
+| [ADR-0046](../docs/decisions/ADR-0046.md) | Research mode's last five planned rows were a paper's structure (IMRaD), not this product's. Two folded into Research Report, one became Open Questions, one became What the Store Holds, one dropped |
+| [ADR-0047](../docs/decisions/ADR-0047.md) | `CLAUDE.md`, three standing authorities, one home per kind of fact; pre-push checks for a full gate instead of repeating it; `cargo-nextest`. **15.0 min to 7.2** |
+| [ADR-0048](../docs/decisions/ADR-0048.md) | Every menu row works or is a readout. Ten built, eleven deleted |
+| [ADR-0049](../docs/decisions/ADR-0049.md) | The window is driven by a script; a clipped label is elided; a temp path a recycled pid can reuse is not unique |
 
-Also shipped: `bp_semantic::questions` (fenced code skipped, questions
-crossing lines within a paragraph, reported at the line they *begin* on),
-`bp_storage::Store::summary`, and a fix to `Store::forget_document`, which had
-promised to clear tags nothing carried and never had.
+**Four defects, and the shape of each is in `DECISIONS.md`:**
 
-### The two lessons, both in `DECISIONS.md` at length
-
-> **A name that has sat in a plan long enough starts to read like a
-> specification.** This is the mirror of "undecided reads like large", and the
-> more dangerous of the two: an unscoped *mode* at least looks unscoped, so
-> somebody eventually asks. A named row in a table looks decided. The tell is
-> to ask where the name came from — if the answer is the commit that
-> scaffolded the repository rather than a decision that chose it, it is a
-> sketch that has been read as a plan ever since.
-
-And the one the scoping itself turned up:
-
-> **"Inspectable" is a claim about the product, not about the source.**
-> ADR-0041 promised "a fixed, inspectable rule". Every rule was written down —
-> in `state/research.rs`. Meanwhile the report scanned the 500 most recently
-> seen documents and told the reader nothing about it, so a store of nine
-> hundred produced a report that read as complete. Ask of any honesty
-> commitment: *honest to whom?*
+- `Store::forget_document` never cleared orphaned tags, while its own test
+  asserted the opposite of its doc comment;
+- Research Report scanned 500 documents and said so nowhere the reader could
+  see — "inspectable" was true of the source and not of the product;
+- a menu label was clipped mid-word with no ellipsis, and every label it
+  happened to was a **greyed row's reason**;
+- the test suite got **flakier the more it was run** — 5,862 leftover temp
+  files across 495 pids, and a recycled pid inherited an earlier run's
+  security history.
 
 ---
 
-## 2. Three decisions, and one of them has waited five sessions
+## 2. Two decisions, and one of them was the wrong question
 
-`project/DECISIONS_NEEDED.md` is the register, unchanged this session at three
-rows. **Nothing in the queue is blocked on them today** — which is exactly why
-they are easy to keep not answering.
+`project/DECISIONS_NEEDED.md` is the register. **D14 was answered and is
+gone** (no Markdown preview; Slint has no rich text).
 
-| # | Question | Why it is here rather than defaulted |
-| --- | --- | --- |
-| **D13** | **Does `main` get this product, and how?** | ~120 commits on a branch named for phase one; `main` has none of them. Four sessions of housekeeping have called this "the item most likely to hurt and least likely to be noticed", which is a description rather than a decision. Fast-forward, squash, or leave it — they say different things about the history, and leaving it should be *stated* rather than habitual |
-| **D14** | **What should Markdown preview be?** | Slint has no HTML view. Render to styled Slint elements, shell out to a browser, or decline permanently and say so. It is the last row in `MENU_MAP.md` that is planned rather than decided |
-| **D2** | Is `--editor-view`'s fork worth keeping? | Answered once (keep opt-in). Four features work in only one view, down from five last session |
+**D13 was corrected rather than answered, and that is the more useful
+result.** For five sessions the record said "111 commits live on the branch;
+`main` has none of them". `main` is at `31f6858` — *"Merge phases 1-19 into
+main (PR #1)"* — so most of the branch's history is already there and the
+branch is **48 commits past that merge**. One `git merge-base` settles it and
+nobody had run it.
 
-**D4 is not on that list and is not done.** Get an outside review of
-`bp-crypto`'s `.bpadx` envelope before trusting real documents to it. Answered
-yes five sessions ago. Every primitive is vetted RustCrypto; the *composition*
-is this project's own design, which is exactly what an author cannot catch by
-re-reading their own work. **With the queue empty this is now the largest
-unstarted piece of work in the project**, and it no longer has a more urgent
-item in front of it.
+So the real question is small: **open PR #2 now, or keep accumulating?** A
+fast-forward is not available; the merge commit is on `main` alone.
+
+**D4 is not a question and is the largest unstarted work in the project.** An
+outside review of `bp-crypto`'s `.bpadx` envelope, answered *yes* five
+sessions ago and never done. Every primitive is vetted RustCrypto; the
+*composition* is this project's own design, which is exactly what an author
+cannot catch by re-reading their own work. **With the queue empty it has
+nothing in front of it.**
 
 ---
 
-## 3. Drive the window
+## 3. What to do, in priority order
 
-Standing argument, unchanged: four manual passes each found a defect no test
-could, and last session found five more, four of them by driving.
+### a. D4 — prepare the envelope review
 
-This session added two rows to a menu and a section to a report. **Nothing
-here has been watched working** — the reports are asserted by tests over the
-strings they produce, and the dialogs they open have not been opened by a
-person.
+The only substantial work that needs no new decision. An agent cannot
+*discharge* D4 — a reviewer in this session is not an outside one — but it can
+make the review cheap for whoever does it:
 
-### The checklist, in priority order
+- a written description of the `.bpadx` composition: Argon2id parameters, the
+  two AEADs, the chunking, what goes in the AAD and why the chunk index is
+  bound into it;
+- the questions a reviewer should be asked to answer, listed explicitly;
+- a self-audit against the standard composition pitfalls — nonce reuse across
+  chunks, truncation and reordering, the header's authentication, what a
+  wrong passphrase reveals — with each answer pointing at the test that holds
+  it.
 
-| Check | Why it matters now |
+Ship that as a document, and D4 becomes an hour of somebody's time rather than
+a project.
+
+### b. Drive the window over things that are not dialogs
+
+`scripts/Drive-Window.ps1` exists now and found a defect within an hour of
+being written. What it has **not** been pointed at:
+
+| Check | Why it matters |
 | --- | --- |
-| **Research ▸ Open Questions, and ▸ What the Store Holds** | New this session and never clicked. Both open an `rfd` info dialog through `show_info`, the same path Research Report uses, so the risk is low and the *contents* are the point: does the store summary say something true about a machine that has actually been saving documents? |
-| **Research ▸ Research Report on a real store** | Its closing section states a truncation that only appears above 500 documents. Nobody has a store that large, so **that branch has been tested and never observed** |
-| **Anything that claims to take you somewhere, on a document taller than the window** | Regression check now rather than an investigation. Find, Find Next/Previous, Go to Line, a cross-file result, a cell-outline row. Open Questions reports a line and does *not* jump to it — deliberately, it is a dialog like Find Identifiers — so check that reading a line number and typing it into Ctrl+G works from a dialog that is still open |
-| **File ▸ Set as Default Editor** | Still the only row that changes state outside this application, and deliberately never attempted by a script |
-| **Complete a signature** | Reachable, and deliberately never finished by a script: it writes a real Ed25519 key into `%LOCALAPPDATA%` and a `.sig` beside the document |
-| ~~Resize, wheel, huge file, drag-to-select, goal column~~ | Checked and clean, 2026-08-21 |
+| **A document taller than the window** | Find, Find Next/Previous, Go to Line, a cross-file result, a cell-outline row. All fixed once and never re-checked; a fixture that fits on one screen cannot test anything about scrolling |
+| **Run ▸ Run Document on a real `.py`** | New, and the only new row that *executes* something rather than reporting. `-Kill` after, and read the run panel rather than a dialog |
+| **Notebook ▸ Export as .ipynb** | Opens a save dialog, which `rfd` will not let a script past. Reading the dialog is possible; completing it is not |
+| **Typing, resizing, the wheel** | Checked clean 2026-08-21, before four sessions of change |
 
-### What an agent can and cannot do here
+Still a person's job, and the reasons have not changed: **`rfd` modals swallow
+synthetic input**, and File ▸ Set as Default Editor changes state outside this
+application. Completing a signature writes a real Ed25519 key into
+`%LOCALAPPDATA%`.
 
-**`./scripts/Drive-Window.ps1` is the plumbing now** ([ADR-0049](../docs/decisions/ADR-0049.md)),
-rather than something each session rebuilds: it launches, finds the window,
-posts clicks, sends keys and captures to a PNG — including a dialog, which is
-its own top-level window and needs `-Screen`.
+### c. The one unexplained failure
 
-Two things it still cannot do, both learned the hard way:
+A Linux gate run failed once on 2026-08-22 and never again. `nextest` exits
+100 for a test failure, so something genuinely failed; five whole-suite Linux
+runs and two gate runs since were clean. **The name is unknown because the
+gate's output had been truncated** — `CLAUDE.md` now forbids that.
 
-- **`rfd` modals swallow synthetic input.** Every row added this session opens
-  one, so *reading* the dialog is possible and dismissing it may not be.
-- **`SetForegroundWindow` fails silently**, and a lost foreground is
-  indistinguishable from the application dropping keystrokes. One "defect" was
-  recorded and later withdrawn for exactly this. Check the foreground handle
-  on both sides of every keystroke.
+If a Linux-only failure appears again, that is the second data point. Keep the
+whole output.
 
 ---
 
 ## 4. Blocked on Slint 1.17.1, checked in its source rather than assumed
 
-Unchanged for two sessions, and listed so nobody re-derives them:
-
 - **Input-method composition.** `FocusScope` rejects `UpdateComposition` and
   `CommitComposition` in both handlers and exposes no callback for either.
 - **Drag and drop to open.** The winit backend has no file-drop plumbing and
   `DataTransfer` carries only plain text or an image.
+- **Markdown preview.** No rich-text item — no styled runs, no spans — so
+  inline formatting cannot be rendered at all (ADR-0048, answering D14).
 
-Both want a re-check on a Slint upgrade, and neither wants an afternoon
+All three want a re-check on a Slint upgrade and none wants an afternoon
 before that.
+
+---
+
+## 5. What is left that is not blocked and not decided
+
+Honest inventory, for whoever wants to size something:
+
+- **Multi-cursor** (ADR-0048 dropped the row, not the idea). Needs
+  `bp-editor` to carry a set of carets through every command, selection and
+  undo entry, and it can only work under `--editor-view`. A real feature with
+  a real design pass in front of it.
+- **Phase 10, semantic search.** Needs embeddings; nothing computes one, and
+  doing so reaches [ADR-0033](../docs/decisions/ADR-0033.md).
+- **Phase 20, packaging and release.** Not started, and the first thing that
+  would make "does `main` get this" matter.
+- **Print.** Platform work with no cross-platform story yet.
+- **`benches/` holds a README and no benchmark**, which is why Tools ▸
+  Benchmarks was deleted rather than built. ADR-0017's scroll-smoothness
+  revert condition still has no capture rig, and that is the benchmark most
+  worth having.
 
 ---
 
 ## Housekeeping
 
-- **`crates/bp-ui/src/menus.rs` at 3,160 lines is the largest file in the
-  crate.** Listed for the reason `state.rs` used to be: this is the kind of
-  thing that stops being noticed. It is one subject and roughly half of it is
-  tests. Its seam, if it needs one, is the `action` module against the
-  builders.
-- **`state/research.rs` more than doubled**, 320 to 758 lines, and about half
-  of that is tests. It now owns two menu rows rather than one. If it grows
-  again the seam is the four insight functions against the two report
-  renderers.
-- **One Linux gate run failed once and never again**, on 2026-08-22.
-  `nextest` exits 100 for a test failure, so something genuinely failed;
-  five whole-suite Linux runs and the following gate were all clean. The name
-  was lost because the gate's output had been truncated. If a Linux-only
-  failure appears again, that is the second data point -- keep the full
-  output. [ADR-0049](../docs/decisions/ADR-0049.md) has the detail.
-- **The Win32 device-name rule has been missed four times.**
-  `bp_platform::paths::reserved_device_name` is the one home for the answer;
-  the recurring mistake is not asking it.
+- **`crates/bp-ui/src/menus.rs` at 3,478 lines is the largest file in the
+  crate**, and grew ~300 lines last session. Roughly half is tests. Its seam,
+  if it needs one, is the `action` module against the builders.
+- **No phase is "Built, unwired".** That count was three for four sessions.
+  `ROADMAP.md` keeps the legend because the state is real and will recur.
+- **`cargo-nextest` is installed on this machine and in `Ubuntu-24.04`.** A
+  fresh clone works without it, more slowly.
 - **Three orphaned files sit in `%APPDATA%\bachelorpad\`**: `recent.toml`,
-  `security-history.log`, and an empty `recovery` folder. Safe to delete;
-  nothing recreates them.
+  `security-history.log`, and an empty `recovery` folder. Safe to delete.
 - **Idle memory drifted from ~20 MB to ~32 MB** after dialogs are opened.
   Below the 50 MB target, observed three times, never investigated.
-- **Scroll smoothness under CPU rasterisation** is the standing revert
-  condition on ADR-0017 and still needs a capture rig.
 - **A clipboard menu row decodes its id against the history at click time.**
-  Pre-existing; the Run menu's `run-menu-opening` has the pattern that would
-  fix it.
+  Pre-existing; the Run menu's `run-menu-opening` has the pattern that fixes
+  it.
 - **`fuzz/corpus/yaml/` breaks editor tooling that scans the workspace.**
   Disable Google's Cloud Code extension for this workspace.
 - **The panic lints are on** — `unwrap_used`, `panic`, `todo`,
@@ -181,44 +188,15 @@ before that.
 
 ---
 
-## How to work in this repository
+## The traps, and where they live
 
-**`CLAUDE.md` owns this now** -- the gate, the standing authorities, the
-ownership table saying which file holds which kind of fact, and the house
-style. It was written on 2026-08-22 because none of that had an entry point:
-it was spread across this file, `WORK_QUEUE.md` and `R011`, to be found by
-reading. [ADR-0047](../docs/decisions/ADR-0047.md) has why.
+`CLAUDE.md` names all six and `DECISIONS.md` explains each. The two added last
+session are both about verification itself:
 
-Three things worth repeating here anyway, because they are what a session gets
-wrong:
+> **"Unique" must mean no *earlier* run either.** A scheme that prevents
+> collisions and never deletes anything is a scheme that fails eventually, and
+> gets likelier the more it is used.
 
-- **The gate takes ~7 minutes. Background it, and do not edit while it runs.**
-- **Ask `project/DECISIONS_NEEDED.md`'s batch first**, then start work without
-  waiting for the answer.
-- **You may commit and push once the full gate is green.** You do not need to
-  ask.
-
-### The traps this repository springs repeatedly
-
-Four now, and the fourth is this session's:
-
-1. **A function reading the real profile directory means `cargo test` writes
-   there.** Sprung three times, once writing a real Ed25519 private key into
-   `%LOCALAPPDATA%`. The fix is a field on `AppState`, not a function.
-2. **Code taking a `Platform` parameter must not let `std::path` answer for
-   it.** Sprung three times, every time green on Windows and caught by Linux.
-   `bp_platform::paths::{file_name, join}` exist for this.
-3. **A claim in a comment is not a property of the code.** Sprung three times.
-   Ask of any comment asserting a property: what would fail if it stopped
-   being true? If the answer is "nothing", the comment is a wish.
-4. **Two claims about the same function can coexist for as long as nothing
-   asks.** New, and it is trap 3 seen from the other side.
-   `Store::forget_document`'s doc comment promised to clear orphaned tags;
-   forty lines below, its own test asserted `"the tag itself survives"`. Both
-   readers were correctly describing what they were looking at, and no query
-   in the crate could tell them apart, because every tag-shaped query joins
-   `document_tags` and an orphan is invisible to a join. It surfaced only when
-   a new function had to count tags and pick which claim was true.
-
-   **The generalisation: when trap 3's answer is "nothing would fail", the
-   test beside the comment is free to say the opposite — and probably does.**
+> **A claim in the record is not a property of the repository.** D13 sat for
+> five sessions on a premise one command disproved. A question nobody can act
+> on gets re-read rather than re-checked, and re-reading is what preserved it.
