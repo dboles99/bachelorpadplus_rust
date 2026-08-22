@@ -3,7 +3,7 @@
 Written 2026-08-22, at the end of the twelfth build session.
 
 State: **25 crates, 1,972 tests, 0 ignored**, green on Windows and Linux
-across all eleven gate stages. 52 ADRs. The gate takes ~7 minutes.
+across all eleven gate stages. 53 ADRs. The gate takes ~7 minutes.
 
 > [ADR-0052](../docs/decisions/ADR-0052.md) fixed a text-destroying defect --
 > Enter twice in the find box replaced the match with a line break -- and it
@@ -116,7 +116,27 @@ Four commits, four ADRs. `16af4d6`, `f097cd5`, `c94806d`, `b6603e3`.
 
 ---
 
-## 2. Two decisions, and one of them was the wrong question
+## 2. Both decisions are answered, and the queue is empty
+
+**D2 and D13 were both answered on 2026-08-22.** `project/DECISIONS_NEEDED.md`
+has no open row for the first time in the project's history.
+
+- **D13: yes, `main` gets this work, by pull request** —
+  [ADR-0053](../docs/decisions/ADR-0053.md). Opening PR #2 is an agent's job;
+  **clicking merge is not**, and that is the only half of standing authority
+  2's exclusion that this answers.
+- **D2: keep `--editor-view` opt-in, unchanged** — [ADR-0018](../docs/decisions/ADR-0018.md),
+  amended. Neither re-ask condition has been met, and the tax *fell* from five
+  features to four.
+
+**What that leaves is the thing to notice.** An empty decision queue does not
+mean the work is scoped; it means the next question has not been asked yet.
+The candidate is **phase 10**: semantic search needs embeddings, nothing here
+computes one, and computing one runs into [ADR-0033](../docs/decisions/ADR-0033.md)
+and ADR-0006. Local model or the network is the largest unasked question in
+the product, and it is the last genuinely large unscoped thing.
+
+### How D13 read before it was corrected, because the shape recurs
 
 `project/DECISIONS_NEEDED.md` is the register. **D14 was answered and is
 gone** (no Markdown preview; Slint has no rich text).

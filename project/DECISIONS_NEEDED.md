@@ -18,28 +18,19 @@ reason these rows sit unanswered is that a session opens by *reading* rather
 than by *asking*. Do not wait for the answer before starting; do not stop
 halfway through an item to ask one thing.
 
-> Two decisions are open, neither blocking today's work:
+> **Nothing is open.** D2 and D13 were both answered on 2026-08-22 and are
+> recorded in [ADR-0018](../docs/decisions/ADR-0018.md) and
+> [ADR-0053](../docs/decisions/ADR-0053.md); D4 is prepared and needs a
+> reviewer rather than a decision
+> ([ADR-0050](../docs/decisions/ADR-0050.md)).
 >
-> 1. **Does `main` get the last 49 commits, and by PR again?** `main` already
->    holds this work up to `31f6858`, "Merge phases 1-19 into main (PR #1)";
->    the branch has run 49 commits past it since. So the established pattern
->    is a pull request, and the question is only whether to open the second
->    one now or keep going. **A fast-forward is not available** — the merge
->    commit is on `main` and not on the branch. **(D13, five sessions old,
->    and re-stated on 2026-08-22: the record had it wrong — see below.)**
-> 2. **Is `--editor-view`'s two-view fork still worth keeping?** Answered once
->    as "keep it opt-in". Four features work in only one view, down from five.
->    IME cannot work on Slint 1.17.1, so parity is unreachable until Slint
->    changes. **(D2 — re-ask only if the tax has become visible.)**
->
-> Not a question, and no longer unstarted: **D4, an outside review of
-> `bp-crypto`'s `.bpadx` envelope**. The brief is written --
-> [`docs/architecture/BPADX_ENVELOPE_REVIEW.md`](../docs/architecture/BPADX_ENVELOPE_REVIEW.md),
-> ADR-0050 -- so what remains is **finding a reviewer**, which is the half only
-> you can do. It is an hour of somebody's time now, not a project. Every
-> primitive is vetted RustCrypto; the *composition* is this project's own
-> design, which is exactly what an author cannot catch by re-reading their own
-> work.
+> That is a real state and it has a consequence worth saying out loud: **the
+> next substantial piece of work needs a decision that has not been asked
+> for yet.** The candidate is phase 10 — semantic search needs embeddings,
+> nothing in this product computes one, and computing one reaches
+> [ADR-0033](../docs/decisions/ADR-0033.md) and ADR-0006. Whether that runs
+> locally or leaves the machine is the largest unasked question in the
+> project.
 
 ---
 
@@ -58,10 +49,16 @@ halfway through an item to ask one thing.
 
 ## Open
 
-| # | Question | Blocks | Why it cannot be defaulted |
+**Empty, as of 2026-08-22.** The last two rows went the same day:
+
+| # | Question | Answer | Where it landed |
 | --- | --- | --- | --- |
-| D2 | **Is `--editor-view`'s two-view fork worth keeping indefinitely?** IME cannot work on Slint 1.17.1, so parity is unreachable until Slint changes. | Every future wiring item pays a small tax; **four** features work in only one view, down from five | Answered once already (keep opt-in). Re-ask only if the tax becomes visible, or Slint ships composition support. **The count fell on 2026-08-22** and the reason is worth weighing before re-asking: Go to Line was on that list by mistake, needing the caret *moved* rather than *read*. The remaining four genuinely need it read |
-| D13 | **Does `main` get the last 49 commits, and by PR again?** `main` is at `31f6858` — "Merge phases 1-19 into main (PR #1)" — so it already holds this work up to that point; the branch has run 49 commits past it. **The premise was re-checked on 2026-08-22 before the question was re-asked**, which is the habit trap 6 exists to install: `git log --oneline main..HEAD` counts 49 and `git merge-base --is-ancestor main HEAD` is false. | Nothing today. Everything, the first time a clone is made from `main` | **The record had this wrong for five sessions and nobody checked.** It said "111 commits live on the branch; `main` has none of them", which is false: `git merge-base --is-ancestor` puts most of the branch's history inside `main` already. Corrected 2026-08-22. What remains is genuinely a choice — open PR #2 now, or keep accumulating and merge at a milestone — but it is a much smaller one than the framing implied, and a fast-forward is simply unavailable because the merge commit sits on `main` alone |
+| D2 | Is `--editor-view`'s two-view fork worth keeping indefinitely? | **Keep it opt-in, unchanged.** Neither re-ask condition has been met: composition is still impossible on Slint 1.17.1, and the tax *fell* from five features to four | [ADR-0018](../docs/decisions/ADR-0018.md), amended |
+| D13 | Does `main` get this work, and by PR again? | **Yes, by pull request.** A fast-forward was never available; the merge commit sits on `main` alone. Opening the PR is an agent's job, clicking merge is not | [ADR-0053](../docs/decisions/ADR-0053.md) |
+
+**A queue that empties is not the same as a project that is finished**, and
+the difference is the whole reason this file exists. What it means is that the
+next question has to be *found* rather than answered — see the batch above.
 
 ## Answered, for context
 
@@ -90,7 +87,7 @@ ADRs.
 | Platform key protection (DPAPI/Hello/keyring) | Phase 16, not 15 | ADR-0021 |
 | Security profiles | All of them; profile model first | ADR-0020 |
 | YAML parser | `saphyr` | Phase 6, when it is taken |
-| Parity vs retiring the custom editor view | Keep it opt-in, revisit on a Slint upgrade | ROADMAP, WORK_QUEUE |
+| Parity vs retiring the custom editor view (D2) | Keep it opt-in; re-asked and reaffirmed 2026-08-22, with the tax measured and falling | ADR-0018, amended |
 | D11: may a huge document be viewable only under `--editor-view`? | No — it opens in the custom surface, read-only, in *every* build. The flag is about editing, and the reason it is opt-in (IME) has nothing to say about a read-only view | ADR-0030 |
 | D5: where does a signing key live? | Sealed in a `.bpadx` envelope under a passphrase. Contents protected rather than permissions, which closes the Windows/Linux asymmetry ADR-0026 measured | ADR-0031 |
 | D9: `bachelorpad` or reverse-DNS? | `io.github.dboles99.BachelorPadPlus`, and it stops being the same constant as `APP_DIR` | ADR-0032 |
