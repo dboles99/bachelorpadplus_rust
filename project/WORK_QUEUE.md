@@ -172,6 +172,8 @@ so whoever finishes an item updates them as part of it.
 | — | A clipped menu label is elided, and the reasons are short enough not to need it | ADR-0049. Found by driving |
 | — | `crate::testpaths`: a temp path a recycled pid cannot reuse | ADR-0049. A flake that got worse the more the suite was run |
 | — | Every menu row works or is a readout | ADR-0048. Ten built, eleven deleted; `planned_menu` and `arrives` gone |
+| — | D4's envelope review, prepared as a brief a stranger can act on | ADR-0050, `docs/architecture/BPADX_ENVELOPE_REVIEW.md` |
+| — | Golden vectors: a document sealed by an earlier build must still open | ADR-0050, `fuzz/tests/envelope.rs`. Nothing had ever asserted it |
 | — | Tools ▸ Security Inspector, File Analysis, Configuration | ADR-0048, ids 721-723 |
 | — | Note ▸ Tags, Recovery Checkpoints | ADR-0048, ids 87-88 |
 | — | Notebook ▸ Export as .ipynb | ADR-0048, id 747 |
@@ -204,9 +206,17 @@ may add to `AppWindow` in `app.slint` at a time.**
 
 ### Ready for an agent, now
 
-Nothing. What remains is in `project/DECISIONS_NEEDED.md`, a manual pass at
-the window, and the outside review of `bp-crypto`'s envelope that D4 asked for
-five sessions ago.
+Nothing. What remains is in `project/DECISIONS_NEEDED.md` and a manual pass at
+the window.
+
+**D4 has left this list.** The outside review of `bp-crypto`'s envelope was
+the largest unstarted work in the project for five sessions; its *preparation*
+was taken on 2026-08-22 and is
+[BPADX_ENVELOPE_REVIEW.md](../docs/architecture/BPADX_ENVELOPE_REVIEW.md).
+What is left of D4 is finding a reviewer, which is not a queue item because no
+agent can be one. **The lesson is worth more than the item**: a task that
+cannot be finished can usually be prepared, and five sessions read "an agent
+cannot do this" as "there is nothing here to do" ([ADR-0050](../docs/decisions/ADR-0050.md)).
 
 **One item came back and was taken the same session**: every menu row working
 (ADR-0048). It is worth remembering how it looked before it was measured --
