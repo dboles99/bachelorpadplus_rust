@@ -20,12 +20,13 @@ halfway through an item to ask one thing.
 
 > Two decisions are open, neither blocking today's work:
 >
-> 1. **Does `main` get this product, and how?** ~120 commits live on
->    `feat/phase-01-foundation-ui`; `main` has none of them. Fast-forward
->    (keeps every commit, admits the branch name was wrong), squash (clean
->    history, loses a record this project has been unusually careful to
->    build), or leave it — which is also a decision and should be a stated
->    one. **(D13, five sessions old.)**
+> 1. **Does `main` get the last 48 commits, and by PR again?** `main` already
+>    holds this work up to `31f6858`, "Merge phases 1-19 into main (PR #1)";
+>    the branch has run 48 commits past it since. So the established pattern
+>    is a pull request, and the question is only whether to open the second
+>    one now or keep going. **A fast-forward is not available** — the merge
+>    commit is on `main` and not on the branch. **(D13, five sessions old,
+>    and re-stated on 2026-08-22: the record had it wrong — see below.)**
 > 2. **Is `--editor-view`'s two-view fork still worth keeping?** Answered once
 >    as "keep it opt-in". Four features work in only one view, down from five.
 >    IME cannot work on Slint 1.17.1, so parity is unreachable until Slint
@@ -57,7 +58,7 @@ halfway through an item to ask one thing.
 | # | Question | Blocks | Why it cannot be defaulted |
 | --- | --- | --- | --- |
 | D2 | **Is `--editor-view`'s two-view fork worth keeping indefinitely?** IME cannot work on Slint 1.17.1, so parity is unreachable until Slint changes. | Every future wiring item pays a small tax; **four** features work in only one view, down from five | Answered once already (keep opt-in). Re-ask only if the tax becomes visible, or Slint ships composition support. **The count fell on 2026-08-22** and the reason is worth weighing before re-asking: Go to Line was on that list by mistake, needing the caret *moved* rather than *read*. The remaining four genuinely need it read |
-| D13 | **Does `main` get this product, and how?** 111 commits live on `feat/phase-01-foundation-ui`; `main` has none of them. | Nothing today. Everything, the first time a clone is made from `main`, or the branch is lost | `README.md`, `ROADMAP.md` and this project's own housekeeping have called it "the item most likely to hurt and least likely to be noticed" for four sessions. It is not defaultable because the options differ in what they say: a fast-forward merge keeps every commit and admits the branch name was wrong; a squash makes `main` a clean history and loses a record this project has been unusually careful to build; leaving it is a decision too, and should be a stated one rather than a habit |
+| D13 | **Does `main` get the last 48 commits, and by PR again?** `main` is at `31f6858` — "Merge phases 1-19 into main (PR #1)" — so it already holds this work up to that point; the branch has run 48 commits past it. | Nothing today. Everything, the first time a clone is made from `main` | **The record had this wrong for five sessions and nobody checked.** It said "111 commits live on the branch; `main` has none of them", which is false: `git merge-base --is-ancestor` puts most of the branch's history inside `main` already. Corrected 2026-08-22. What remains is genuinely a choice — open PR #2 now, or keep accumulating and merge at a milestone — but it is a much smaller one than the framing implied, and a fast-forward is simply unavailable because the merge commit sits on `main` alone |
 
 ## Answered, for context
 
