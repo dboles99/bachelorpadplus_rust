@@ -18,29 +18,13 @@ reason these rows sit unanswered is that a session opens by *reading* rather
 than by *asking*. Do not wait for the answer before starting; do not stop
 halfway through an item to ask one thing.
 
-> **Two questions, and the first one is small.**
+> **Nothing is open.** D15 and D16 were both answered on 2026-08-23 and are
+> recorded in [ADR-0055](../docs/decisions/ADR-0055.md) and
+> [ADR-0056](../docs/decisions/ADR-0056.md). D4 is still prepared and needs a
+> reviewer rather than a decision ([ADR-0050](../docs/decisions/ADR-0050.md)).
 >
-> **D15 — signing needs a certificate, and only you can get one.** Phase 20
-> started on 2026-08-23 ([ADR-0054](../docs/decisions/ADR-0054.md)) and the
-> artefact half of it is ordinary work except for this. A self-signed
-> certificate makes Windows SmartScreen *worse*, not better, so the real
-> options are: **buy an OV or EV code-signing certificate** (a few hundred a
-> year, and EV needs a hardware token), **ship unsigned** and accept the
-> SmartScreen warning on every download, or **defer signing** and package
-> unsigned for now with the rest built so signing is one step when a
-> certificate exists. Linux is unaffected -- a detached signature and a
-> checksum need no authority. Which?
->
-> **D16 — phase 10 needs embeddings, and nothing here computes one.** This is
-> the question `DECISIONS_NEEDED.md` said on 2026-08-22 had not been asked
-> yet, and it is the last genuinely large unscoped thing in the product.
-> Semantic search needs a vector per document. Computing one either runs a
-> **model locally** -- a large dependency, a model file to ship or download,
-> and a first-run cost, but ADR-0006 holds untouched -- or sends document
-> text to a **network service**, which ADR-0033 permits only opt-in per use
-> and never automatically, and which ADR-0006 forbids for anything core.
-> A third answer is real: **drop phase 10** and let the lexical search that
-> already ships be the search this product has. Which?
+> **`project/WORK_QUEUE.md` has seven ready items**, and none of them is
+> blocked on anything. Take a batch and start.
 
 ---
 
@@ -59,13 +43,21 @@ halfway through an item to ask one thing.
 
 ## Open
 
-**Two rows, opened 2026-08-23.** The file was empty for one day, which is
-exactly as long as it took to find work whose next step is a decision.
+**Empty, as of 2026-08-23.** Both rows lasted less than a day, and the second
+of them is the more interesting.
 
-| # | Question | Why it blocks | Default if you would rather not decide |
+| # | Question | Answer | Where it landed |
 | --- | --- | --- | --- |
-| D15 | Buy a code-signing certificate, ship unsigned, or defer? | The rest of phase 20's artefact work can proceed either way, but the *release* cannot be described honestly until this is answered -- "signed" and "unsigned" are different products to a Windows user | **Defer.** Build the archive, the checksums and the Linux detached signature; leave a signing step that is one command when a certificate exists. Nothing is wasted and nothing is claimed |
-| D16 | Local model, opt-in network, or drop phase 10? | Phase 10 cannot be sized at all until it is answered. This is the "undecided reads like large" pattern in `DECISIONS.md`, and it has caught this project four times | **None.** This one genuinely needs you: it is a decision about what the product *is*, and all three answers are defensible |
+| D15 | Buy a code-signing certificate, ship unsigned, or defer? | **Defer**, and refuse self-signing outright -- it is worse than unsigned, because it teaches a user to install a root certificate to run a text editor. Build the archive, the checksums and a signing step that is one command | [ADR-0055](../docs/decisions/ADR-0055.md) |
+| D16 | Local model, opt-in network, or drop phase 10? | **All three, as choices** -- and looking found the choice already existed. `bp_security::Embeddings` has carried `Cloud`/`Local`/`None` since ADR-0020, with a per-profile mapping and a doc comment reading *"Phase 10 reads this"*. What was actually undecided was smaller: the profile is a ceiling, `None` is the default, and `Cloud` needs a per-use gesture on top of a policy that permits it | [ADR-0056](../docs/decisions/ADR-0056.md) |
+
+**D16 is worth one more sentence than its row.** It sat for two sessions as
+"the largest unasked question in the project" while its answer was in
+`crates/bp-security/src/lib.rs`. The habit that catches that is trap 6 pointed
+the other way: **before asking a question, grep for its answer.** A decision
+recorded in a type is still a decision, and it is the kind least likely to be
+re-read, because nothing about a queue of questions suggests looking in
+`src/`.
 
 ## Answered on 2026-08-22, kept one more session
 
@@ -76,13 +68,17 @@ The last two rows before the file emptied:
 | D2 | Is `--editor-view`'s two-view fork worth keeping indefinitely? | **Keep it opt-in, unchanged.** Neither re-ask condition has been met: composition is still impossible on Slint 1.17.1, and the tax *fell* from five features to four | [ADR-0018](../docs/decisions/ADR-0018.md), amended |
 | D13 | Does `main` get this work, and by PR again? | **Yes, by pull request.** A fast-forward was never available; the merge commit sits on `main` alone. Opening the PR is an agent's job, clicking merge is not | [ADR-0053](../docs/decisions/ADR-0053.md) |
 
-**The queue emptied on 2026-08-22 and refilled on 2026-08-23**, and the
-mechanism is worth naming because it is the answer to "what do you do when
-there are no questions left": **take the work whose shape is known, and it
-will produce the next question.** Phase 20 was the only *Not started* phase
-not blocked on a decision (ADR-0053 said so); starting it produced D15 within
-an afternoon. D16 was not found this way -- it was already named as unasked --
-but it is now written where it can be answered rather than described.
+**The queue emptied on 2026-08-22, refilled on 2026-08-23, and emptied again
+the same day** -- and the cycle is the useful part, not the state at either
+end. The answer to "what do you do when there are no questions left" is:
+**take the work whose shape is known, and it will produce the next question.**
+Phase 20 was the only *Not started* phase not blocked on a decision (ADR-0053
+said so); starting it produced D15 within an afternoon, and D15 took one
+message to answer.
+
+**An empty queue is not an idle state and never has been.** Both times this
+file has emptied, `WORK_QUEUE.md` had work in it that needed no decision at
+all.
 
 ## Answered, for context
 

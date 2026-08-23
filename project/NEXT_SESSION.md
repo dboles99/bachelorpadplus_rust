@@ -3,17 +3,23 @@
 Written 2026-08-23, at the end of the thirteenth build session.
 
 State: **25 crates, 1,986 tests on Windows and 1,991 on Linux, 0 ignored**,
-green across all eleven gate stages. 54 ADRs. The gate takes ~13 minutes with
+green across all eleven gate stages. 56 ADRs. The gate takes ~13 minutes with
 both legs.
 
-> **Phase 20 has started, and the queue is not empty any more.**
-> [ADR-0054](../docs/decisions/ADR-0054.md). The command line is an interface
-> now: `--help` lists thirteen flags, `--version` names the product and its
-> licence, `--line=427 server.log` opens a file already at the line, and a
-> mistyped flag says so instead of vanishing. The licences every manifest has
-> claimed since the scaffold commit exist.
+> **Phase 20 started and this product now produces a release.**
+> [ADR-0054](../docs/decisions/ADR-0054.md) made the command line an
+> interface -- `--help` lists thirteen flags, `--version` names the product
+> and its licence, `--line=427 server.log` opens a file already at the line,
+> and a mistyped flag says so instead of vanishing.
+> [ADR-0055](../docs/decisions/ADR-0055.md) deferred signing and refused
+> self-signing, and `scripts/New-Release.ps1` builds, stages, archives and
+> checksums both targets. Both archives were extracted and run.
 >
-> **What that leaves is the first real artefact work in the project.** See §3.
+> [ADR-0056](../docs/decisions/ADR-0056.md) closed the last large unscoped
+> question, D16, by finding its answer already in `bp_security`.
+
+State also worth one line: **three ADRs in one day, and two of them closed
+questions this file had described for two sessions as large.**
 
 ---
 
@@ -169,20 +175,21 @@ Four commits, four ADRs. `16af4d6`, `f097cd5`, `c94806d`, `b6603e3`.
 
 ---
 
-## 2. Two questions are open, and both are in the batch
+## 2. Both questions were answered the same day
 
-`project/DECISIONS_NEEDED.md` was empty for exactly one day.
+`project/DECISIONS_NEEDED.md` emptied on 2026-08-22, refilled on
+2026-08-23, and emptied again the same day.
 
-- **D15 — signing needs a certificate.** Buy OV or EV, ship unsigned, or
-  defer? It gates how a release is *described*, not whether it can be built,
-  and the honest default is **defer**: build the archive, the checksums and
-  the Linux detached signature, and leave signing a single step for when a
-  certificate exists. Nothing is wasted and nothing is claimed.
-- **D16 — phase 10 needs embeddings.** Local model, opt-in network, or drop
-  the phase? This is the question this file said on 2026-08-22 had not been
-  asked yet. It is now asked, with the three answers written out, because a
-  question described is not a question asked -- which is the same failure
-  mode D13 spent six sessions in.
+- **D15 — signing:** **defer**, and refuse self-signing outright
+  ([ADR-0055](../docs/decisions/ADR-0055.md)). It gated one sentence in a
+  README, not the work.
+- **D16 — embeddings:** **all three sources, as choices**
+  ([ADR-0056](../docs/decisions/ADR-0056.md)) — and looking found the choice
+  already existed. `bp_security::Embeddings` has carried `Cloud`/`Local`/`None`
+  since ADR-0020, with a per-profile mapping and a doc comment reading
+  *"Phase 10 reads this"*. Two sessions called it the largest unasked question
+  in the project while its answer sat in `src/`. **Before asking a question,
+  grep for its answer.**
 
 **PR #2 is open** and has been since 2026-08-22; clicking merge stays yours
 (ADR-0053). This session added four commits' worth of work to it.
@@ -221,18 +228,23 @@ did nothing else about it either. **"I cannot do this" is not the same as
 
 ## 3. What to do, in priority order
 
-### a. Phase 20's artefact half — the five ready items in `WORK_QUEUE.md`
+### a. What is left of phase 20's artefact half
 
-**This is the top of the list and it is ordinary work.** P1 (a release script
-that builds both legs, stages the binary with the two licences, archives and
-checksums), P3 (upgrade testing against files an *earlier build* wrote --
-trap 7, with `fuzz/tests/envelope.rs` as the pattern) and P4 (the `bpad`
-short spelling) need no decision at all. P2 (icon and `.desktop`) carries a
-**dependency decision** -- Windows takes an executable's icon from a
-build-time resource -- so it wants an ADR, not just a commit.
+**P1 and P4 landed on 2026-08-23**: `scripts/New-Release.ps1` builds, stages,
+archives and checksums both targets, and both archives were extracted and run
+before it was called done. What remains:
 
-Take them as a batch: they share one entry cost, which is "what does a
-release actually consist of".
+- **P3, upgrade testing** — a config file, a recent list, a security history
+  and a recovery journal written by 0.1.0, opened by the next build. Trap 7
+  exactly, and `fuzz/tests/envelope.rs` is the pattern. **Ordinary work, no
+  decision.**
+- **P2, an icon and the `.desktop` file** — `AppInfo::bachelorpad` already
+  names its icon after `APP_ID` and there is no icon anywhere in the tree.
+  Windows takes one from a build-time resource, which is **a new dependency
+  and therefore an ADR**.
+- **P5, an installer, or a decision that there is not one** — new, and only
+  askable now an archive exists. A zip that unpacks anywhere is a defensible
+  answer for this product. **Decision before estimate.**
 
 ### ~~b. D4 — prepare the envelope review~~ **Done, ADR-0050**
 

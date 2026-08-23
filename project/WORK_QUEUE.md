@@ -184,6 +184,8 @@ so whoever finishes an item updates them as part of it.
 | — | `--line=N`, made of exactly what Ctrl+G does | ADR-0054. Driven on the release binary under both editor surfaces |
 | — | `LICENSE-MIT` and `LICENSE-APACHE`, which every manifest had claimed since the scaffold commit | ADR-0054 |
 | — | `Drive-Window.ps1 -Flag`, because a flag does its work at startup | ADR-0054. There was no way to drive one |
+| P1 | A release script, both targets, with checksums | `scripts/New-Release.ps1` and `scripts/release-linux.sh`. Unsigned by ADR-0055, and it says so every run |
+| P4 | The `bpad` short spelling | Same change. A symlink on Linux, a `.cmd` shim on Windows -- not a second 21 MB copy |
 | — | Tools ▸ Security Inspector, File Analysis, Configuration | ADR-0048, ids 721-723 |
 | — | Note ▸ Tags, Recovery Checkpoints | ADR-0048, ids 87-88 |
 | — | Notebook ▸ Export as .ipynb | ADR-0048, id 747 |
@@ -220,25 +222,47 @@ may add to `AppWindow` in `app.slint` at a time.**
 "what does a release actually consist of". Phase 20 started on 2026-08-23
 ([ADR-0054](../docs/decisions/ADR-0054.md)); what shipped was the half a
 person meets at the command line, and what is listed here is the half they
-download. None of it is blocked: **D15 decides whether the result is signed,
-not whether it can be built**, and the honest default is to build everything
-and leave signing a single step.
+download. None of it is blocked, and **D15 has been answered: defer**
+([ADR-0055](../docs/decisions/ADR-0055.md)). Build everything and leave
+signing a single step.
+
+**P1 and P4 are done** -- `scripts/New-Release.ps1` builds, stages, archives
+and checksums both targets, and both archives have been extracted and run.
+What is left:
 
 | # | Item | Why it is ready |
 | --- | --- | --- |
-| P1 | A release script: build both legs, stage the binary with `README.md`, `LICENSE-MIT` and `LICENSE-APACHE`, archive, and write a SHA-256 for each archive | Nothing produces a shippable thing today. `Invoke-LocalCI.ps1` is the model for the two-leg shape, WSL leg included |
 | P2 | An application icon, and the `.desktop` file `bp_platform::editor::desktop` already knows how to write | `AppInfo::bachelorpad` names its icon after `APP_ID` and there is no icon anywhere in the tree. Windows takes it from the executable, which needs a build-time resource -- **a new dependency, so an ADR** |
 | P3 | Upgrade testing: a config file, a recent list, a security history and a recovery journal written by 0.1.0, opened by the next build | Trap 7 exactly, and `fuzz/tests/envelope.rs` is the pattern -- committed bytes from an earlier build, not a round trip through this one |
-| P4 | The `bpad` short spelling `specs.md` §19 promises | A second name for one executable is an installer's job, so it lands with P1 |
+| P5 | An installer, or a decision that there is not one | New, and it only became askable once an archive existed. A zip that unpacks anywhere is a defensible answer for this product; so is MSI or winget. **A decision before an estimate** |
 
-**Sized honestly: P1 and P3 are ordinary work. P2 carries a dependency
-decision and P4 is an hour inside P1.**
+**Sized honestly: P3 is ordinary work. P2 carries a dependency decision and
+P5 is a decision first.**
 
 ### Also ready, and not packaging
 
 | # | Item | Why it is ready |
 | --- | --- | --- |
 | R1 | `--readonly`, or rather what it should be instead | ADR-0054 declined it as a *flag* and did not decline the capability. Read-only is a document property; the huge-document viewer is already one and Security ▸ Lock Document is another. **A design pass, not wiring** -- and the pass is mostly "are these three the same thing?" |
+
+### Phase 10, which is three items rather than a phase
+
+**D16 was answered on 2026-08-23 and the answer made it sizeable**
+([ADR-0056](../docs/decisions/ADR-0056.md)): all three sources, with the
+profile as a ceiling, `None` as the default, and `Cloud` behind a per-use
+gesture. `bp_security::Embeddings` has held the three values since ADR-0020.
+
+**Take E1 first. It needs neither provider to exist**, which is the whole
+reason phase 10 stopped being one large thing.
+
+| # | Item | Why it is ready, and what it must not do |
+| --- | --- | --- |
+| E1 | The store side: a column for a vector, a nearest-neighbour query over it, and the `Network`/`Embeddings` agreement a hand-built `Policy` can currently violate | `bp-storage` already has migrations and specs.md §21 already names embeddings. **Must work with zero vectors stored** -- that is the `None` default, and it is every user until a provider ships |
+| E2 | A `Local` provider | **Carries a dependency decision, so it carries an ADR.** Ship or fetch weights explicitly, never silently on first use; work offline once present, because a `Local` that phones home is `Cloud` renamed; degrade to `None` with a notice when the model is absent, the way `bp-config` treats a broken file |
+| E3 | A `Cloud` provider, behind `UserGesture` | Needs an explicit `Policy` -- no named profile grants `Cloud` and this does not change that. **Also the third `UserGesture`**, which is where unifying `bp-execution`'s and `bp-notebook`'s stops being optional |
+
+**None of the three is Semantic Search the menu row.** That row is
+`menus.rs`'s and it arrives after E1 and one provider, not before.
 
 What else remains is in `project/DECISIONS_NEEDED.md` and a manual pass at
 the window.
