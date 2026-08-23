@@ -18,19 +18,29 @@ reason these rows sit unanswered is that a session opens by *reading* rather
 than by *asking*. Do not wait for the answer before starting; do not stop
 halfway through an item to ask one thing.
 
-> **Nothing is open.** D2 and D13 were both answered on 2026-08-22 and are
-> recorded in [ADR-0018](../docs/decisions/ADR-0018.md) and
-> [ADR-0053](../docs/decisions/ADR-0053.md); D4 is prepared and needs a
-> reviewer rather than a decision
-> ([ADR-0050](../docs/decisions/ADR-0050.md)).
+> **Two questions, and the first one is small.**
 >
-> That is a real state and it has a consequence worth saying out loud: **the
-> next substantial piece of work needs a decision that has not been asked
-> for yet.** The candidate is phase 10 — semantic search needs embeddings,
-> nothing in this product computes one, and computing one reaches
-> [ADR-0033](../docs/decisions/ADR-0033.md) and ADR-0006. Whether that runs
-> locally or leaves the machine is the largest unasked question in the
-> project.
+> **D15 — signing needs a certificate, and only you can get one.** Phase 20
+> started on 2026-08-23 ([ADR-0054](../docs/decisions/ADR-0054.md)) and the
+> artefact half of it is ordinary work except for this. A self-signed
+> certificate makes Windows SmartScreen *worse*, not better, so the real
+> options are: **buy an OV or EV code-signing certificate** (a few hundred a
+> year, and EV needs a hardware token), **ship unsigned** and accept the
+> SmartScreen warning on every download, or **defer signing** and package
+> unsigned for now with the rest built so signing is one step when a
+> certificate exists. Linux is unaffected -- a detached signature and a
+> checksum need no authority. Which?
+>
+> **D16 — phase 10 needs embeddings, and nothing here computes one.** This is
+> the question `DECISIONS_NEEDED.md` said on 2026-08-22 had not been asked
+> yet, and it is the last genuinely large unscoped thing in the product.
+> Semantic search needs a vector per document. Computing one either runs a
+> **model locally** -- a large dependency, a model file to ship or download,
+> and a first-run cost, but ADR-0006 holds untouched -- or sends document
+> text to a **network service**, which ADR-0033 permits only opt-in per use
+> and never automatically, and which ADR-0006 forbids for anything core.
+> A third answer is real: **drop phase 10** and let the lexical search that
+> already ships be the search this product has. Which?
 
 ---
 
@@ -43,22 +53,36 @@ halfway through an item to ask one thing.
   not a record — `DECISIONS.md` is the record.
 - A question that turns out to have an obvious default is not a question. Pick
   the default, say so, and move on.
-- **Keep the batch and the table in step.** They are the same three questions
+- **Keep the batch and the table in step.** They are the same questions
   written twice, once to ask and once to reason about, and a batch that has
   drifted from the table is worse than no batch.
 
 ## Open
 
-**Empty, as of 2026-08-22.** The last two rows went the same day:
+**Two rows, opened 2026-08-23.** The file was empty for one day, which is
+exactly as long as it took to find work whose next step is a decision.
+
+| # | Question | Why it blocks | Default if you would rather not decide |
+| --- | --- | --- | --- |
+| D15 | Buy a code-signing certificate, ship unsigned, or defer? | The rest of phase 20's artefact work can proceed either way, but the *release* cannot be described honestly until this is answered -- "signed" and "unsigned" are different products to a Windows user | **Defer.** Build the archive, the checksums and the Linux detached signature; leave a signing step that is one command when a certificate exists. Nothing is wasted and nothing is claimed |
+| D16 | Local model, opt-in network, or drop phase 10? | Phase 10 cannot be sized at all until it is answered. This is the "undecided reads like large" pattern in `DECISIONS.md`, and it has caught this project four times | **None.** This one genuinely needs you: it is a decision about what the product *is*, and all three answers are defensible |
+
+## Answered on 2026-08-22, kept one more session
+
+The last two rows before the file emptied:
 
 | # | Question | Answer | Where it landed |
 | --- | --- | --- | --- |
 | D2 | Is `--editor-view`'s two-view fork worth keeping indefinitely? | **Keep it opt-in, unchanged.** Neither re-ask condition has been met: composition is still impossible on Slint 1.17.1, and the tax *fell* from five features to four | [ADR-0018](../docs/decisions/ADR-0018.md), amended |
 | D13 | Does `main` get this work, and by PR again? | **Yes, by pull request.** A fast-forward was never available; the merge commit sits on `main` alone. Opening the PR is an agent's job, clicking merge is not | [ADR-0053](../docs/decisions/ADR-0053.md) |
 
-**A queue that empties is not the same as a project that is finished**, and
-the difference is the whole reason this file exists. What it means is that the
-next question has to be *found* rather than answered — see the batch above.
+**The queue emptied on 2026-08-22 and refilled on 2026-08-23**, and the
+mechanism is worth naming because it is the answer to "what do you do when
+there are no questions left": **take the work whose shape is known, and it
+will produce the next question.** Phase 20 was the only *Not started* phase
+not blocked on a decision (ADR-0053 said so); starting it produced D15 within
+an afternoon. D16 was not found this way -- it was already named as unasked --
+but it is now written where it can be answered rather than described.
 
 ## Answered, for context
 

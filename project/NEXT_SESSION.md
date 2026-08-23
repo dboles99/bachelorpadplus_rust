@@ -1,31 +1,40 @@
 # Next session plan
 
-Written 2026-08-22, at the end of the twelfth build session.
+Written 2026-08-23, at the end of the thirteenth build session.
 
-State: **25 crates, 1,972 tests, 0 ignored**, green on Windows and Linux
-across all eleven gate stages. 53 ADRs. The gate takes ~7 minutes.
+State: **25 crates, 1,986 tests on Windows and 1,991 on Linux, 0 ignored**,
+green across all eleven gate stages. 54 ADRs. The gate takes ~13 minutes with
+both legs.
 
-> [ADR-0052](../docs/decisions/ADR-0052.md) fixed a text-destroying defect --
-> Enter twice in the find box replaced the match with a line break -- and it
-> is **confirmed at the keyboard**, both bars. It needed two people: the
-> session found it by driving and then lost the desktop's foreground, so
-> `SendKeys` was gone before the fix could be checked. That constraint will
-> recur; the ADR says what to do about it, which is not to invent another
-> input path.
+> **Phase 20 has started, and the queue is not empty any more.**
+> [ADR-0054](../docs/decisions/ADR-0054.md). The command line is an interface
+> now: `--help` lists thirteen flags, `--version` names the product and its
+> licence, `--line=427 server.log` opens a file already at the line, and a
+> mistyped flag says so instead of vanishing. The licences every manifest has
+> claimed since the scaffold commit exist.
+>
+> **What that leaves is the first real artefact work in the project.** See §3.
 
 ---
 
 ## Where this leaves things
 
 **Every menu row in the product either does something or is a readout**, and a
-test says so ([ADR-0048](../docs/decisions/ADR-0048.md)). `WORK_QUEUE.md`'s
-Tier 0 is empty. Nothing anywhere says "not implemented yet".
+test says so ([ADR-0048](../docs/decisions/ADR-0048.md)). Nothing anywhere
+says "not implemented yet".
 
-That is not "finished". It is a specific state, and it is the third time this
-project has reached it: **the next piece of work needs a decision before it
-can be sized.** The difference this time is that the queue emptied for a
-reason worth remembering — of 38 rows that looked like a backlog, most had
-already shipped under other names, and eleven were better deleted than built.
+**The queue emptied on 2026-08-22 and refilled on 2026-08-23**, and the
+mechanism is the useful part. For three sessions this file has said the
+project keeps reaching a state where "the next piece of work needs a decision
+before it can be sized". That was true and it was not the whole truth. The
+answer to an empty queue turns out to be: **take the work whose shape is
+already known, and it will produce the next question.** ADR-0053 had already
+named one such piece — phase 20 was the only *Not started* phase not blocked
+on a decision — and starting it produced D15 inside an afternoon, plus four
+defects nobody had a reason to look for.
+
+`WORK_QUEUE.md` now has five ready items again, all of them phase 20's
+artefact half plus one design pass.
 
 ---
 
@@ -42,7 +51,51 @@ already shipped under other names, and eleven were better deleted than built.
 
 ## 1. What the last session did, so nobody re-derives it
 
-**The twelfth session took `NEXT_SESSION.md` §3a and finished it.**
+**The thirteenth session started phase 20**, inventory first as ADR-0048
+recommends, and the inventory found four things in a product 1,972 passing
+tests deep ([ADR-0054](../docs/decisions/ADR-0054.md)):
+
+- **The binary could not say its own version.** `--version` printed nothing
+  and opened a window; so did `--help`. Twelve flags were accepted and the
+  only inventory of them was `main.rs` and the middle of a `match`.
+- **A mistyped flag was discarded in silence** -- by the crate that already
+  reports the identical mistake in `config.toml`. One end of one precedence
+  chain told the user and the other swallowed it, and nobody had chosen that.
+- **Every manifest claimed `MIT OR Apache-2.0` and neither licence file
+  existed.** Trap 3 in its purest form: nothing in a build reads the string,
+  so nothing would have failed until a release shipped a claim with nothing
+  behind it.
+- **`specs.md` §19 advertised three flags that did not exist**, one of which
+  made `bachelorpad --line 427 server.log` try to open a file called `427`.
+
+All four are fixed. `--line=N` is built out of exactly what Ctrl+G does --
+the same `go_to_line`, the same `reveal` -- and **confirmed by driving the
+release binary under both editor surfaces**: line 555 of a 900-line document
+at the top of the viewport, highlighted, with the custom surface's status bar
+reading `Ln 555, Col 49`. `--large-file` was deleted (a decision had already
+obsoleted it) and `--readonly` declined as a *flag* and queued as a design
+pass, because read-only is a property of a document and this product already
+has two of those.
+
+**Two things worth not re-deriving:**
+
+- **A Windows release build is GUI-subsystem, so stdout goes nowhere when no
+  console is attached** -- and Rust tolerates the invalid handle rather than
+  panicking, so the text is simply dropped and exit stays 0. Measured three
+  ways, in ADR-0054's table. `AttachConsole` would fix it and costs `unsafe`
+  plus a Windows dependency to serve somebody double-clicking a text editor
+  in order to read its `--help`. Conceded deliberately.
+- **`Drive-Window.ps1` gained `-Flag`.** A flag does its work at startup, so
+  driving one means launching with it and photographing the first frame.
+  There was no way to do that before.
+
+**The gate failed once and it was worth the run**: `clippy::double_must_use`,
+because `Result` already carries `#[must_use]`. Both legs, same line, and
+nothing else in eleven stages.
+
+### The twelfth session, for context
+
+**It took `NEXT_SESSION.md` §3a and finished it.**
 [ADR-0050](../docs/decisions/ADR-0050.md):
 [BPADX_ENVELOPE_REVIEW.md](../docs/architecture/BPADX_ENVELOPE_REVIEW.md) is
 the brief D4 needed -- the byte layout, the four call sites, a self-audit
@@ -116,25 +169,27 @@ Four commits, four ADRs. `16af4d6`, `f097cd5`, `c94806d`, `b6603e3`.
 
 ---
 
-## 2. Both decisions are answered, and the queue is empty
+## 2. Two questions are open, and both are in the batch
 
-**D2 and D13 were both answered on 2026-08-22.** `project/DECISIONS_NEEDED.md`
-has no open row for the first time in the project's history.
+`project/DECISIONS_NEEDED.md` was empty for exactly one day.
 
-- **D13: yes, `main` gets this work, by pull request** —
-  [ADR-0053](../docs/decisions/ADR-0053.md). Opening PR #2 is an agent's job;
-  **clicking merge is not**, and that is the only half of standing authority
-  2's exclusion that this answers.
-- **D2: keep `--editor-view` opt-in, unchanged** — [ADR-0018](../docs/decisions/ADR-0018.md),
-  amended. Neither re-ask condition has been met, and the tax *fell* from five
-  features to four.
+- **D15 — signing needs a certificate.** Buy OV or EV, ship unsigned, or
+  defer? It gates how a release is *described*, not whether it can be built,
+  and the honest default is **defer**: build the archive, the checksums and
+  the Linux detached signature, and leave signing a single step for when a
+  certificate exists. Nothing is wasted and nothing is claimed.
+- **D16 — phase 10 needs embeddings.** Local model, opt-in network, or drop
+  the phase? This is the question this file said on 2026-08-22 had not been
+  asked yet. It is now asked, with the three answers written out, because a
+  question described is not a question asked -- which is the same failure
+  mode D13 spent six sessions in.
 
-**What that leaves is the thing to notice.** An empty decision queue does not
-mean the work is scoped; it means the next question has not been asked yet.
-The candidate is **phase 10**: semantic search needs embeddings, nothing here
-computes one, and computing one runs into [ADR-0033](../docs/decisions/ADR-0033.md)
-and ADR-0006. Local model or the network is the largest unasked question in
-the product, and it is the last genuinely large unscoped thing.
+**PR #2 is open** and has been since 2026-08-22; clicking merge stays yours
+(ADR-0053). This session added four commits' worth of work to it.
+
+**D4 remains prepared and undischarged.** The brief is
+[BPADX_ENVELOPE_REVIEW.md](../docs/architecture/BPADX_ENVELOPE_REVIEW.md);
+what is left is finding a reviewer, which no agent can be.
 
 ### How D13 read before it was corrected, because the shape recurs
 
@@ -166,7 +221,20 @@ did nothing else about it either. **"I cannot do this" is not the same as
 
 ## 3. What to do, in priority order
 
-### a. ~~D4 — prepare the envelope review~~ **Done, ADR-0050**
+### a. Phase 20's artefact half — the five ready items in `WORK_QUEUE.md`
+
+**This is the top of the list and it is ordinary work.** P1 (a release script
+that builds both legs, stages the binary with the two licences, archives and
+checksums), P3 (upgrade testing against files an *earlier build* wrote --
+trap 7, with `fuzz/tests/envelope.rs` as the pattern) and P4 (the `bpad`
+short spelling) need no decision at all. P2 (icon and `.desktop`) carries a
+**dependency decision** -- Windows takes an executable's icon from a
+build-time resource -- so it wants an ADR, not just a commit.
+
+Take them as a batch: they share one entry cost, which is "what does a
+release actually consist of".
+
+### ~~b. D4 — prepare the envelope review~~ **Done, ADR-0050**
 
 What is left of it is Daniel's: send
 [BPADX_ENVELOPE_REVIEW.md](../docs/architecture/BPADX_ENVELOPE_REVIEW.md) and
@@ -181,7 +249,7 @@ and a "no" to any of them is an ADR and a format version:
    and an Ed25519 signing seed share one construction with nothing telling
    them apart.
 
-### b. Drive the window over things that are not dialogs
+### c. Drive the window over things that are not dialogs
 
 **Three of the four rows here were done on 2026-08-22 and found four defects**
 ([ADR-0051](../docs/decisions/ADR-0051.md)). What is left:
@@ -221,7 +289,7 @@ produced a 1x1 capture on the first run of the session), and `-Keys` takes a
 **list** -- `-Keys "^g","555{ENTER}"` -- because one send cannot drive a bar
 that takes the caret a tick later.
 
-### c. The one unexplained failure
+### d. The one unexplained failure
 
 A Linux gate run failed once on 2026-08-22 and never again. `nextest` exits
 100 for a test failure, so something genuinely failed; five whole-suite Linux
@@ -256,9 +324,11 @@ Honest inventory, for whoever wants to size something:
   undo entry, and it can only work under `--editor-view`. A real feature with
   a real design pass in front of it.
 - **Phase 10, semantic search.** Needs embeddings; nothing computes one, and
-  doing so reaches [ADR-0033](../docs/decisions/ADR-0033.md).
-- **Phase 20, packaging and release.** Not started, and the first thing that
-  would make "does `main` get this" matter.
+  doing so reaches [ADR-0033](../docs/decisions/ADR-0033.md). **Now D16**, so
+  it is a question in the queue rather than a paragraph in this file.
+- ~~**Phase 20, packaging and release.** Not started~~ **Started 2026-08-23**,
+  ADR-0054. The half a person meets at the command line is done; the half they
+  download is `WORK_QUEUE.md`'s P1-P4 and is the top of §3 above.
 - **Print.** Platform work with no cross-platform story yet.
 - ~~**`benches/` holds a README and no benchmark**~~ **Done, 2026-08-22.**
   `cargo bench -p bp-editor --bench scroll` measures the half of ADR-0017's
