@@ -230,14 +230,12 @@ did nothing else about it either. **"I cannot do this" is not the same as
 
 ### a. What is left of phase 20's artefact half
 
-**P1 and P4 landed on 2026-08-23**: `scripts/New-Release.ps1` builds, stages,
-archives and checksums both targets, and both archives were extracted and run
-before it was called done. What remains:
+**P1, P3 and P4 landed on 2026-08-23**: `scripts/New-Release.ps1` builds,
+stages, archives and checksums both targets, and both archives were extracted
+and run before it was called done; `what_an_earlier_build_wrote.rs` pins the
+four files this product leaves on a disk, with every guard watched failing
+first. What remains, and **neither is wiring**:
 
-- **P3, upgrade testing** — a config file, a recent list, a security history
-  and a recovery journal written by 0.1.0, opened by the next build. Trap 7
-  exactly, and `fuzz/tests/envelope.rs` is the pattern. **Ordinary work, no
-  decision.**
 - **P2, an icon and the `.desktop` file** — `AppInfo::bachelorpad` already
   names its icon after `APP_ID` and there is no icon anywhere in the tree.
   Windows takes one from a build-time resource, which is **a new dependency
