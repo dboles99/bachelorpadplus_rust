@@ -180,6 +180,10 @@ so whoever finishes an item updates them as part of it.
 | — | Enter twice in the find box no longer replaces the match with a line break | ADR-0052, `dispatch::reveal`. Confirmed at the keyboard, both bars |
 | — | The last two open decisions, answered; `DECISIONS_NEEDED.md` is empty | ADR-0053 (D13), ADR-0018 amended (D2) |
 | — | A scroll benchmark, so ADR-0017's revert condition can fail rather than be felt | `bp-editor/benches/scroll.rs`. 1.19x across a thousand-fold document |
+| — | `--help`, `--version`, and a mistyped flag that says so | ADR-0054, `bp_config::cli`. Twelve flags were accepted and none discoverable |
+| — | `--line=N`, made of exactly what Ctrl+G does | ADR-0054. Driven on the release binary under both editor surfaces |
+| — | `LICENSE-MIT` and `LICENSE-APACHE`, which every manifest had claimed since the scaffold commit | ADR-0054 |
+| — | `Drive-Window.ps1 -Flag`, because a flag does its work at startup | ADR-0054. There was no way to drive one |
 | — | Tools ▸ Security Inspector, File Analysis, Configuration | ADR-0048, ids 721-723 |
 | — | Note ▸ Tags, Recovery Checkpoints | ADR-0048, ids 87-88 |
 | — | Notebook ▸ Export as .ipynb | ADR-0048, id 747 |
@@ -212,7 +216,31 @@ may add to `AppWindow` in `app.slint` at a time.**
 
 ### Ready for an agent, now
 
-Nothing. What remains is in `project/DECISIONS_NEEDED.md` and a manual pass at
+**Phase 20's artefact half**, and it is a batch that shares one entry cost --
+"what does a release actually consist of". Phase 20 started on 2026-08-23
+([ADR-0054](../docs/decisions/ADR-0054.md)); what shipped was the half a
+person meets at the command line, and what is listed here is the half they
+download. None of it is blocked: **D15 decides whether the result is signed,
+not whether it can be built**, and the honest default is to build everything
+and leave signing a single step.
+
+| # | Item | Why it is ready |
+| --- | --- | --- |
+| P1 | A release script: build both legs, stage the binary with `README.md`, `LICENSE-MIT` and `LICENSE-APACHE`, archive, and write a SHA-256 for each archive | Nothing produces a shippable thing today. `Invoke-LocalCI.ps1` is the model for the two-leg shape, WSL leg included |
+| P2 | An application icon, and the `.desktop` file `bp_platform::editor::desktop` already knows how to write | `AppInfo::bachelorpad` names its icon after `APP_ID` and there is no icon anywhere in the tree. Windows takes it from the executable, which needs a build-time resource -- **a new dependency, so an ADR** |
+| P3 | Upgrade testing: a config file, a recent list, a security history and a recovery journal written by 0.1.0, opened by the next build | Trap 7 exactly, and `fuzz/tests/envelope.rs` is the pattern -- committed bytes from an earlier build, not a round trip through this one |
+| P4 | The `bpad` short spelling `specs.md` §19 promises | A second name for one executable is an installer's job, so it lands with P1 |
+
+**Sized honestly: P1 and P3 are ordinary work. P2 carries a dependency
+decision and P4 is an hour inside P1.**
+
+### Also ready, and not packaging
+
+| # | Item | Why it is ready |
+| --- | --- | --- |
+| R1 | `--readonly`, or rather what it should be instead | ADR-0054 declined it as a *flag* and did not decline the capability. Read-only is a document property; the huge-document viewer is already one and Security ▸ Lock Document is another. **A design pass, not wiring** -- and the pass is mostly "are these three the same thing?" |
+
+What else remains is in `project/DECISIONS_NEEDED.md` and a manual pass at
 the window.
 
 **D4 has left this list.** The outside review of `bp-crypto`'s envelope was
