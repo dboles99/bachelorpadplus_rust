@@ -186,6 +186,7 @@ so whoever finishes an item updates them as part of it.
 | — | `Drive-Window.ps1 -Flag`, because a flag does its work at startup | ADR-0054. There was no way to drive one |
 | P1 | A release script, both targets, with checksums | `scripts/New-Release.ps1` and `scripts/release-linux.sh`. Unsigned by ADR-0055, and it says so every run |
 | P4 | The `bpad` short spelling | Same change. A symlink on Linux, a `.cmd` shim on Windows -- not a second 21 MB copy |
+| P3 | Upgrade testing: the four files this product leaves on a disk | `tests/integration/tests/what_an_earlier_build_wrote.rs`. Every guard was watched failing before it was called done |
 | — | Tools ▸ Security Inspector, File Analysis, Configuration | ADR-0048, ids 721-723 |
 | — | Note ▸ Tags, Recovery Checkpoints | ADR-0048, ids 87-88 |
 | — | Notebook ▸ Export as .ipynb | ADR-0048, id 747 |
@@ -226,18 +227,23 @@ download. None of it is blocked, and **D15 has been answered: defer**
 ([ADR-0055](../docs/decisions/ADR-0055.md)). Build everything and leave
 signing a single step.
 
-**P1 and P4 are done** -- `scripts/New-Release.ps1` builds, stages, archives
-and checksums both targets, and both archives have been extracted and run.
-What is left:
+**P1, P3 and P4 are done.** `scripts/New-Release.ps1` builds, stages,
+archives and checksums both targets, and both archives were extracted and run
+before it was called done; `what_an_earlier_build_wrote.rs` holds the four
+files this product leaves on a disk still readable. What is left:
 
 | # | Item | Why it is ready |
 | --- | --- | --- |
 | P2 | An application icon, and the `.desktop` file `bp_platform::editor::desktop` already knows how to write | `AppInfo::bachelorpad` names its icon after `APP_ID` and there is no icon anywhere in the tree. Windows takes it from the executable, which needs a build-time resource -- **a new dependency, so an ADR** |
-| P3 | Upgrade testing: a config file, a recent list, a security history and a recovery journal written by 0.1.0, opened by the next build | Trap 7 exactly, and `fuzz/tests/envelope.rs` is the pattern -- committed bytes from an earlier build, not a round trip through this one |
 | P5 | An installer, or a decision that there is not one | New, and it only became askable once an archive existed. A zip that unpacks anywhere is a defensible answer for this product; so is MSI or winget. **A decision before an estimate** |
 
-**Sized honestly: P3 is ordinary work. P2 carries a dependency decision and
-P5 is a decision first.**
+**Sized honestly: P2 carries a dependency decision and P5 is a decision
+first, so neither is the pure wiring P1 and P3 were.**
+
+> **When P3's fixtures need changing, add beside rather than edit.** The
+> literals in that file are a record of what shipped, not an expectation --
+> editing one to make the suite pass is the exact mistake it exists to
+> prevent.
 
 ### Also ready, and not packaging
 
