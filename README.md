@@ -67,7 +67,7 @@ refused, for the reason in [ADR-0055](docs/decisions/ADR-0055.md).
 
 ## Current state (2026-08-23)
 
-**25 crates, 1,986 tests, green on Windows and Linux.** **Every menu row either does something or is a readout** ([ADR-0048](docs/decisions/ADR-0048.md)) — nothing anywhere says "not implemented yet" any more. The app opens, edits and
+**25 crates, 1,990 tests, green on Windows and Linux.** **Every menu row either does something or is a readout** ([ADR-0048](docs/decisions/ADR-0048.md)) — nothing anywhere says "not implemented yet" any more. The app opens, edits and
 saves atomically, and does rather more than that:
 
 | Area | What works |
@@ -127,20 +127,16 @@ should spend an afternoon on these before checking the version changed.
   `DataTransfer` carries only plain text or an image, so there is no channel a
   dropped file's path could arrive through. Blocked on Slint, not on effort.
 
-- **Four features are enabled only under `--editor-view`**: duplicate and move
-  line, and date and time insertion. They need to know *where the caret is*,
-  and `TextInput` will not say. [MENU_MAP.md](docs/product/MENU_MAP.md) marks
-  which rows those are.
-
-  **Go to Line left this list on 2026-08-22, and the reason it was on it is
-  worth keeping.** It was recorded as needing the caret, like the others. It
-  does not: it needs the caret *moved*, which `set-selection-offsets` does and
-  which Find Next has always relied on. Reading and moving turned out to be
-  different requirements filed under one word. What kept the mistake alive was
-  that the move used to be invisible — nothing scrolled the viewport to the
-  caret, so a correct jump looked like nothing happening — and fixing that
-  (see "Find did not scroll to its match", below) is what made the claim
-  checkable at all.
+- **No feature needs `--editor-view` any more, and thirteen menu rows stopped
+  being greyed** ([ADR-0080](docs/decisions/ADR-0080.md)). This entry read
+  *"four features are enabled only under `--editor-view`… they need to know
+  where the caret is, and `TextInput` will not say"* until 2026-09-10. It
+  says: `cursor-position-byte-offset`, an `out` property in Slint's own
+  `builtins.slint`, confirmed by compiling. Duplicate and move line, the five
+  date and time stamps and the five Markdown constructs are live in the build
+  a user runs. The lesson is in [DECISIONS.md](DECISIONS.md) — *a constraint
+  blamed on a dependency deserves the same scepticism as one blamed on the
+  record, and it is cheaper to check.*
 
 - **No crate is unreachable.** This list was three crates long four sessions
   ago and is now empty: `bp-notebook` and `bp-execution` left it under

@@ -179,8 +179,9 @@ Named here, explained in `DECISIONS.md`:
    Trap 3 from the other side — when trap 3's answer is "nothing would fail",
    the test beside the comment is free to say the opposite, and probably does.
 
-**And three more, all about verification itself** ([ADR-0049](docs/decisions/ADR-0049.md),
-[ADR-0050](docs/decisions/ADR-0050.md)):
+**And four more, about verification and about where an answer hides**
+([ADR-0049](docs/decisions/ADR-0049.md), [ADR-0050](docs/decisions/ADR-0050.md),
+[ADR-0056](docs/decisions/ADR-0056.md)):
 
 5. **"Unique" must mean no *earlier* run either.** A temp path from a process
    id and a counter is unique within a run and reused by the next one that
@@ -193,6 +194,40 @@ Named here, explained in `DECISIONS.md`:
    and open agreeing with each other is weaker than it reads, and it is what
    almost every format test actually asserts. The test that means something is
    a byte vector somebody committed *before* the change.
+   `tests/integration/tests/what_an_earlier_build_wrote.rs` holds one for each
+   of the four files this product leaves on a disk; `fuzz/tests/envelope.rs`
+   holds `.bpadx`'s.
+
+8. **Before asking a question, grep for its answer.** Trap 6 pointed the other
+   way: a decision recorded in a *type* is still a decision, and it is the
+   kind least likely to be re-read, because nothing about a queue of questions
+   suggests looking in `src/`. D16 -- what should compute an embedding -- was
+   described for two sessions as the largest unasked question in the project
+   while `bp_security::Embeddings` carried its three answers, a mapping for
+   all four profiles, and a doc comment reading *"Phase 10 reads this"*
+   ([ADR-0056](docs/decisions/ADR-0056.md)).
+
+**And a ninth, which cost thirteen working menu rows**
+([ADR-0080](docs/decisions/ADR-0080.md)):
+
+9. **A constraint blamed on a *dependency* deserves the same scepticism as one
+   blamed on the record — and it is cheaper to check.** *"`TextInput`'s caret is
+   unreadable from here"* was in five places, had shaped four ADRs, and was
+   false. `cargo check` disproved it in fifty-five seconds.
+
+   Two things make this its own trap rather than a variant of 6:
+
+   - **The answer was in `bp-ui`'s own prose.** `cursor_label`'s doc comment
+     said *"reachable only through a property marked internal and
+     undocumented"* — accurate, and the local decision built on it was right.
+     ***"Reachable only through an internal property" and "not reachable" are
+     not the same sentence.*** **A local decision not to use a capability
+     reads, three files away, as proof the capability does not exist.**
+   - **A true sentence next to an unverified one lends it credibility it has
+     not earned.** ADR-0018 *did* check Slint's source — for composition, where
+     it found a real refusal that still stands — and the caret claim rode
+     beside it for eight sessions. The tell: one claim cites a file and line,
+     the one next to it cites nothing.
 
 **And the one no test can catch:** what a toolkit does with what it is handed.
 Five defects have lived in that seam, including a signing passphrase typed
