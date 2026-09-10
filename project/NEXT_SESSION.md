@@ -346,7 +346,32 @@ The plan, and **days 1–2 of it**, in one sitting: [ADR-0080](../docs/decisions
 
 ### Take these, in this order
 
-#### a. Drive the window over the thirteen rows. **Start here.**
+#### a. ~~Drive the window over the thirteen rows.~~ **Two of six done, 2026-09-10**
+
+**The two that carried the risk are confirmed in the real window**, in the
+default build, asserting on saved bytes rather than on captures:
+
+- `{DOWN}`, `^d`, `^s` over `alpha/bravo/charlie` wrote
+  **`alpha/bravo/bravo/charlie`** -- the caret is read at click time and line
+  *two* is duplicated;
+- `^f`, `cat` over `héllo cat` put the highlight **on `cat`**, `1 of 1` --
+  the byte/character conversion, in the one case where getting it wrong shows.
+
+**Still to drive**, and none of it opens an `rfd` dialog either:
+
+| Check | Why |
+| --- | --- |
+| **Insert ▸ Date from the menu**, caret mid-document | The shortcut path is proven; the *menu* path is not, and R011 rule 9 is about a menu row's callback specifically |
+| **The same with a selection active** | The anchor makes the trip too, so the insert must *replace* rather than insert beside |
+| **`%{UP}` / `%{DOWN}`** | Move Line Up/Down, the two shortcuts not yet driven |
+| **The same six under `--editor-view`** | Trap 3, and **do this before D21 retires the flag** -- retiring it removes the ability to compare surfaces, which is how this work gets validated |
+
+> **The first two attempts drove an eighteen-day-old binary and produced a
+> confident false negative.** `Drive-Window.ps1` now refuses when the executable
+> is older than the newest `.rs` or `.slint`. Run `cargo build --release`
+> before driving; the script will tell you if you forget.
+
+#### a2. The rest of the driving pass
 
 **Nothing built on 2026-09-10 has ever been clicked**, and it lands in the one
 seam this repository says no test can reach — five defects have lived there,

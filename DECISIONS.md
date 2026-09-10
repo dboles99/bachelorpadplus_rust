@@ -180,6 +180,31 @@ different sessions.
   makes the measurement itself a way of *not* asking the question — the number
   looked like evidence and was arithmetic.
 
+### A verification tool that silently measures the wrong artefact is worse than no verification
+
+2026-09-10, [ADR-0080](docs/decisions/ADR-0080.md). `Drive-Window.ps1` checked
+that `target/release/bachelorpad.exe` **existed** and never that it was current,
+so a change made that morning was driven against a binary built eighteen days
+earlier.
+
+**The results were internally consistent, specific, and completely wrong.** The
+stale binary reproduced the old behaviour perfectly -- nothing in the default
+surface, correct under `--editor-view` -- which is precisely what a broken fix
+looks like. There was even a plausible mechanism to hand (a caret property read
+too late), and the captures agreed with it. The conclusion *"the fix does not
+work"* was one step from being written down, and correct code was one step from
+being reverted. What disproved it was `ls` on the executable.
+
+**Absent fails loudly; stale fails convincingly.** A missing binary already
+threw. The dangerous case was the one nobody had thought to check, and it is the
+general shape: *a tool that verifies the wrong artefact does not stay silent, it
+testifies.*
+
+The guard is in the script now and was watched failing before it was called
+done. **The wider habit: when a result confirms the hypothesis you arrived
+with, check what you actually measured** -- agreement is the moment scepticism
+is cheapest to skip and most expensive to have skipped.
+
 ### The seam that hid the caret was hiding a live defect in the other direction
 
 Same ADR, found while looking for the first. Slint's `set-selection-offsets`
