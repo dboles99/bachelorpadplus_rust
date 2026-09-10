@@ -219,6 +219,31 @@ may add to `AppWindow` in `app.slint` at a time.**
 
 ### Ready for an agent, now
 
+> **Re-scoped 2026-09-10 by [V1_1_1_PLAN.md](V1_1_1_PLAN.md)**, and three of
+> the seven items below are affected -- **two of them by being already
+> answered somewhere nobody had looked.**
+>
+> | Item | What changed |
+> | --- | --- |
+> | **P2**, the icon | **Decided and shipped downstream.** `assets/bachelorpad.ico` and the PNG exist in `bachelorpluslite`, with [ADR-0068 there](../../bachelorpluslite/docs/decisions/ADR-0068.md) for why the icon ships beside the executable, and commit `b474291` for the trap: **Slint cannot decode an ICO, so the window icon must be the PNG.** A back-port, not a design -- and **not blocked on Daniel's artwork**, which is what this queue has said since 2026-08-24 |
+> | **P5**, an installer | **Decided downstream.** [ADR-0067 there](../../bachelorpluslite/docs/decisions/ADR-0067.md): there is no installer, and an unsigned one would be worse than none. Adopt or reject with a reason; do not re-derive |
+> | **R1**, `--readonly` | **Answered downstream.** [ADR-0066 there](../../bachelorpluslite/docs/decisions/ADR-0066.md) -- read-only is the save refusing, and the type that claimed otherwise never ran. The design pass this row asks for has been done |
+>
+> **M1 and E1-E3 are untouched** and still sized as they were.
+>
+> **The lesson, and it is in `DECISIONS.md`:** *a derived repository is a second
+> reader of every decision this one made, and it re-checks premises for free.*
+> Nineteen ADRs accumulated there in twelve days while this file called two of
+> their subjects "ready for an agent". **Before sizing an item, look downstream
+> for its answer** -- trap 8, arriving from a direction nothing about a work
+> queue suggests.
+
+> **Unchanged as of 2026-08-29, and that is a fact rather than an
+> oversight.** The fourteenth session worked in a derived repository and
+> took nothing from this list, so all seven items are still ready, still
+> decision-free, and still sized as they were on 2026-08-24. Nothing here
+> needs re-deriving before it is taken.
+
 **Phase 20's artefact half**, and it is a batch that shares one entry cost --
 "what does a release actually consist of". Phase 20 started on 2026-08-23
 ([ADR-0054](../docs/decisions/ADR-0054.md)); what shipped was the half a
@@ -249,6 +274,7 @@ first, so neither is the pure wiring P1 and P3 were.**
 
 | # | Item | Why it is ready |
 | --- | --- | --- |
+| M1 | **specs.md §22's warm-start target (75 ms) has never been measured.** Either take the number or change the target with an ADR | Moved here from `DECISIONS.md` on 2026-08-24, where it had been filed as a decision waiting on a human for several sessions. **It is not one** -- nobody has to choose anything, somebody has to measure. The cold-start half is measured (`Measure-Startup.ps1`, 35.7 ms against 150); this is its other half, and `bp-editor/benches/scroll.rs` is the precedent for pinning a claim with a number. If the software renderer genuinely cannot report time-to-first-interaction, **that is the finding**, and the target changes rather than staying unverifiable |
 | R1 | `--readonly`, or rather what it should be instead | ADR-0054 declined it as a *flag* and did not decline the capability. Read-only is a document property; the huge-document viewer is already one and Security ▸ Lock Document is another. **A design pass, not wiring** -- and the pass is mostly "are these three the same thing?" |
 
 ### Phase 10, which is three items rather than a phase
@@ -356,6 +382,7 @@ ADR-0044 in turn, and ADR-0046 for the last of research mode's planned rows.
 **What this section is kept for** is the pattern rather than the three
 instances, because it will come round again: an item whose *purpose* is
 undecided cannot be estimated, and an estimate made anyway measures the
-question. `project/DECISIONS_NEEDED.md` carries what is still genuinely open,
-which as of 2026-08-22 is three rows — and none of them blocks a queue item
-today, which is why this queue is empty rather than blocked.
+question. `project/DECISIONS_NEEDED.md` carries what is still genuinely open, **which
+as of 2026-08-23 is nothing** -- and this queue is not empty, which is the
+combination worth noticing. An empty decision queue and a full work queue is
+the healthy state; it took three sessions of the reverse to see it.
