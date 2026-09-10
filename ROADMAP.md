@@ -2,7 +2,7 @@
 
 This is not an MVP roadmap. Each phase contributes to the full v1 target.
 
-Status as of **2026-08-20**. Three words, meaning three different things:
+Status as of **2026-08-23**. Three words, meaning three different things:
 
 - **Done** — the phase's work is finished.
 - **Started** — a real, tested slice exists *and is reachable from the
@@ -10,34 +10,90 @@ Status as of **2026-08-20**. Three words, meaning three different things:
 - **Built, unwired** — the library work exists and is tested, but nothing in
   the application calls it. Used where that is a deliberate decision rather
   than an unfinished job, and the reason is always recorded.
+  **No phase carries it any more**, as of 2026-08-22. It is kept because the
+  state is a real one and will recur, and because the count of phases in it —
+  three, for four sessions — was this project's most useful single number
+  while it was not zero.
 
 | # | Phase | Status | Tasks | Crates |
 | --- | --- | --- | --- | --- |
 | 1 | Foundation and workspace | **Done** | [01-foundation](project/tasks/01-foundation/) | `bp-core`, `bp-config`, `bp-theme`, `bp-ui` |
 | 2 | Core editor | **Started** | [02-core-editor](project/tasks/02-core-editor/) | `bp-buffer`, `bp-editor` |
 | 3 | File safety and recovery | **Done** | [03-file-safety](project/tasks/03-file-safety/) | `bp-files`, `bp-history` |
-| 4 | Large-file engine | **Built, unwired** | [04-large-files](project/tasks/04-large-files/) | `bp-buffer` |
+| 4 | Large-file engine | **Done** | [04-large-files](project/tasks/04-large-files/) | `bp-buffer` |
 | 5 | Format registry and parser framework | **Started** | [05-formats](project/tasks/05-formats/) | `bp-formats` |
 | 6 | Structured formats | **Started** | [05-formats](project/tasks/05-formats/) | `bp-data` |
 | 7 | Search engine | **Started** | [06-search](project/tasks/06-search/) | `bp-search` |
 | 8 | Semantic foundation and naming | **Started** | [07-semantic](project/tasks/07-semantic/) | `bp-semantic`, `bp-naming` |
-| 9 | Organization and related-note graph | **Built, unwired** | [07-semantic](project/tasks/07-semantic/) | `bp-storage` |
-| 10 | Semantic/hybrid search | Not started | [07-semantic](project/tasks/07-semantic/) | — |
+| 9 | Organization and related-note graph | **Started** | [07-semantic](project/tasks/07-semantic/) | `bp-storage` |
+| 10 | Semantic/hybrid search | Not started, **decided** | [07-semantic](project/tasks/07-semantic/) | — |
 | 11 | Clipboard system | **Started** | [08-clipboard](project/tasks/08-clipboard/) | `bp-clipboard` |
-| 12 | Notebook/execution system | **Built, unwired** | [09-notebook](project/tasks/09-notebook/) | `bp-notebook` |
-| 13 | Research mode | **Built, unwired** | [10-research](project/tasks/10-research/) | `bp-research` |
+| 12 | Notebook/execution system | **Started** | [09-notebook](project/tasks/09-notebook/) | `bp-notebook`, `bp-execution` |
+| 13 | Research mode | **Started** | [10-research](project/tasks/10-research/) | `bp-research`, `bp-storage`, `bp-semantic` |
 | 14 | Security foundation | **Started** | [11-security](project/tasks/11-security/) | `bp-security` |
 | 15 | Encrypted `.bpadx` documents | **Started** | [11-security](project/tasks/11-security/) | `bp-crypto` |
 | 16 | Advanced security | **Started** | [11-security](project/tasks/11-security/) | `bp-secrets`, `bp-redaction`, `bp-audit`, `bp-integrity` |
 | 17 | Themes/personality/accessibility | **Started** | [12-themes-brand](project/tasks/12-themes-brand/) | `bp-theme` |
 | 18 | Windows/Linux platform integration | **Started** | [13-platform](project/tasks/13-platform/) | `bp-platform` |
 | 19 | Hardening, fuzzing and benchmarks | **Started** | [14-hardening](project/tasks/14-hardening/) | `fuzz/` (standalone, and now gated) |
-| 20 | Packaging, signing, release and upgrade testing | Not started | [14-hardening](project/tasks/14-hardening/) | — |
+| 20 | Packaging, signing, release and upgrade testing | **Started** | [14-hardening](project/tasks/14-hardening/) | — |
+
+**Phase 2 gained thirteen menu rows on 2026-09-10 without anything being
+built** ([ADR-0080](docs/decisions/ADR-0080.md)). Duplicate Line, Move Line
+Up/Down, the five date/time stamps and the five Markdown constructs were greyed
+in the build every user runs, on the claim that `TextInput` will not report its
+caret. It reports it, and had all along. **The phase status does not change --
+it was *Started* and remains so** -- but the count of features that work in only
+one editor surface went from four to zero, which is the number
+[ADR-0018](docs/decisions/ADR-0018.md) called the tax of carrying both views.
+
+**Whether the flag itself survives is D21**, and it is deliberately not answered
+by that finding: what `--editor-view` still costs -- no CJK input, checked in
+Slint's source -- is unchanged, and retiring an editing surface is a larger
+decision than the discovery that made it askable.
+
+**Phase 20 started on 2026-08-23, and what it found is worth knowing before
+anybody sizes the rest of it.** The inventory came first, as ADR-0048
+recommends, and turned up four things in a product 1,972 passing tests deep:
+the binary could not say its own version, a mistyped flag was discarded in
+silence, every manifest claimed a licence the repository did not contain, and
+`specs.md` advertised three flags that did not exist -- one of which made
+`bachelorpad --line 427 server.log` try to open a file called `427`.
+
+All four are fixed ([ADR-0054](docs/decisions/ADR-0054.md)), and the artefact
+followed the same day: `scripts/New-Release.ps1` builds, stages, archives and
+checksums both targets, and both archives have been extracted and run.
+**Signing is deferred and self-signing refused outright**
+([ADR-0055](docs/decisions/ADR-0055.md)) -- so the archives are unsigned and
+say so, every run, in the same words.
+
+Upgrade testing followed it: `what_an_earlier_build_wrote.rs` holds committed
+literals for the four files this product leaves on a disk -- `config.toml`,
+`recent.toml`, the security history and the recovery journal -- each of which
+had only write-then-read-back coverage, which is trap 7 exactly.
+
+What is left of phase 20 is an icon and a `.desktop` file (a build-time
+resource, so a dependency ADR), and a decision about whether there is an
+installer at all.
+
+**Phase 10 was decided on 2026-08-23 without being started, which is a state
+this table needs a word for.** D16 asked what should compute an embedding;
+the answer is all three sources as choices, with the profile as a ceiling and
+`Cloud` behind a per-use gesture ([ADR-0056](docs/decisions/ADR-0056.md)) --
+and the axis carrying those three values had existed since ADR-0020. The
+phase is now **three queue items rather than one large thing**, listed in
+`project/WORK_QUEUE.md`, and the first of them needs neither provider to
+exist.
 
 ## Two numbering schemes, reconciled
 
-The phase numbers above are canonical — they are what `specs.md`, the ADRs and
-the application's own "not implemented yet (phase N)" menu rows refer to.
+The phase numbers above are canonical — they are what `specs.md` and the ADRs
+refer to.
+
+**They are no longer what any menu row refers to.** Until 2026-08-22 a greyed
+row read "not implemented yet (phase 19)" and the number pointed here;
+[ADR-0048](docs/decisions/ADR-0048.md) removed every such row, so a phase
+number is now a planning device rather than something a user can see.
 
 `project/tasks/` uses fourteen directories rather than twenty, because several
 roadmap phases share a task folder (all three security phases live under
@@ -48,24 +104,39 @@ that points at them for no gain.
 
 ## Where the work actually is
 
-Phases 1 and 3 are complete. Phases 2, 5, 6, 7, 8, 11, 14, 15, 16, 17 and 18
-each have a tested slice reachable in the product — phase 18 joined them when
-File ▸ Set as Default Editor shipped. Phases 4, 9, 12 and 13 are built and
-have no way in, which an audit put a number on: `bp-research`, `bp-notebook`
-and `bp-storage` have zero reverse dependencies anywhere in the application,
-and with `bp-buffer`'s large-file engine that is over ten thousand lines and
-237 unit tests behind code no user can reach.
+Phases 1, 3 and 4 are complete. **Every other phase now has a tested slice
+reachable in the product**, and phases 9, 12 and 13 — the three that were
+"built with no way in" for four sessions — joined them across 2026-08-21/22.
 
-**The wiring backlog is real, and it shrank rather than grew.** Phase 6's
-YAML, phase 16's redaction and metadata inspector all have menu rows now, the
-audit log's sealed destination has an implementor instead of refusing every
-append, and phases 16 and 18 gained Verify Signature and Set as Default
-Editor. What is still built and unreachable is `bp-buffer`'s large-file
-engine, `bp-notebook`, `bp-research` and `bp-storage` -- so opening a 2 GB
-file still loads 2 GB. `bp-audit` came off that list when Security ▸ Security
-History shipped: five capabilities write into it and one row reads it back.
+**No crate in this workspace is unreachable.** That sentence has been the
+headline of this section since the fourth session, when it was three crates,
+9,556 lines and 241 unit tests behind code no user could reach. `bp-storage`
+left under [ADR-0037](docs/decisions/ADR-0037.md), `bp-notebook` and
+`bp-execution` under [ADR-0043](docs/decisions/ADR-0043.md), and
+`bp-research` under [ADR-0044](docs/decisions/ADR-0044.md).
 
-**Cross-crate tests have found seven defects, and five are fixed.** Until the
+**What actually unblocked the last three was not effort.** Each had been sized
+as a *mode* -- a large, unscoped thing -- and each turned out to be waiting on
+a question rather than on work: phase 12 on what a notebook is *for*
+([ADR-0043](docs/decisions/ADR-0043.md)), phase 13 on whether two decisions
+were a contradiction ([ADR-0044](docs/decisions/ADR-0044.md)), and phase 9 on
+presentation ([ADR-0037](docs/decisions/ADR-0037.md)). Research mode's last
+five planned rows went the same way one session later, in the opposite
+direction ([ADR-0046](docs/decisions/ADR-0046.md)).
+
+**The lesson from all four -- "undecided reads like large", and its mirror --
+is in [DECISIONS.md](DECISIONS.md)**, which is the one home for a lesson. It
+is named here rather than retold because it decides whether a phase can be
+estimated at all, which is this file's subject.
+
+**Phase 4 is finished, including the piece it deliberately left out.** Find
+over a document served from disk shipped under
+[ADR-0042](docs/decisions/ADR-0042.md) — a resumable scan rather than a
+threaded one, measured on a 213.5 MiB log: `searching 86%` while it ran, then
+`1 of 1` at line 4,800,001. Ctrl+End and a total line count remain refusals
+with reasons rather than gaps.
+
+**Cross-crate tests found seven defects, and all seven are fixed.** Until the
 fourth session every test in the repository tested one crate. Eleven files of
 cross-crate tests found that `bp-search` and `bp-buffer` disagree about what a
 line is, that `bp-formats` identified a pretty-printed JSON array as JSON
@@ -79,8 +150,37 @@ the stem before the first dot, the way Win32 does, so `con.txt` becomes
 `con File.txt` rather than a save that reports success while writing to the
 console -- and `bp-files` refuses such a name outright, which closes the
 route sanitising never covered, the name a user types into a Save dialog.
-Two defects and one decision remain, each pinned by an `#[ignore]`d test
-naming it. `DECISIONS.md` has the evidence.
+The last of the seven was a decision rather than a defect and is now
+[ADR-0029](docs/decisions/ADR-0029.md): a line break in this product is `
+`
+or `
+` and nothing else. **There is no `#[ignore]`d test left anywhere in
+the tree.** `DECISIONS.md` has the evidence for each.
+
+**Phase 4's measurements, kept because they are the claim.** The open path
+classifies from metadata before a byte is read, and all three classes have
+somewhere to go: an ordinary document opens as it always did, a large one
+opens and edits with its size in the status bar, and a huge one is served
+from disk as the reader scrolls
+([ADR-0030](docs/decisions/ADR-0030.md)). A few lines of text peaked at
+31.3 MiB and a 192 MiB log at 32.1 MiB — a document 240 times the size costs
+0.8 MiB more.
+
+It draws in the custom surface in *every* build, not only under
+`--editor-view`, because `TextInput` owns its own text and cannot be handed a
+window of a file it does not have. The flag is now precisely a statement about
+which surface *edits* a document the rope holds.
+
+Two things in that phase are deliberately not built and each is a refusal with
+a reason rather than a gap: **Ctrl+End** and **a total line count**. Both need
+the whole file indexed, which for these documents means reading two gigabytes
+to answer one question while the window is frozen. Find is no longer on that
+list: ADR-0042 built it, and it is resumable for exactly the reason those two
+are refused — a window must not be frozen while a file is read.
+
+Two whole-file reads also came off the open path. `bp_crypto::is_bpadx` needs
+six bytes and was being handed the entire file, which `bp_files::load` then
+read again.
 
 **Phase 19's harnesses are inside the gate now, which they were not.**
 `fuzz/` declares its own `[workspace]`, so every `--workspace` command in
@@ -106,6 +206,12 @@ composition cannot be done at all on Slint 1.17.1 — `FocusScope` rejects
 either, and `TextInput` is the only item in the toolkit that consumes them.
 Without it CJK entry does not work, so `--editor-view` stays opt-in and the
 default stays `TextInput`. `project/WORK_QUEUE.md` records the evidence.
+
+**Signing shipped, and with it the last row that was greyed for a missing
+decision rather than a missing prerequisite.** ADR-0031 puts the Ed25519
+signing key inside the `.bpadx` envelope, sealed under a passphrase, which
+closes the Windows/Linux asymmetry ADR-0026 measured and could not fix. Sign
+Document acts; Verify Signature already did.
 
 **Security profiles (phase 14) are wired.** ADR-0020 defines what each of
 Standard, Private, Confidential and Maximum permits across seven axes, and the

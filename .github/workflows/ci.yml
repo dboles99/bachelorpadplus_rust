@@ -1,24 +1,52 @@
-# DORMANT -- GitHub Actions is not available for this project.
+# Hosted CI, restored by ADR-0082 -- and ADR-0016 was right when it was written.
 #
-# The authoritative gate is local: scripts/Invoke-LocalCI.ps1, wired into
-# pre-commit and pre-push by scripts/Install-GitHooks.ps1. See
-# docs/governance/LOCAL_CI.md.
+# **The local gate stays authoritative.** scripts/Invoke-LocalCI.ps1 runs on
+# pre-commit, pre-push, and by hand with -Linux, and a push cannot happen
+# without it being green. This file is not a second opinion on that; it is the
+# thing a local gate structurally cannot be -- a build somebody who is not
+# Daniel, on a machine that is not his, can watch succeed.
 #
-# This file is kept, and kept correct, so hosted CI can be switched back on
-# without rebuilding it. The trigger is `workflow_dispatch` only, so pushes
-# do not queue runs that cannot execute. To re-enable, restore:
+# **Keep the steps below in sync with Invoke-LocalCI.ps1.** Two gates that
+# disagree are worse than one, which is ADR-0016's warning and still holds.
 #
-#   on:
-#     push:
-#     pull_request:
+# **Three stages the local gate runs and this one does not**, said out loud
+# rather than left for somebody to assume parity:
 #
-# Keep the steps below in sync with Invoke-LocalCI.ps1 -- two gates that
-# disagree are worse than one.
+#   - *launch*, which starts the built binary and waits for a window. A hosted
+#     runner has no display.
+#   - *log hygiene*, the scan forbidding a tracing macro from naming an
+#     identifier that carries document text or secrets. It lives inside
+#     Invoke-LocalCI.ps1 rather than in a script of its own, so mirroring it
+#     here would mean a second copy of the rule -- and two copies of a rule
+#     drift, which is the failure this comment block exists to prevent.
+#   - *doctests*, which the local gate runs as a separate pass because nextest
+#     cannot. `cargo test --workspace` below does run them.
+#
+# So a green run here is necessary and not sufficient. The local gate remains
+# the one that authorises a push.
+#
+# ## Why these triggers and not `push:`
+#
+# **This repository is private, so Actions minutes are metered**, and Windows
+# runners bill at 2x. A full matrix is roughly 50-60 billed minutes, which is
+# about fifty pushes a month against a Pro allowance -- less than one sprint.
+#
+# Feature-branch pushes are already covered: authority 2 in CLAUDE.md requires a
+# green full local gate *before* a push, so re-running the same stages here buys
+# minutes and nothing else. Pull requests and `main` are where an independent
+# machine says something the local gate cannot.
+#
+# The derived repository runs on every push (its ADR-0073) and is right to: it
+# is about to be public, where minutes are free and unmetered. **The reasoning
+# transfers and the economics do not** -- adapt, do not adopt.
 
 name: CI
 
 on:
   workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
 
 jobs:
   check:

@@ -97,8 +97,11 @@ proptest! {
     /// **A match's reported line is the line the buffer puts it on**, for
     /// documents whose line breaks are LF and CRLF.
     ///
-    /// Restricted to those two deliberately: the unrestricted version of this
-    /// property fails, and is below under `#[ignore]` with the reason.
+    /// Those two are now the whole of it. The restriction used to be a
+    /// concession -- the unrestricted property failed, and sat below under
+    /// `#[ignore]` -- and ADR-0029 made LF and CRLF the only line breaks this
+    /// product has, so the alphabet here is no longer narrower than the rule.
+    /// The test below covers the separators that are *not* breaks.
     #[test]
     fn a_matchs_line_number_agrees_with_the_buffer(
         parts in proptest::collection::vec(
@@ -244,6 +247,47 @@ fn a_match_after_multi_byte_text_is_selected_correctly() {
 }
 
 #[test]
+fn a_match_handed_to_a_toolkit_that_selects_by_byte_is_converted_first() {
+    // **The claim this file did not make, and the defect it hid.**
+    //
+    // The three tests above prove `bp-search`, `bp-buffer` and `bp-editor`
+    // name the same place in *characters*. There is a fourth participant --
+    // the shell -- and it hands that character range to Slint's
+    // `set-selection-offsets`, which takes **byte** offsets
+    // (`i-slint-core/items/text.rs`, `safe_byte_offset` is
+    // `ceil_char_boundary`). Nothing converted, so on any document with a
+    // multi-byte character before the match, Find in the default editor
+    // surface highlighted a different span.
+    //
+    // It never failed loudly, which is why it survived: the offset is clamped
+    // to a character boundary rather than rejected, so the wrong text is
+    // highlighted and nothing is reported. Every other test of Find in this
+    // repository uses ASCII, where the two numbers are equal.
+    let text = "héllo cat";
+    let editor = Editor::new(text);
+
+    let m = &find_all(text, &Query::literal("cat")).expect("find")[0];
+    assert_eq!(m.range, 6..9, "characters, as bp-search documents");
+
+    let bytes = editor.bytes_of_chars(&m.range);
+    assert_eq!(bytes, 7..10, "bytes, as the toolkit wants them");
+
+    // The two assertions that matter: the converted range addresses the match,
+    // and the unconverted one -- what the shell used to send -- does not.
+    assert_eq!(
+        text.get(bytes.clone()),
+        Some("cat"),
+        "the offsets the toolkit is given must address the match"
+    );
+    assert_ne!(
+        text.get(m.range.start..m.range.end),
+        Some("cat"),
+        "and the character range must not, or this test is passing for the \
+         wrong reason and would pass on an ASCII fixture too"
+    );
+}
+
+#[test]
 fn a_match_on_the_third_line_of_a_crlf_document_is_reported_as_line_three() {
     let text = "one\r\ntwo\r\nneedle\r\nfour\r\n";
     let buffer = Buffer::from_text(text);
@@ -270,33 +314,36 @@ fn searching_an_empty_document_finds_nothing_rather_than_everything() {
     );
 }
 
-// --- a disagreement between the crates, left failing ---------------------
+// --- the crates agree what a line is (ADR-0029) --------------------------
 
-/// **DEFECT.** `bp-search` and `bp-buffer` do not agree on what a line is.
+/// **ADR-0029, as a test.** `bp-search` and `bp-buffer` agree what a line is.
 ///
-/// `bp_search::Offsets` counts line starts by looking for `'\n'` and nothing
-/// else. `bp_buffer::Buffer` is a `ropey::Rope` built with ropey's default
-/// features, which include `unicode_lines`: ropey treats a bare `\r`, `\x0B`,
-/// `\x0C`, U+0085, U+2028 and U+2029 as line breaks too.
+/// They did not. `bp_search::Offsets` counts line starts by looking for
+/// `'\n'` and nothing else, while `bp_buffer::Buffer` was a `ropey::Rope`
+/// built with ropey's *default* features -- which include `unicode_lines`,
+/// so the rope also broke on a bare `\r`, `\x0B`, `\x0C`, U+0085, U+2028 and
+/// U+2029.
 ///
-/// So for a document containing any of those, a find reports one line number
-/// and the editor's caret reports another. The user sees a result panel that
-/// scrolls to the wrong line, and "go to line 12" from a search result lands
-/// somewhere else. A bare `\r` is not exotic: it is what a file written on a
-/// classic Mac, or by a program that emitted a progress bar, contains.
+/// For a document containing any of those, a find reported one line number
+/// and the caret reported another: a results panel that scrolled to the wrong
+/// line, and "go to line 12" landing somewhere else. A bare `\r` is not
+/// exotic -- it is what a file written on a classic Mac, or by a program that
+/// emitted a progress bar, contains.
 ///
-/// The same split exists *inside* `bp-buffer`, between its two public answers
-/// to "how many lines": the free `line_count` counts `'\n'`, and
-/// `Buffer::len_lines` asks the rope. `bp-ui`'s status bar uses the first for
-/// one editor view and the second for the other, so the same document reports
-/// two different line counts depending on which view is showing it.
+/// The same split ran *inside* `bp-buffer`, between its two public answers to
+/// "how many lines": the free `line_count` counts `'\n'`, and
+/// `Buffer::len_lines` asks the rope. `bp-ui`'s status bar uses the first
+/// under one editor view and the second under the other, so one document
+/// reported two line counts depending on which view was showing it. That half
+/// is held by `bp-buffer`'s own `tests/one_definition_of_a_line.rs`.
 ///
-/// Fixing it is a decision, not a patch -- either `bp-search` adopts ropey's
-/// line-break set, or `bp-buffer` builds its rope without `unicode_lines` --
-/// so this is left named rather than papered over. Run with
-/// `cargo test -p bp-integration-tests -- --ignored` to see it.
+/// ADR-0029 settled it in the rope's direction rather than the search's: the
+/// rope drops `unicode_lines`, so a break is `\n` or `\r\n` and nothing else
+/// -- which is what `bp-core`, `bp-files`, `bp-search` and `bp-buffer`'s own
+/// helpers all already said. The wider set was never chosen; it was a default
+/// inherited from writing `ropey = "1"`. So each document below is now **one**
+/// line to both crates, and the property is that they say so together.
 #[test]
-#[ignore = "known defect: bp-search counts only \\n as a line break, bp-buffer's rope counts every Unicode line break"]
 fn search_and_the_buffer_agree_on_lines_containing_any_line_break() {
     for (text, breaks) in [
         ("one\rtwo\rneedle", "a bare carriage return"),

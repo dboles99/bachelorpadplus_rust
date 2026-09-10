@@ -1,5 +1,36 @@
 # BachelorPad+ Project Memory
 
+**This file is the *original* brief, kept as written.** It records what was
+asked for before anything was built, which is why it is worth not editing:
+several of its items have since been decided differently, and the value is in
+being able to see that.
+
+**Every decision made since lives in [DECISIONS.md](DECISIONS.md)**, which
+indexes 57 ADRs. Where the two disagree, the ADR is current. The most visible
+example is in "Suggested implementation style" below: Slint was "a leading
+candidate to be benchmarked"; it was benchmarked and chosen
+([ADR-0015](docs/decisions/ADR-0015.md)).
+
+**The ADR numbers are not contiguous, and the gap is deliberate.** They run
+0001-0056 and then jump to 0080; **0057-0079 are deliberately unused**, because
+the repository derived from this one holds those numbers for entirely different
+decisions and this project's records link to several of them by number
+([ADR-0080](docs/decisions/ADR-0080.md) records why, on the far side of the
+gap). So 57 ADRs is the count, not the highest number.
+
+**Two items in "Locked user decisions" below have since been narrowed rather
+than delivered as written**, and they are left standing because a brief that
+quietly edits itself to agree with what happened stops being evidence of what
+was asked for:
+
+- **item 7's "run-selection"** is not a row. Running a selection works in only
+  one of the two editor surfaces, which is the half-feature
+  `project/WORK_QUEUE.md` warns against ([ADR-0048](docs/decisions/ADR-0048.md));
+- **item 9's "memory mapping"** was declined with measurements rather than
+  built ([ADR-0027](docs/decisions/ADR-0027.md)).
+
+[CLAUDE.md](CLAUDE.md) is the entry point for working here.
+
 ## Identity
 
 Project: **BachelorPad+**

@@ -326,6 +326,43 @@ impl Editor {
         self.goal_column = None;
     }
 
+    /// Move the caret to a **byte** offset.
+    ///
+    /// For the one caller that speaks bytes: Slint's `TextInput` reports its
+    /// caret as a byte offset, and this crate indexes by character
+    /// everywhere. The conversion lives here rather than at the call site
+    /// because a caller doing its own arithmetic also has to remember not to
+    /// land between a `\r` and its `\n` -- [`Editor::set_cursor`] already
+    /// knows, and this goes through it for that reason.
+    pub fn set_cursor_at_byte(&mut self, byte_idx: usize) {
+        let char_idx = self.buffer.char_of_byte(byte_idx);
+        self.set_cursor(char_idx);
+    }
+
+    /// Set caret and anchor from **byte** offsets.
+    ///
+    /// The selection counterpart of [`Editor::set_cursor_at_byte`], and the
+    /// one that matters for an insert: a construct inserted while text is
+    /// selected replaces the selection, so the anchor has to arrive too or
+    /// the replacement silently becomes an insertion.
+    pub fn select_bytes(&mut self, anchor_byte: usize, cursor_byte: usize) {
+        let anchor = self.buffer.char_of_byte(anchor_byte);
+        let cursor = self.buffer.char_of_byte(cursor_byte);
+        self.select(anchor, cursor);
+    }
+
+    /// A character range as **byte** offsets, for a toolkit that selects by
+    /// byte.
+    ///
+    /// The outgoing direction. `bp_search` produces character ranges and says
+    /// so in its own module header; handing one to `set-selection-offsets`
+    /// unconverted selects a different span on any document with a multi-byte
+    /// character before the match, and clamps rather than failing, so it looks
+    /// like a highlight in the wrong place rather than like a bug.
+    pub fn bytes_of_chars(&self, range: &Range<usize>) -> Range<usize> {
+        self.buffer.byte_of_char(range.start)..self.buffer.byte_of_char(range.end)
+    }
+
     /// The nearest index a caret may legitimately occupy.
     ///
     /// Clamps past the end, as everything reached from UI code here does, and
@@ -1071,6 +1108,41 @@ mod tests {
         assert_eq!(e.text(), "hello");
         assert_eq!(e.cursor(), 5);
         assert_eq!(e.position(), Position::new(1, 6));
+    }
+
+    #[test]
+    fn a_caret_arriving_as_a_byte_offset_lands_on_the_right_character() {
+        // The widget reports byte 7 for the c of "cat"; the character index is
+        // 6, because the accent is two bytes. Inserting at 7 would put the
+        // text one character too far along -- inside "cat" rather than before
+        // it.
+        let mut e = Editor::new("héllo cat");
+        e.set_cursor_at_byte(7);
+        assert_eq!(e.cursor(), 6);
+        e.insert("big ");
+        assert_eq!(e.text(), "héllo big cat");
+    }
+
+    #[test]
+    fn a_selection_arriving_as_byte_offsets_is_replaced_rather_than_inserted_into() {
+        // The anchor has to make the trip too. Without it the insert has no
+        // selection to replace and silently becomes an insertion, which is a
+        // different edit and a different undo entry.
+        let mut e = Editor::new("héllo cat");
+        e.select_bytes(7, 10);
+        assert_eq!(e.selection(), Some(6..9), "the three characters of cat");
+        e.insert("dog");
+        assert_eq!(e.text(), "héllo dog");
+    }
+
+    #[test]
+    fn a_character_range_leaves_as_byte_offsets_for_the_toolkit() {
+        // The direction that was wrong in the shell: bp_search finds "cat" at
+        // characters 6..9, and a toolkit that selects by byte needs 7..10.
+        // Handing it 6..9 highlights "lo " instead, and clamps rather than
+        // failing, so nothing says so.
+        let e = Editor::new("héllo cat");
+        assert_eq!(e.bytes_of_chars(&(6..9)), 7..10);
     }
 
     #[test]

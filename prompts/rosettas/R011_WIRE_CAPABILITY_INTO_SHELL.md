@@ -54,6 +54,29 @@ Each of these has already cost somebody a debugging session.
    this and follow the same shape. Missing one path produces a feature that
    works for you and not for the user, depending on a flag.
 
+   **The caret is readable in both, and units differ between them**
+   ([ADR-0080](../../docs/decisions/ADR-0080.md)). Two rules, and forgetting
+   either has already cost this repository something:
+
+   - **To edit at the caret under `TextInput`, call
+     `dispatch::adopt_widget_caret` first.** It reads `caret-byte-offset` and
+     `anchor-byte-offset` off `AppWindow` and puts the rope's caret there. Then
+     `hand_caret_back` **after `refresh`** — never before, because
+     `PushText::Yes` replaces the widget's whole text. **Do not grey a row for
+     "no caret"**; that claim is dead. And if you enable a row, check the
+     `AppState` method behind it for an `editor_view` early return — enabling
+     three rows over one such guard made each an enabled row that silently did
+     nothing, while a test asserted that was correct.
+   - **`TextInput` counts bytes; everything above the rope counts characters.**
+     `set-selection-offsets` takes **byte** offsets. `bp_search` ranges,
+     `Editor::select` and `Buffer::insert` are all **character** indices.
+     Convert with `Editor::bytes_of_chars` outbound and
+     `Buffer::char_of_byte` inbound — never by hand. Passing one for the other
+     is invisible on an ASCII document, wrong on every other, and **clamps
+     rather than failing**, so the only symptom is a highlight in the wrong
+     place. That was a live defect in Find for as long as nobody tried an
+     accented document.
+
 4. **An element inside a Slint `if` is out of scope for anything outside it.**
    That is why the find bar is collapsed to zero height rather than made
    conditional, and why both editors exist with `visible` toggled. If you need
@@ -81,7 +104,19 @@ Each of these has already cost somebody a debugging session.
    fails to start with `STATUS_ENTRYPOINT_NOT_FOUND` before `main`. The
    comment in `crates/bp-ui/Cargo.toml` says so; leave it there.
 
-9. **The log-hygiene gate stage is real.** A `tracing::*!` macro mentioning an
+9. **A menu row's callback cannot take the keyboard focus for itself.** Two
+   things put the caret back in the editor *after* it returns, and neither is
+   reachable from the callback: `dispatch()` in `app.slint` ends with
+   `root.focus-editor()`, and closing a `MenuPopup` restores the focus the
+   popup took when it opened -- `i-slint-core` calls `close_popup` after it
+   has dispatched the click, not before. This cost a session and shipped a
+   defect that typed a signing passphrase into the open document. If a row
+   opens something that wants the caret, set `pending-focus` and let
+   `focus-timer` hand it over on the next tick, the way `focus-passphrase`,
+   `focus-goto` and `focus-find` do. Confirm it by driving the window; no
+   test in this repository can see it.
+
+10. **The log-hygiene gate stage is real.** A `tracing::*!` macro mentioning an
    identifier that carries document text or secrets fails the build. Log
    *about* a document — its path, its size — never what it contains.
 
@@ -136,7 +171,10 @@ From `docs/governance/DEFINITION_OF_DONE.md`, the parts that apply here:
 ./scripts/Invoke-LocalCI.ps1 -Linux
 ```
 
-This **is** the gate — there is no hosted CI (ADR-0016). Every commit in this
+This **is** the gate that authorises a push, and it runs on this machine
+(ADR-0016). Hosted CI exists again ([ADR-0082](../../docs/decisions/ADR-0082.md))
+but runs only on pull requests and `main`, and skips three stages this one runs.
+Every commit in this
 repository has passed it. It runs `fmt`, `check --locked`, `clippy -D
 warnings`, `test`, an actual binary launch, and the log-hygiene scan, then the
 whole lot again inside WSL.

@@ -68,6 +68,9 @@ mod dispatch;
 mod editor_view;
 mod passphrase;
 mod state;
+#[cfg(test)]
+mod testpaths;
+mod viewer;
 
 /// Crate identity used by workspace smoke tests and diagnostics.
 pub const CRATE_NAME: &str = "bp-ui";
@@ -90,6 +93,48 @@ fn apply_theme(ui: &AppWindow, theme: ThemeId) {
     palette.set_accent(c(p.accent));
 }
 
+/// The outline, as the rows the panel draws.
+///
+/// Here rather than in `state/notebook.rs` for the reason every other
+/// `SearchHit` conversion is here: `SearchHit` is a Slint type, and the state
+/// modules stay free of the toolkit so their tests need no window.
+fn outline_hits(state: &mut state::AppState) -> Vec<SearchHit> {
+    let rows = state.outline();
+    state.outline_summary = if rows.is_empty() {
+        "No cells here: open an .ipynb, or a .md with fenced code blocks".to_owned()
+    } else {
+        let runnable = rows.iter().filter(|row| row.runnable).count();
+        format!("{} cells, {runnable} runnable", rows.len())
+    };
+    rows.iter()
+        .enumerate()
+        .map(|(index, row)| SearchHit {
+            // The dot marks what the Run menu would offer, so the two agree
+            // in front of the reader rather than only in the code.
+            label: format!(
+                "{}{} · {}",
+                if row.runnable { "▸ " } else { "  " },
+                row.position,
+                row.kind
+            )
+            .into(),
+            detail: row.summary.as_str().into(),
+            index: i32::try_from(index).unwrap_or(i32::MAX),
+        })
+        .collect()
+}
+
+/// Put a cell's run into the panel.
+///
+/// One function rather than four setters at three call sites, because the
+/// four strings are one thing: what happened when a cell ran.
+fn push_run_panel(ui: &AppWindow, state: &state::AppState) {
+    ui.set_run_open(state.run_open);
+    ui.set_run_summary(state.run_summary.as_str().into());
+    ui.set_run_output(state.run_output.as_str().into());
+    ui.set_run_errors(state.run_errors.as_str().into());
+}
+
 fn refresh(ui: &AppWindow, state: &mut state::AppState, push_text: state::PushText) {
     apply_theme(ui, state.theme);
     ui.set_theme_name(state.theme.name().into());
@@ -110,7 +155,26 @@ fn refresh(ui: &AppWindow, state: &mut state::AppState, push_text: state::PushTe
     if push_text == state::PushText::Yes {
         ui.set_doc_text(state.active_text().as_str().into());
     }
-    if state.editor_view {
+    // **The one place the surface is chosen**, and it is chosen per refresh
+    // rather than once at startup, because it depends on the *active
+    // document*: ADR-0030 puts a document the rope does not hold in the
+    // custom surface whether or not `--editor-view` was passed. Switching
+    // tabs between a huge log and an ordinary note switches surface with
+    // them.
+    let custom = state.uses_custom_surface();
+    ui.set_use_editor_view(custom);
+    // **The surface that had the caret has just become invisible.** Both
+    // editors exist at all times with `visible` toggled, so the one that is
+    // hidden keeps the focus it was holding and every keystroke goes nowhere
+    // -- which is what `forward-focus: editor` does at startup for any
+    // document the custom surface draws. Handed over only on a *change*,
+    // never on every refresh, and `focus-editor-soon` declines if a bar is
+    // open or has already asked.
+    if state.surface_shown != Some(custom) {
+        state.surface_shown = Some(custom);
+        ui.invoke_focus_editor_soon();
+    }
+    if custom {
         editor_view::push_editor_view(ui, state);
     }
     if state.sync_gutter() {
@@ -156,6 +220,8 @@ fn refresh(ui: &AppWindow, state: &mut state::AppState, push_text: state::PushTe
     // Privacy Mode outranks the profile name here: it is the session-wide
     // fact, and it is the thing somebody switches on precisely because they
     // want to be able to see that it is on.
+    ui.set_size_label(state.size_label().into());
+
     ui.set_security_profile(
         if state.privacy.is_on() {
             "Privacy Mode".to_owned()
@@ -174,6 +240,22 @@ fn refresh(ui: &AppWindow, state: &mut state::AppState, push_text: state::PushTe
     }
     ui.set_passphrase_status(state.passphrase_status.as_str().into());
 
+    // The run panel, and whether a cell is going. Pushed here as well as from
+    // the tick, so that starting a run from a menu click shows its panel
+    // without waiting for the first tick.
+    // The outline follows the document it is an outline of. Rebuilt only
+    // while it is open: parsing to build a list nobody is looking at is the
+    // work `run-menu-opening` avoids for the Run menu, for the same reason.
+    if state.outline_open {
+        let cells = outline_hits(state);
+        ui.set_outline_summary(state.outline_summary.as_str().into());
+        ui.set_outline_cells(Rc::new(slint::VecModel::from(cells)).into());
+    }
+    ui.set_outline_open(state.outline_open);
+
+    push_run_panel(ui, state);
+    ui.set_running(state.is_running());
+
     ui.set_show_gutter(state.show_gutter);
     ui.set_wrap_text(state.wrap_text);
     // Points to Slint's `length`. Both editor views read this one property,
@@ -189,6 +271,7 @@ fn refresh(ui: &AppWindow, state: &mut state::AppState, push_text: state::PushTe
     ui.set_file_items(model(menus::file(
         any_dirty,
         has_path,
+        state.active_is_viewer(),
         state.recent.paths(),
     )));
     ui.set_view_items(model(menus::view(
@@ -208,10 +291,26 @@ fn refresh(ui: &AppWindow, state: &mut state::AppState, push_text: state::PushTe
     // Rebuilt rather than set once, because the previews are rendered from
     // the clock: a menu built at startup would still be offering this
     // morning's time this afternoon.
-    ui.set_insert_items(model(menus::insert(state::now(), state.editor_view)));
+    ui.set_insert_items(model(menus::insert(state::now())));
     ui.set_data_items(model(menus::data(format)));
     ui.set_note_items(model(menus::note(state.active_has_content())));
-    ui.set_edit_items(model(menus::edit(state.clips.entries(), state.editor_view)));
+    // Rebuilt rather than set once, for the same reason `note_items` is not
+    // static: the Document Inspector row greys on `has_content`, which
+    // changes with every keystroke and every tab switch.
+    ui.set_tools_items(model(menus::tools(state.active_has_content())));
+    // Same reasoning: Related Notes and Duplicate Detection both need
+    // something to act on, and `has_content` changes with every keystroke,
+    // so this cannot be set once at startup either.
+    ui.set_organize_items(model(menus::organize(state.active_has_content())));
+    // Real as of ADR-0041, and as of ADR-0044 three of its rows read the
+    // active document -- so it takes `has_content` like Organize above, and
+    // for the same reason: the rows grey when there is nothing to read, and
+    // that changes with every keystroke.
+    ui.set_research_items(model(menus::research(state.active_has_content())));
+    // Real as of ADR-0045, and it reads the active document, so it moves out
+    // of `set_static_menus` for the same reason Organize and Research did.
+    ui.set_notebook_items(model(menus::notebook(state.active_has_content())));
+    ui.set_edit_items(model(menus::edit(state.clips.entries())));
     // Rebuilt rather than set once: it shows the *active* document's profile
     // and what that profile permits, both of which change with the tab.
     let encrypted = state
@@ -230,6 +329,14 @@ fn refresh(ui: &AppWindow, state: &mut state::AppState, push_text: state::PushTe
         // by name. Already computed above for Reload, which needs the same
         // fact for the same underlying reason.
         has_path,
+        // Signing is over the bytes on disk (ADR-0026), so a document with
+        // unsaved changes would be signed as it *was*. The row says so rather
+        // than the click doing it -- and it asks the **same** predicate
+        // `begin_signing` refuses on, because a row that greys on one rule and
+        // an action that refuses on another is how a user learns to distrust
+        // the greying.
+        !state.active_differs_from_disk(),
+        state.has_signing_key(),
     )));
 }
 
@@ -237,11 +344,11 @@ fn refresh(ui: &AppWindow, state: &mut state::AppState, push_text: state::PushTe
 fn set_static_menus(ui: &AppWindow) {
     let model = |items: Vec<MenuItem>| slint::ModelRc::new(slint::VecModel::from(items));
     ui.set_help_items(model(menus::help()));
-    ui.set_notebook_items(model(menus::planned_menu("Notebook")));
-    ui.set_organize_items(model(menus::planned_menu("Organize")));
-    ui.set_research_items(model(menus::planned_menu("Research")));
-    ui.set_run_items(model(menus::planned_menu("Run")));
-    ui.set_tools_items(model(menus::planned_menu("Tools")));
+
+    // Not the Run menu any more (ADR-0043). Its rows depend on the active
+    // document, and `run-menu-opening` rebuilds them the moment before the
+    // menu is shown -- a set here would be a list of the wrong document's
+    // cells waiting to be replaced.
 }
 
 /// The query the find bar currently describes.
@@ -308,6 +415,15 @@ pub struct RunOptions {
     pub startup_notice: Option<String>,
     /// Files named on the command line, opened at startup (specs.md §19).
     pub files: Vec<PathBuf>,
+    /// Line to put the caret on once the first file is open, from `--line=N`.
+    ///
+    /// The *first* file, because a line number means nothing spread across
+    /// several documents, and the first is the one left active.
+    ///
+    /// Numbered from one, as `bp_editor::Editor::go_to_line` and everything a
+    /// person reads number them. `None` leaves the caret where opening put
+    /// it.
+    pub line: Option<usize>,
     /// Print `BPSPIKE_READY_MS=<f64>` once the first frame has been rendered,
     /// then quit. Drives `scripts/Measure-UiSpike.ps1`.
     ///
@@ -414,7 +530,15 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
 
     initial.editor_view = options.editor_view;
     let state = Rc::new(RefCell::new(initial));
+    // The starting value only. `refresh` owns this property from here on and
+    // recomputes it per document, because ADR-0030 makes the answer depend on
+    // what is in the active tab rather than on the flag alone. It runs before
+    // the window is shown, so the first frame is already right.
     ui.set_use_editor_view(options.editor_view);
+    // The scan rate ADR-0042 chose, handed to Slint rather than written there
+    // as a literal: `WINDOWS_PER_TICK` and this interval only mean something
+    // together, and they must not be a file apart.
+    ui.set_scan_tick_ms(i32::try_from(bp_search::STREAM_TICK.as_millis()).unwrap_or(16));
 
     let mut reported = false;
     let measure_exit = options.measure_exit;
@@ -696,28 +820,15 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
             let Some(ui) = weak.upgrade() else { return };
             let mut s = cell.borrow_mut();
 
-            // By visual rows, not document lines. With wrapping on the two
-            // differ, and a wheel that moved whole lines would skip past
-            // everything the reader can see inside a long one.
-            //
-            // `step_row` is bounded at both ends of the document, so the view
-            // cannot scroll into empty space.
-            s.sync_wrap();
-            let anchor = s.anchor;
-            let layout = s.layout();
-            if let Some(editor) = s.active_editor() {
-                s.anchor = bp_editor::view::step_row(
-                    editor.buffer(),
-                    anchor,
-                    isize::try_from(lines).unwrap_or(0),
-                    layout,
-                );
-            }
+            editor_view::scroll_by_rows(&mut s, lines);
 
             // Drawn where it now is rather than through `refresh`: scrolling
             // away from the caret is exactly what the user asked for, and
-            // revealing it again would snap the wheel straight back.
-            editor_view::draw_editor_view(&ui, &s);
+            // revealing it again would snap the wheel straight back. For a
+            // viewer there is no caret to snap back to, and the same call is
+            // still the right one -- it redraws the window the scroll just
+            // moved to.
+            editor_view::draw_editor_view(&ui, &mut s);
         });
     }
 
@@ -746,10 +857,22 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
         ui.on_find_changed(move || {
             let Some(ui) = weak.upgrade() else { return };
             let query = ui_query(&ui);
+            // A document served from disk is searched by scanning it, not by
+            // asking a rope that does not exist (ADR-0042). The scan reports
+            // itself through the same `find_status` the bar already reads.
+            if cell.borrow().active_is_viewer() {
+                let running = cell.borrow_mut().begin_scan(&query);
+                ui.set_scanning(running);
+                ui.set_find_status(cell.borrow().find_status.as_str().into());
+                editor_view::draw_editor_view(&ui, &mut cell.borrow_mut());
+                return;
+            }
             let selection = cell.borrow_mut().find(&query);
             ui.set_find_status(cell.borrow().find_status.as_str().into());
             if let Some(range) = selection {
-                dispatch::select(&ui, &mut cell.borrow_mut(), &range);
+                // Fires on every keystroke while the query is still being
+                // typed, so it must not take the caret out of the find box.
+                dispatch::reveal(&ui, &mut cell.borrow_mut(), &range);
             }
         });
     }
@@ -759,10 +882,24 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
         let weak = ui.as_weak();
         let step = move || {
             let Some(ui) = weak.upgrade() else { return };
+            if cell.borrow().active_is_viewer() {
+                // Stepping a scan moves the *view*, not a caret, and it wraps
+                // over what has been found so far rather than waiting for the
+                // scan to finish.
+                cell.borrow_mut().step_scan_hit(forward);
+                ui.set_find_status(cell.borrow().find_status.as_str().into());
+                editor_view::draw_editor_view(&ui, &mut cell.borrow_mut());
+                return;
+            }
             let selection = cell.borrow_mut().step_match(forward);
             ui.set_find_status(cell.borrow().find_status.as_str().into());
             if let Some(range) = selection {
-                dispatch::select(&ui, &mut cell.borrow_mut(), &range);
+                // **`reveal`, not `select`.** The find bar is still open and
+                // Enter is how the user asks for the next match, so taking
+                // the caret into the document here means the *following*
+                // Enter replaces that match with a line break -- which is
+                // what it did, once per press, silently.
+                dispatch::reveal(&ui, &mut cell.borrow_mut(), &range);
             }
         };
         if forward {
@@ -816,6 +953,75 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
     {
         let cell = Rc::clone(&state);
         let weak = ui.as_weak();
+        // One tick of a scan of a document served from disk (ADR-0042). The
+        // budget is what keeps the window responsive: this returns after a
+        // few megabytes rather than after the file, and Slint redraws in
+        // between. Stopping is the timer not firing again -- there is no
+        // thread to signal and nothing to join.
+        ui.on_scan_tick(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let running = cell.borrow_mut().advance_scan(bp_search::WINDOWS_PER_TICK);
+            ui.set_scanning(running);
+            ui.set_find_status(cell.borrow().find_status.as_str().into());
+            editor_view::draw_editor_view(&ui, &mut cell.borrow_mut());
+        });
+    }
+
+    {
+        let cell = Rc::clone(&state);
+        let weak = ui.as_weak();
+        // The Run menu's rows, built the moment before the menu opens
+        // (ADR-0043). Not in `refresh`: parsing a notebook costs real work
+        // and a menu nobody has opened is a parse nobody asked for.
+        ui.on_run_menu_opening(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let items = {
+                let s = cell.borrow();
+                menus::run(
+                    &s.run_menu(),
+                    s.is_running(),
+                    s.document_language().is_some(),
+                )
+            };
+            ui.set_run_items(Rc::new(slint::VecModel::from(items)).into());
+        });
+    }
+
+    {
+        let cell = Rc::clone(&state);
+        let weak = ui.as_weak();
+        // One tick of a cell that is running (ADR-0043). The same shape as
+        // the scan's tick, for the same reason: `bp_execution::run` would
+        // block the window for as long as the cell took, and a *hung* cell
+        // for the whole timeout.
+        ui.on_run_tick(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let running = cell.borrow_mut().poll_run();
+            ui.set_running(running);
+            push_run_panel(&ui, &cell.borrow());
+        });
+    }
+
+    {
+        let cell = Rc::clone(&state);
+        let weak = ui.as_weak();
+        // Clicking a row of the outline goes to that cell (ADR-0045). It does
+        // not run it: a click that starts a process would be a second place
+        // consent is asserted, and there is exactly one.
+        ui.on_go_to_cell(move |index| {
+            let Some(ui) = weak.upgrade() else { return };
+            let range = cell
+                .borrow_mut()
+                .go_to_cell(usize::try_from(index).unwrap_or(0));
+            if let Some(range) = range {
+                dispatch::select(&ui, &mut cell.borrow_mut(), &range);
+            }
+        });
+    }
+
+    {
+        let cell = Rc::clone(&state);
+        let weak = ui.as_weak();
         ui.on_goto_submitted(move || {
             let Some(ui) = weak.upgrade() else { return };
             let moved = cell.borrow_mut().go_to_line(&ui.get_goto_line());
@@ -823,8 +1029,10 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
             if let Some(range) = moved {
                 // The bar stays open: going to a line is often the first of
                 // several, and closing it would make the second one two
-                // keystrokes further away.
-                dispatch::select(&ui, &mut cell.borrow_mut(), &range);
+                // keystrokes further away. **Which is exactly why the caret
+                // must stay in it** -- a second line number typed into a bar
+                // that no longer holds focus goes into the document.
+                dispatch::reveal(&ui, &mut cell.borrow_mut(), &range);
             }
         });
     }
@@ -943,6 +1151,22 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
         });
     }
 
+    // --- Organize ▸ Related Notes (ADR-0037) ----------------------------
+    {
+        let cell = Rc::clone(&state);
+        let weak = ui.as_weak();
+        ui.on_open_organize_hit(move |index| {
+            let Some(ui) = weak.upgrade() else { return };
+            let path = usize::try_from(index)
+                .ok()
+                .and_then(|i| cell.borrow().related_notes.get(i).map(|r| r.path.clone()));
+            let Some(path) = path else { return };
+
+            cell.borrow_mut().open(PathBuf::from(path));
+            refresh(&ui, &mut cell.borrow_mut(), state::PushText::Yes);
+        });
+    }
+
     // Autosave to the recovery journal. Separate from the disk watcher
     // because they answer different questions on different clocks: "did
     // someone else change this file" and "is my work safe if the power goes".
@@ -1032,6 +1256,34 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
 
     set_static_menus(&ui);
     refresh(&ui, &mut state.borrow_mut(), state::PushText::Yes);
+
+    // `--line=N`, made of exactly what Ctrl+G does: the same `go_to_line`,
+    // the same `reveal`. One implementation, so the flag cannot drift from
+    // the row.
+    //
+    // **A tick later, and not here**, for the reason R011 rule 9 names on the
+    // other side of the same seam. `reveal` asks the widget to scroll a range
+    // into view, and until `run()` there is no laid-out widget to ask; the
+    // request is dropped rather than refused, so the caret lands and the
+    // viewport does not move -- which looks exactly like `--line` doing
+    // nothing. 1ms is `focus-timer`'s interval and for its reason: not a
+    // delay, just a later turn of the event loop.
+    if let Some(line) = options.line {
+        let cell = Rc::clone(&state);
+        let weak = ui.as_weak();
+        slint::Timer::single_shot(std::time::Duration::from_millis(1), move || {
+            let Some(ui) = weak.upgrade() else { return };
+            // Through the string form because that is the one entry point,
+            // and it is where "past the end lands on the last line" is
+            // already decided. A second numeric door would be a second
+            // answer to the same question.
+            let moved = cell.borrow_mut().go_to_line(&line.to_string());
+            if let Some(range) = moved {
+                dispatch::reveal(&ui, &mut cell.borrow_mut(), &range);
+            }
+        });
+    }
+
     ui.run()?;
     drop(disk_timer);
     Ok(())
