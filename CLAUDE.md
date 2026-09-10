@@ -125,7 +125,14 @@ clause and link; it must not retell it.
 ./scripts/Drive-Window.ps1 -Kill        # launch the app and photograph it
 ```
 
-This **is** CI — there is no hosted CI ([ADR-0016](docs/decisions/ADR-0016.md)).
+This **is** the gate that authorises a push, and it runs on this machine
+([ADR-0016](docs/decisions/ADR-0016.md)). **Hosted CI exists again as of
+[ADR-0082](docs/decisions/ADR-0082.md)** and does not change that: it runs on
+pull requests and on `main`, it skips three stages this one runs, and a green
+run there is necessary and not sufficient. ADR-0016's premise -- *"GitHub
+Actions is not available"* -- became false silently, which is trap 6 for the
+second time.
+
 Every commit in this repository has passed it. Keep it that way.
 
 - **Background it, and do not edit files while it runs.** The Linux leg

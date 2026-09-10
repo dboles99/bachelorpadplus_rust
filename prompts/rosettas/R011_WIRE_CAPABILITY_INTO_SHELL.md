@@ -171,7 +171,10 @@ From `docs/governance/DEFINITION_OF_DONE.md`, the parts that apply here:
 ./scripts/Invoke-LocalCI.ps1 -Linux
 ```
 
-This **is** the gate — there is no hosted CI (ADR-0016). Every commit in this
+This **is** the gate that authorises a push, and it runs on this machine
+(ADR-0016). Hosted CI exists again ([ADR-0082](../../docs/decisions/ADR-0082.md))
+but runs only on pull requests and `main`, and skips three stages this one runs.
+Every commit in this
 repository has passed it. It runs `fmt`, `check --locked`, `clippy -D
 warnings`, `test`, an actual binary launch, and the log-hygiene scan, then the
 whole lot again inside WSL.
