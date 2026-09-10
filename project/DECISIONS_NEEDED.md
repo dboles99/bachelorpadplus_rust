@@ -77,8 +77,14 @@ owns the argument and this file owns the queue.
 | D25 | Hosted CI, against ADR-0016? | Read ADR-0073 there and adopt it. **Edits `CLAUDE.md`** | **Daniel** |
 | D26 | `MIT OR Apache-2.0`, or GPL-3.0-only? | Undecided; needed by day 22 | **Daniel** |
 | D27 | What does the countdown count to? | The release, and ADR-0076 is edited to say so | **Daniel** |
+| D28 | ~~ADR numbering collides with the derived repository~~ | **Answered 2026-09-10 and closed the same day.** This sequence continues at **0080**; 0057-0079 are deliberately unused, because `bachelorpluslite` holds those numbers for different decisions and this project's records link to several of them. Recorded in [ADR-0080](../docs/decisions/ADR-0080.md) itself, on the far side of the gap, rather than left for somebody to notice | -- |
 
-**Two of the eleven were answered by looking rather than by asking**, which is
+**Twelve rows, not eleven.** D28 was raised and answered inside one session, so
+it is listed above already closed rather than given a turn in the queue -- but it
+is listed, because a decision that is only ever mentioned in a commit message is
+a decision the register does not have.
+
+**Two of the twelve were answered by looking rather than by asking**, which is
 trap 8 arriving from a new direction: **D23 and D24 were both already decided,
 with the reasoning written and the code shipped, in the repository this one
 spawned twelve days earlier.** [V1_1_1_PLAN.md](V1_1_1_PLAN.md) section 0b has

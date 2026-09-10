@@ -38,6 +38,20 @@ Status as of **2026-08-23**. Three words, meaning three different things:
 | 19 | Hardening, fuzzing and benchmarks | **Started** | [14-hardening](project/tasks/14-hardening/) | `fuzz/` (standalone, and now gated) |
 | 20 | Packaging, signing, release and upgrade testing | **Started** | [14-hardening](project/tasks/14-hardening/) | — |
 
+**Phase 2 gained thirteen menu rows on 2026-09-10 without anything being
+built** ([ADR-0080](docs/decisions/ADR-0080.md)). Duplicate Line, Move Line
+Up/Down, the five date/time stamps and the five Markdown constructs were greyed
+in the build every user runs, on the claim that `TextInput` will not report its
+caret. It reports it, and had all along. **The phase status does not change --
+it was *Started* and remains so** -- but the count of features that work in only
+one editor surface went from four to zero, which is the number
+[ADR-0018](docs/decisions/ADR-0018.md) called the tax of carrying both views.
+
+**Whether the flag itself survives is D21**, and it is deliberately not answered
+by that finding: what `--editor-view` still costs -- no CJK input, checked in
+Slint's source -- is unchanged, and retiring an editing surface is a larger
+decision than the discovery that made it askable.
+
 **Phase 20 started on 2026-08-23, and what it found is worth knowing before
 anybody sizes the rest of it.** The inventory came first, as ADR-0048
 recommends, and turned up four things in a product 1,972 passing tests deep:

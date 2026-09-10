@@ -270,6 +270,17 @@ first, so neither is the pure wiring P1 and P3 were.**
 > editing one to make the suite pass is the exact mistake it exists to
 > prevent.
 
+### New on 2026-09-10, both produced by ADR-0080
+
+| # | Item | Why it is ready |
+| --- | --- | --- |
+| **C1** | **`Buffer::access` is set by nothing -- wire it, or delete it.** `set_access` and `with_access` have **zero callers** outside `bp-buffer`, so the read-only guards in `insert`/`remove` have never once fired | **Decided by evidence, not a design pass, which is what R1 was sized as.** Downstream deleted the type ([ADR-0066 there](../../bachelorpluslite/docs/decisions/ADR-0066.md)) because Lite has neither a huge-document viewer nor Lock Document. **This product has both**, so the same finding argues the other way: `LargeFile::open` already computes an `Access`, and Security ▸ Lock Document is a second producer nobody connected. **Adapt, do not adopt** |
+| **C2** | **The status bar could say `Ln 42, Col 18` in both surfaces.** `cursor_label` returns a bare line count under `TextInput` | specs.md §3 asks for line and column, and the reason it was refused is gone. **Deliberately not taken with ADR-0080**, and the reason is the item's whole shape: that change took the caret for rows that *edit* at it, where a wrong answer is visible at once. A status bar refreshed on **every keystroke** is a different risk profile, and it needs a caret feed into `AppState`, which `cursor_label` cannot reach today |
+
+**Neither is blocked on a decision.** C1 needs an ADR because it either deletes
+a public type or gives it its first producer; C2 needs one only if it changes
+how often `refresh` runs.
+
 ### Also ready, and not packaging
 
 | # | Item | Why it is ready |
