@@ -247,6 +247,32 @@ export component AppWindow inherits Window {
     callback passphrase-submitted(string);
     callback passphrase-cancelled();
 
+    /// Where `TextInput`'s caret is, and where its selection is anchored, as
+    /// **byte** offsets into `doc-text`.
+    ///
+    /// **The record said for eight sessions that this could not be known.**
+    /// ADR-0018 measured a four-feature "tax" on the two editor views on the
+    /// premise that "only *reading* the caret is impossible under
+    /// `TextInput`", and thirteen menu rows were greyed in the default build
+    /// because of it. `cursor-position-byte-offset` is declared `out` in
+    /// Slint's own `builtins.slint` and has been all along; it is marked
+    /// there as internal and undocumented, which is a reason to record the
+    /// dependency, not a reason it does not work.
+    ///
+    /// **The guard for that dependency is the build itself.** An `out`
+    /// property that stops existing is a compile error in this file, not a
+    /// silent zero -- so a Slint upgrade that removes it fails the gate's
+    /// first stage rather than quietly returning every caret to position 0.
+    /// That is why there is no test here pretending to check a toolkit
+    /// internal; what does get tested is our own byte-to-character
+    /// conversion, in `bp-buffer`, where it can be tested without a window.
+    ///
+    /// Bytes, not characters, because that is what the widget counts. Nothing
+    /// above the rope does -- `bp_editor::Editor::set_cursor_at_byte` is the
+    /// one place the two meet.
+    out property <int> caret-byte-offset: editor.cursor-position-byte-offset;
+    out property <int> anchor-byte-offset: editor.anchor-position-byte-offset;
+
     /// Select a range in the editor. Called from Rust once it has worked out
     /// where the next match is -- `set-selection-offsets` is a function on
     /// the widget, so only Slint can invoke it.
@@ -277,10 +303,19 @@ export component AppWindow inherits Window {
 
     /// Paste whatever the OS clipboard holds at the caret.
     ///
-    /// Rust puts the chosen history entry on the clipboard first. Under
-    /// `TextInput` that is the only way to insert at the caret, because the
-    /// caret is not readable; under the custom surface it is a courtesy, and
-    /// the insertion has already happened.
+    /// Rust puts the chosen history entry on the clipboard first, and under
+    /// `TextInput` this asks the widget to paste it at its own caret.
+    /// Under the custom surface it is a courtesy: the insertion has already
+    /// happened.
+    ///
+    /// **The reason given here used to be "because the caret is not
+    /// readable", and that was false** ([ADR-0080](../../../docs/decisions/ADR-0080.md)).
+    /// Going through the widget's own `paste()` is still the right shape --
+    /// it is one call rather than read-the-caret, splice-the-rope,
+    /// re-push-the-text, restore-the-selection, and it keeps the widget's undo
+    /// stack coherent with the edit. **A correct decision resting on a false
+    /// reason is the hardest kind of claim to catch**, because nothing about
+    /// the behaviour looks wrong; the tell was only ever the *reason*.
     public function paste-from-clipboard() {
         if (root.use-editor-view) {
             // We own the caret, so Rust inserted at it directly.
@@ -496,11 +531,19 @@ export component AppWindow inherits Window {
         // Duplicate Line / Move Line Up / Move Line Down (bp-ui/src/menus.rs
         // ids 95-97). Routed through `dispatch` like a menu click, which is
         // what it is -- the ids sit below 100, so they always reach Rust.
-        // `run_line_edit` is what makes Move Line Up/Down and Duplicate Line
-        // no-ops without the custom editor view, the same as the menu rows
-        // being disabled there; claiming Alt+Up/Down here rather than only
-        // when that view is active keeps this list state-free, like every
-        // other binding in it.
+        // These three go through `root.dispatch` -- the same entry point the
+        // menu rows use -- so they pick up `adopt_widget_caret` with them and
+        // work in both surfaces (ADR-0080). **That is worth stating, because
+        // a shortcut route that bypassed the menu arm would have adopted no
+        // caret and edited at position 0**, which is the shape of failure this
+        // change had to be checked for rather than assumed.
+        //
+        // Until ADR-0080 this comment said `run_line_edit` made all three
+        // no-ops without the custom editor view. It did, that guard is gone,
+        // and the rows are live everywhere now.
+        //
+        // Claiming Alt+Up/Down here rather than only when a particular view is
+        // active keeps this list state-free, like every other binding in it.
         KeyBinding {
             keys: @keys(Control + "d");
             activated => {

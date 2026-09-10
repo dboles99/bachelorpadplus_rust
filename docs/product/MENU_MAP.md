@@ -15,15 +15,34 @@ features, and the Data menu managed to say "nothing for TXT documents" and then
 list six things underneath. Ten rows were built; eleven were deleted, each for
 a reason ADR-0048 records.
 
-**Live** means reachable and doing something. **Caret** means live only under
-`--editor-view`, because it needs to know *where the caret is*, and Slint's
-`TextInput` will not say.
+**Live** means reachable and doing something.
 
-**Needing the caret *moved* is a different thing, and this file used to
+**There is no longer a *Caret* category, and its absence is
+[ADR-0080](../decisions/ADR-0080.md).** This file defined one for eight
+sessions -- "live only under `--editor-view`, because it needs to know *where
+the caret is*, and Slint's `TextInput` will not say" -- and thirteen rows sat
+in it. `TextInput` does say: `cursor-position-byte-offset`, an `out` property
+in the toolkit's own `builtins.slint`, confirmed by compiling rather than by
+reading. **Every one of those thirteen rows is live in the build a user
+runs.**
+
+**Needing the caret *moved* was once a different thing, and this file used to
 conflate them.** `set-selection-offsets` moves `TextInput`'s caret perfectly
-well — Find Next has always jumped that way — so a feature that only has to
-put the caret somewhere is not a Caret feature at all. Go to Line was marked
-as one until 2026-08-22 and was not. **Built** means the library work exists and is tested but has no row
+well — Find Next has always jumped that way — so a feature that only has to put
+the caret somewhere was never a Caret feature. Go to Line was marked as one
+until 2026-08-22 and was not.
+
+**That correction is worth keeping even though ADR-0080 has made the
+distinction moot**, because of how it went: the *moved* half was checked and
+fixed while the *read* half beside it was not, and the fix made the remaining
+claim look freshly examined. **A true sentence next to an unverified one lends
+it credibility it has not earned.**
+
+One thing did come out of `set-selection-offsets` needing a second look: it
+takes **byte** offsets, and every range this product computes counts
+characters. Nothing converted, so Find highlighted the wrong span on any
+document with a multi-byte character before the match — silently, because the
+offset is clamped rather than refused (ADR-0080). **Built** means the library work exists and is tested but has no row
 yet — those are the cheapest items in `project/WORK_QUEUE.md`.
 
 Two kinds of greyed row remain, and telling them apart matters:
@@ -57,7 +76,7 @@ Nothing means "does not exist yet" any more, and `menus::planned_menu` and
 | Clipboard History | **live** |
 | Paste transformations | **live** — offered per entry kind, and only where the result would differ |
 | Sort / Deduplicate / Reverse / Trim lines | **live** |
-| Duplicate Line, Move Line Up / Down | **caret** |
+| Duplicate Line, Move Line Up / Down | **live** in both surfaces ([ADR-0080](../decisions/ADR-0080.md)) |
 | Go to Line | **live** in both surfaces — it needs the caret *moved*, never read |
 | Multi-cursor, column selection | **Not a row** ([ADR-0048](../decisions/ADR-0048.md)). `TextInput` has one caret and cannot draw a second, so it could only work under `--editor-view` — and `bp-editor` would have to carry a set of carets through every command, selection and undo entry. A real feature, and it comes back as a queue item with a design behind it rather than as a row that has sat in a menu since the scaffold commit |
 
@@ -75,8 +94,8 @@ Nothing means "does not exist yet" any more, and `menus::planned_menu` and
 
 | Row | State |
 | --- | --- |
-| Date, Time, Date and Time, ISO 8601, Filename date | **caret** — each row's hint is the stamp rendered from the clock, so the row shows what it will insert |
-| Bold, Italic, Link, Code Block, Table | **caret** — the Markdown constructs, all live |
+| Date, Time, Date and Time, ISO 8601, Filename date | **live** in both surfaces ([ADR-0080](../decisions/ADR-0080.md)) — each row's hint is the stamp rendered from the clock, so the row shows what it will insert |
+| Bold, Italic, Link, Code Block, Table | **live** in both surfaces ([ADR-0080](../decisions/ADR-0080.md)) — the Markdown constructs |
 | Citation | Not a row. `bp-research` models citations and nothing in this menu inserts one; it needs a bibliography to insert *from*, which is a decision rather than a row |
 | Notebook cell | Not a row. For a `.md` a cell is a fenced block, which Code Block already writes; ADR-0043 declined a cell-sequence view for `.ipynb` |
 
@@ -301,7 +320,14 @@ Not a menu of its own. Edit ▸ Go to Line and Ctrl+G open a bar beside the find
 bar, built the same way and for the same reason: a modal dialog is a heavy
 answer to "which line?". `Editor::go_to_line` reports whether the line existed,
 so an out-of-range number moves the caret to the end *and* says "there are only
-42 lines". **caret** — `TextInput`'s caret cannot be moved from Rust.
+42 lines".
+
+**live** in both surfaces — and this line said the exact opposite of the Edit
+menu's own row above, twelve rows apart, for as long as both existed. It read
+*"**caret** — `TextInput`'s caret cannot be moved from Rust"*, while the Edit
+row read *"live in both surfaces — it needs the caret moved, never read"*, which
+is correct: `set-selection-offsets` moves it. **Trap 4** — two claims about one
+feature coexist for as long as nothing asks.
 
 ## Tab strip context menu
 

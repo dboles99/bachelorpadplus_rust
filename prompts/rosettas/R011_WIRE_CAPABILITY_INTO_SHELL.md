@@ -54,6 +54,29 @@ Each of these has already cost somebody a debugging session.
    this and follow the same shape. Missing one path produces a feature that
    works for you and not for the user, depending on a flag.
 
+   **The caret is readable in both, and units differ between them**
+   ([ADR-0080](../../docs/decisions/ADR-0080.md)). Two rules, and forgetting
+   either has already cost this repository something:
+
+   - **To edit at the caret under `TextInput`, call
+     `dispatch::adopt_widget_caret` first.** It reads `caret-byte-offset` and
+     `anchor-byte-offset` off `AppWindow` and puts the rope's caret there. Then
+     `hand_caret_back` **after `refresh`** — never before, because
+     `PushText::Yes` replaces the widget's whole text. **Do not grey a row for
+     "no caret"**; that claim is dead. And if you enable a row, check the
+     `AppState` method behind it for an `editor_view` early return — enabling
+     three rows over one such guard made each an enabled row that silently did
+     nothing, while a test asserted that was correct.
+   - **`TextInput` counts bytes; everything above the rope counts characters.**
+     `set-selection-offsets` takes **byte** offsets. `bp_search` ranges,
+     `Editor::select` and `Buffer::insert` are all **character** indices.
+     Convert with `Editor::bytes_of_chars` outbound and
+     `Buffer::char_of_byte` inbound — never by hand. Passing one for the other
+     is invisible on an ASCII document, wrong on every other, and **clamps
+     rather than failing**, so the only symptom is a highlight in the wrong
+     place. That was a live defect in Find for as long as nobody tried an
+     accented document.
+
 4. **An element inside a Slint `if` is out of scope for anything outside it.**
    That is why the find bar is collapsed to zero height rather than made
    conditional, and why both editors exist with `visible` toggled. If you need

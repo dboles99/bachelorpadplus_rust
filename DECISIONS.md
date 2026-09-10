@@ -4,6 +4,13 @@ This file is the human-readable decision register. Every row has a formal ADR
 in `docs/decisions/` under the same number: `BP-ADR-0007` is `ADR-0007.md`.
 Adding a decision means adding both.
 
+**An amendment gets its own row, appended, dated, and carrying the same
+number.** So a number appearing twice is the convention working rather than a
+duplicate -- said here because reconciling this table against
+`docs/decisions/` turns up one more row than there are files, and that reads
+like a defect until somebody knows why. The convention had been applied to
+ADR-0017 and not to ADR-0018, which *was* a defect and is fixed below.
+
 | ID | Date | Decision | Status | ADR |
 | --- | --- | --- | --- | --- |
 | BP-ADR-0001 | 2026-08-16 | Target Windows 10, Windows 11 and Linux | Accepted | [ADR-0001](docs/decisions/ADR-0001.md) |
@@ -64,7 +71,9 @@ Adding a decision means adding both.
 | BP-ADR-0054 | 2026-08-23 | The command line becomes an interface: `--help`, `--version`, `--line=N`, a reported typo, and the licences every manifest already claimed | Accepted, shipped, confirmed at the window | [ADR-0054](docs/decisions/ADR-0054.md) |
 | BP-ADR-0055 | 2026-08-23 | Signing is deferred and self-signing refused outright; the archive, the checksums and a one-command signing step are built anyway. D15 closed | Accepted | [ADR-0055](docs/decisions/ADR-0055.md) |
 | BP-ADR-0056 | 2026-08-23 | All three embedding sources, as choices, with the profile as a ceiling and `Cloud` behind a per-use gesture — and the axis for them had existed since ADR-0020. D16 closed | Accepted | [ADR-0056](docs/decisions/ADR-0056.md) |
+| BP-ADR-0080 | 2026-09-10 | `TextInput` says where its caret is and six places said otherwise; thirteen greyed rows go live, and Find stops highlighting the wrong span. **0057-0079 are deliberately unused** -- the derived repository holds those numbers for other decisions | Accepted | [ADR-0080](docs/decisions/ADR-0080.md) |
 | BP-ADR-0017 | amended 2026-08-22 | Half of the renderer revert condition is now a number rather than a feeling: per-frame row building, and its independence from document size | Accepted, amended | [ADR-0017](docs/decisions/ADR-0017.md) |
+| BP-ADR-0018 | amended 2026-08-22 | D2 re-asked and reaffirmed: `--editor-view` stays opt-in and unchanged. Neither re-ask condition has been met, and the parity tax *fell* from five features to four | Accepted, amended | [ADR-0018](docs/decisions/ADR-0018.md) |
 
 ## Decisions needed before the work they block
 
@@ -82,12 +91,16 @@ Adding a decision means adding both.
   sessions, with the reason in its own label the whole time. Nothing about the
   work was hard once the question was answered. That is the argument
   `project/DECISIONS_NEEDED.md` exists to make.
-- **What may leave the machine** (phase 8 layer three, phase 10). Generative
-  providers and embeddings both imply sending document content somewhere.
-  ADR-0006 keeps them optional; ADR-0011 governs what is permitted. Neither
-  says which providers are acceptable.
-- **What `bp-storage` records, and what the user sees for it** (phase 9).
-  Narrowed twice and no longer a yes/no. ADR-0020 settled the security half --
+- ~~**What may leave the machine**~~ **Answered twice, and both halves are
+  now recorded.** ADR-0033 settled the generative half (OpenAI's API, opt-in
+  per use, never automatic); [ADR-0056](docs/decisions/ADR-0056.md) settled
+  the embedding half on 2026-08-23 -- all three sources as choices, the
+  profile as a ceiling, `None` the default, and `Cloud` behind a per-use
+  gesture.
+- ~~**What `bp-storage` records, and what the user sees for it**~~ (phase 9).
+  **Answered: ADR-0037**, and shipped as a related-notes panel and duplicate
+  detection. Kept here for the shape of the narrowing, which is the useful
+  part. ADR-0020 settled the security half --
   `record_document` honours the policy, dropping the title under `PathOnly`
   and recording nothing under `Disabled` -- and the product half is answered:
   it is wired **after** a design pass, not before. ADR-0019 stands exactly as
@@ -95,9 +108,15 @@ Adding a decision means adding both.
   product rather than about the crate: a related-notes panel, duplicate
   detection, or something else. Recording something before deciding what it is
   for is how a metadata store becomes a liability.
-- **specs.md section 22's warm-start target** (75 ms) is still unverified —
-  the software renderer's time to first interaction cannot be measured, so
-  half of ADR-0017's target has no number behind it.
+- ~~**specs.md section 22's warm-start target**~~ **Moved, on 2026-08-24, to
+  `project/WORK_QUEUE.md` as M1.** It was never a decision for a human -- it
+  is a measurement nobody has taken, which is a queue item. Leaving it here
+  put an open question in the file `CLAUDE.md`'s ownership table says holds
+  *no* open questions, and it sat unread for that reason.
+
+**Nothing above this line is open any more.** This section is kept as a record
+of how each question narrowed, which is the part worth re-reading; the live
+queue is `project/DECISIONS_NEEDED.md` and it is empty as of 2026-08-23.
 
 ## Recently closed, and what each one cost to learn
 
@@ -114,6 +133,101 @@ in the fourth.
 Kept rather than deleted, because every one of these went stale the same
 way — a fix landing without the record moving — and because the lesson in each
 is worth more than the fact.
+
+### A constraint blamed on a dependency deserves the same scepticism as one blamed on the record — and it is cheaper to check
+
+2026-09-10, [ADR-0080](docs/decisions/ADR-0080.md). Thirteen menu rows were
+greyed in the build every user runs because *"`TextInput`'s caret is unreadable
+from here"*. That sentence was in six places, had shaped four ADRs, and was
+**false the whole time**: `cursor-position-byte-offset` is an `out` property in
+Slint's own `builtins.slint`. `cargo check` disproved it in fifty-five seconds.
+
+Trap 6 says a claim in the record is not a property of the repository; trap 8
+says grep for an answer before asking for one. **Neither points at a
+dependency's source**, and that is where this answer was.
+
+**Except it was also here, and that is the sharper half.** `cursor_label`'s doc
+comment in `bp-ui/src/state.rs` had it right all along — *"under `TextInput` the
+caret is reachable only through a property marked internal and undocumented"* —
+and the local decision built on it, not to depend on a toolkit internal merely
+to label a status bar, was defensible and still stands. **What failed was
+propagation.** ***"Reachable only through an internal property"* and *"not
+reachable"* are not the same sentence**, and the distance between them was
+thirteen working menu rows. The first is a cost to weigh; the second is a wall.
+
+**A local decision not to use a capability reads, three files away, as proof
+the capability does not exist.** That is the generalisable form, and it is worse
+than an ordinary stale claim because the original comment is *accurate* — there
+is nothing in it for a reader to catch. Nothing ever required the status bar and
+the menu to be read together; they are different files, different features,
+different sessions.
+
+**Three sharper things came out of it than the fix:**
+
+- **A true sentence next to an unverified one lends it credibility it has not
+  earned.** ADR-0018 *did* check Slint's source — for input-method composition,
+  where it found a real, still-standing refusal. The caret claim sat in the next
+  paragraph and rode along on it for eight sessions. The tell is a paragraph
+  where one claim cites a file and line and the one beside it cites nothing.
+- **Fixing half a conflation makes the other half look examined.** `MENU_MAP.md`
+  once conflated the caret being *moved* with the caret being *read*. On
+  2026-08-22 the *moved* half was checked, corrected, and written up — and the
+  *read* half beside it emerged from that looking freshly verified when nobody
+  had touched it.
+- **A measured number is only as good as its unmeasured premise.** ADR-0018's
+  "tax" of four features was a real count, honestly taken, and re-derived across
+  two sessions. It counted consequences of a constraint nobody had tested, which
+  makes the measurement itself a way of *not* asking the question — the number
+  looked like evidence and was arithmetic.
+
+### The seam that hid the caret was hiding a live defect in the other direction
+
+Same ADR, found while looking for the first. Slint's `set-selection-offsets`
+takes **byte** offsets; `bp_search` produces **character** indices and says so
+in its module header, with a test named `offsets_are_characters_not_bytes`.
+`dispatch::{select, reveal}` passed one to the other **unconverted**, so Find in
+the default editor surface highlighted the wrong span on any document with a
+multi-byte character before the match.
+
+**Two things kept it alive, and both generalise:**
+
+- **It clamped instead of failing.** `safe_byte_offset` is `ceil_char_boundary`,
+  so a wrong offset became a valid one. A call that succeeds and does the wrong
+  thing is worse than one that fails — the same shape as DrvFs ignoring `chmod`
+  silently, from a completely different direction.
+- **The test that existed for this seam covered three of its four
+  participants.** `search_over_buffer.rs` was written for exactly this class of
+  bug, its header names the symptom in as many words — *"a find that highlights
+  the wrong text"* — and it tested `bp-search` against `bp-buffer` against
+  `bp-editor`. The conversion happens in the fourth, `bp-ui`, and every other
+  Find test used ASCII, where the two numbers are equal. **Ask which
+  participants a seam has before believing a seam is covered.**
+
+- **An identity has four layers, and the two that break silently are the
+  on-disk ones.** BachelorPlusLite was cloned out of this repository on
+  2026-08-29 at `3589205`, and renaming it forced a distinction this project
+  had never had to write down. A global search and replace would have broken
+  four different things at four different times:
+
+  | Layer | What renaming it costs |
+  | --- | --- |
+  | A display string -- window title, the About row, a log line | Nothing. Free at any point |
+  | The Cargo package `bachelorpad` | Five scripts and the release layout are written against `bachelorpad.exe`. The build goes red in seconds, which is the **cheap** failure |
+  | `APP_ID`, `PROG_ID_PREFIX`, `%APPDATA%\bachelorpad\` | Nothing fails. Every file association and every user's config is silently orphaned |
+  | `MANIFEST_MAGIC`, `SIDECAR_MAGIC` | Nothing fails *in the build*. Every file an earlier build wrote stops being readable |
+
+  **The dangerous rows are the ones where nothing goes red**, and they are the
+  bottom two. The compiler reports the package name before you have finished
+  reading the diff; nothing anywhere reports the magic strings until somebody
+  opens a document from last month. That is trap 7 arriving from the writing
+  end rather than the reading end, and the four committed fixtures in
+  `tests/integration/tests/what_an_earlier_build_wrote.rs` are exactly the
+  test that catches it -- which is a second, unplanned argument for the file.
+
+  Nothing in this repository changed. It is recorded here because the next
+  rename faces the same four rows, and because **a downstream now inherits
+  every on-disk format decision in this log** -- so a format change here has
+  a reader it did not have before.
 
 - **A performance claim in a comment is trap 3 with worse consequences.**
   `bp_editor::view::Anchor` explains itself by saying a global row index

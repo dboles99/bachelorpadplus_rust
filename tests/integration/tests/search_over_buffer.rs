@@ -247,6 +247,47 @@ fn a_match_after_multi_byte_text_is_selected_correctly() {
 }
 
 #[test]
+fn a_match_handed_to_a_toolkit_that_selects_by_byte_is_converted_first() {
+    // **The claim this file did not make, and the defect it hid.**
+    //
+    // The three tests above prove `bp-search`, `bp-buffer` and `bp-editor`
+    // name the same place in *characters*. There is a fourth participant --
+    // the shell -- and it hands that character range to Slint's
+    // `set-selection-offsets`, which takes **byte** offsets
+    // (`i-slint-core/items/text.rs`, `safe_byte_offset` is
+    // `ceil_char_boundary`). Nothing converted, so on any document with a
+    // multi-byte character before the match, Find in the default editor
+    // surface highlighted a different span.
+    //
+    // It never failed loudly, which is why it survived: the offset is clamped
+    // to a character boundary rather than rejected, so the wrong text is
+    // highlighted and nothing is reported. Every other test of Find in this
+    // repository uses ASCII, where the two numbers are equal.
+    let text = "héllo cat";
+    let editor = Editor::new(text);
+
+    let m = &find_all(text, &Query::literal("cat")).expect("find")[0];
+    assert_eq!(m.range, 6..9, "characters, as bp-search documents");
+
+    let bytes = editor.bytes_of_chars(&m.range);
+    assert_eq!(bytes, 7..10, "bytes, as the toolkit wants them");
+
+    // The two assertions that matter: the converted range addresses the match,
+    // and the unconverted one -- what the shell used to send -- does not.
+    assert_eq!(
+        text.get(bytes.clone()),
+        Some("cat"),
+        "the offsets the toolkit is given must address the match"
+    );
+    assert_ne!(
+        text.get(m.range.start..m.range.end),
+        Some("cat"),
+        "and the character range must not, or this test is passing for the \
+         wrong reason and would pass on an ASCII fixture too"
+    );
+}
+
+#[test]
 fn a_match_on_the_third_line_of_a_crlf_document_is_reported_as_line_three() {
     let text = "one\r\ntwo\r\nneedle\r\nfour\r\n";
     let buffer = Buffer::from_text(text);

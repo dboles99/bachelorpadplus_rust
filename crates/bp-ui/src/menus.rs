@@ -688,11 +688,11 @@ fn shorten(text: &str, max: usize) -> String {
     format!("…{tail}")
 }
 
-/// `editor_view` gates the caret-dependent line operations: `TextInput`
-/// never exposes where the caret is, so those rows stay present but greyed
-/// rather than vanishing, per this module's convention for a feature that
-/// exists but is not usable right now.
-pub fn edit(clips: &[bp_clipboard::Entry], editor_view: bool) -> Vec<MenuItem> {
+/// **No longer gated on the editor view (ADR-0080).** The caret-dependent line
+/// operations were greyed under `TextInput` on the premise that the widget
+/// never exposes where the caret is. It does, and had all along, so `edit` no
+/// longer needs to know which surface is drawing.
+pub fn edit(clips: &[bp_clipboard::Entry]) -> Vec<MenuItem> {
     let mut items = vec![
         row("Undo", "Ctrl+Z", action::UNDO),
         row_end("Redo", "Ctrl+Y", action::REDO),
@@ -743,20 +743,16 @@ pub fn edit(clips: &[bp_clipboard::Entry], editor_view: bool) -> Vec<MenuItem> {
         row("Remove Duplicate Lines", "", action::LINES_DEDUPE),
         row("Reverse Lines", "", action::LINES_REVERSE),
         row_end("Trim Trailing Whitespace", "", action::LINES_TRIM),
-        // Both need the caret bp-editor owns, which only the custom surface
-        // exposes -- TextInput's caret is unreadable from here.
-        MenuItem {
-            enabled: editor_view,
-            ..row("Duplicate Line", "Ctrl+D", action::DUPLICATE_LINE)
-        },
-        MenuItem {
-            enabled: editor_view,
-            ..row("Move Line Up", "Alt+Up", action::MOVE_LINE_UP)
-        },
-        MenuItem {
-            enabled: editor_view,
-            ..row_end("Move Line Down", "Alt+Down", action::MOVE_LINE_DOWN)
-        },
+        // **Live in both surfaces since ADR-0080.** These need the caret
+        // `bp-editor` owns, and the claim that `TextInput` would not say where
+        // it was had been in this file, `app.slint`, ADR-0018 and
+        // `MENU_MAP.md` for eight sessions without anybody asking Slint. It
+        // does say: `cursor-position-byte-offset`, an `out` property in the
+        // toolkit's own `builtins.slint`. `dispatch::adopt_widget_caret` reads
+        // it before the edit.
+        row("Duplicate Line", "Ctrl+D", action::DUPLICATE_LINE),
+        row("Move Line Up", "Alt+Up", action::MOVE_LINE_UP),
+        row_end("Move Line Down", "Alt+Down", action::MOVE_LINE_DOWN),
         // **Not `editor_view`-gated any more, and the note that gated it was
         // wrong.** `TextInput`'s caret cannot be *read* from here, which is
         // what stops Duplicate Line and the date stamps above; it can be
@@ -1124,15 +1120,16 @@ pub fn tab_context(others: usize, has_path: bool) -> Vec<MenuItem> {
 /// from `render` at the instant the menu was built -- so what the row says is
 /// exactly what clicking it inserts, rather than a description of it.
 ///
-/// Caret rows, like Duplicate Line: inserting at the caret needs a caret, and
-/// `TextInput` does not expose one (ADR-0018).
-pub fn insert(at: time::OffsetDateTime, editor_view: bool) -> Vec<MenuItem> {
+/// **Live in both surfaces since ADR-0080.** Inserting at the caret needs a
+/// caret, and ADR-0018 said `TextInput` would not expose one. It does --
+/// `cursor-position-byte-offset` -- so every row here works in the build a
+/// user actually runs.
+pub fn insert(at: time::OffsetDateTime) -> Vec<MenuItem> {
     let mut items: Vec<MenuItem> = bp_naming::Stamp::all()
         .iter()
         .enumerate()
-        .map(|(index, stamp)| MenuItem {
-            enabled: editor_view,
-            ..row(
+        .map(|(index, stamp)| {
+            row(
                 stamp.label(),
                 &shorten(&bp_naming::render(*stamp, at), 24),
                 action::STAMP_BASE + i32::try_from(index).unwrap_or(0),
@@ -1142,32 +1139,15 @@ pub fn insert(at: time::OffsetDateTime, editor_view: bool) -> Vec<MenuItem> {
     if let Some(last) = items.last_mut() {
         last.separator_after = true;
     }
-    // Caret-only, same as the stamps above and for the same reason: each of
-    // these inserts at a position `TextInput` cannot report.
     items.extend([
-        MenuItem {
-            enabled: editor_view,
-            ..row("Bold", "", action::INSERT_BOLD)
-        },
-        MenuItem {
-            enabled: editor_view,
-            ..row("Italic", "", action::INSERT_ITALIC)
-        },
-        MenuItem {
-            enabled: editor_view,
-            ..row("Link", "", action::INSERT_LINK)
-        },
+        row("Bold", "", action::INSERT_BOLD),
+        row("Italic", "", action::INSERT_ITALIC),
+        row("Link", "", action::INSERT_LINK),
         // The only one of the five that leaves the caret somewhere other
         // than after the inserted text -- between the fences, so typing
         // starts inside the code block rather than after it.
-        MenuItem {
-            enabled: editor_view,
-            ..row("Code Block", "", action::INSERT_CODE_BLOCK)
-        },
-        MenuItem {
-            enabled: editor_view,
-            ..row("Table", "", action::INSERT_TABLE)
-        },
+        row("Code Block", "", action::INSERT_CODE_BLOCK),
+        row("Table", "", action::INSERT_TABLE),
     ]);
     items
 }
@@ -1512,13 +1492,13 @@ mod tests {
 
         vec![
             ("File", file(true, true, true, &[])),
-            ("Edit", edit(&[], true)),
+            ("Edit", edit(&[])),
             ("View", view(ThemeId::Dark, false, true, false, 14)),
             (
                 "Format",
                 format(Encoding::Utf8, LineEnding::Lf, Indent::default()),
             ),
-            ("Insert", insert(time::OffsetDateTime::UNIX_EPOCH, true)),
+            ("Insert", insert(time::OffsetDateTime::UNIX_EPOCH)),
             ("Data", data(Format::Json)),
             ("Note", note(true)),
             ("Notebook", notebook(true)),
@@ -1676,7 +1656,7 @@ mod tests {
     fn every_stamp_row_is_inside_the_range_dispatch_matches() {
         // `stamp_end` is sized from `Stamp::all()`, so a sixth stamp extends
         // the window with the menu. This fails if the two ever part company.
-        let items = insert(STAMP_CLOCK, true);
+        let items = insert(STAMP_CLOCK);
         // Scoped to the stamp window rather than "any real action": the
         // markdown rows beside them now carry real ids too, and a filter
         // that swept those in would count the wrong rows and still pass.
@@ -1702,7 +1682,7 @@ mod tests {
         // The label names the format; the hint is the format applied to the
         // clock. A row reading "ISO 8601" tells you nothing about whether it
         // is the one you want.
-        let items = insert(STAMP_CLOCK, true);
+        let items = insert(STAMP_CLOCK);
         let iso = items
             .iter()
             .find(|i| i.label.contains("ISO"))
@@ -1715,21 +1695,18 @@ mod tests {
     }
 
     #[test]
-    fn the_stamp_rows_are_disabled_without_the_custom_editor_view() {
-        // Inserting at the caret needs a caret. `TextInput` does not expose
-        // one, so the rows grey rather than silently doing nothing.
-        for row in insert(STAMP_CLOCK, false)
+    fn every_insert_row_is_live_in_the_build_a_user_runs() {
+        // **This test asserted the opposite until ADR-0080**, on the premise
+        // that inserting at the caret needs a caret `TextInput` would not
+        // expose. It exposes `cursor-position-byte-offset`, so there is no
+        // longer a surface in which these rows do nothing -- and `insert` no
+        // longer takes the flag that used to decide it.
+        for row in insert(STAMP_CLOCK)
             .iter()
             .filter(|i| i.action != action::NONE)
         {
-            assert!(!row.enabled, "'{}' should be greyed", row.label);
+            assert!(row.enabled, "'{}' is live in both surfaces now", row.label);
         }
-        assert!(
-            insert(STAMP_CLOCK, true)
-                .iter()
-                .filter(|i| i.action != action::NONE)
-                .all(|i| i.enabled)
-        );
     }
 
     #[test]
@@ -2086,10 +2063,10 @@ mod tests {
     }
 
     #[test]
-    fn the_markdown_insert_rows_are_caret_only_and_in_order() {
-        // Same constraint as the date/time stamps beside them: `TextInput`
-        // exposes no caret to insert at.
-        let disabled = insert(STAMP_CLOCK, false);
+    fn the_markdown_insert_rows_are_live_and_in_order() {
+        // **Was `..._are_caret_only_and_in_order` until ADR-0080**, and
+        // asserted these greyed without `--editor-view`. The order is the half
+        // of this test that survives the finding; the greying was never true.
         let markdown_ids = [
             action::INSERT_BOLD,
             action::INSERT_ITALIC,
@@ -2097,25 +2074,13 @@ mod tests {
             action::INSERT_CODE_BLOCK,
             action::INSERT_TABLE,
         ];
-        for id in markdown_ids {
-            let row = disabled
-                .iter()
-                .find(|i| i.action == id)
-                .unwrap_or_else(|| panic!("a row for {id}"));
-            assert!(!row.enabled, "'{}' should be greyed", row.label);
-        }
-
-        let enabled = insert(STAMP_CLOCK, true);
+        let enabled = insert(STAMP_CLOCK);
         for id in markdown_ids {
             let row = enabled
                 .iter()
                 .find(|i| i.action == id)
                 .unwrap_or_else(|| panic!("a row for {id}"));
-            assert!(
-                row.enabled,
-                "'{}' should be live under --editor-view",
-                row.label
-            );
+            assert!(row.enabled, "'{}' is live in both surfaces now", row.label);
         }
 
         let labels: Vec<&str> = markdown_ids
@@ -3076,7 +3041,7 @@ mod tests {
         all.extend(file(true, true, false, &[]));
         // `true` so the caret-dependent rows are enabled here too -- the
         // stronger check, since a disabled row is exempt below regardless.
-        all.extend(edit(&[], true));
+        all.extend(edit(&[]));
         all.extend(view(
             ThemeId::Organic,
             false,
@@ -3087,7 +3052,7 @@ mod tests {
         all.extend(format(Encoding::Utf8, LineEnding::Lf, Indent::default()));
         all.extend(data(Format::Csv));
         all.extend(data(Format::Yaml));
-        all.extend(insert(STAMP_CLOCK, true));
+        all.extend(insert(STAMP_CLOCK));
         all.extend(tools(true));
         all.extend(help());
         all.extend(security_menu());
@@ -3200,7 +3165,7 @@ mod tests {
         rust_side.extend(data(Format::Csv));
         rust_side.extend(data(Format::Yaml));
         rust_side.extend(help());
-        rust_side.extend(insert(STAMP_CLOCK, true));
+        rust_side.extend(insert(STAMP_CLOCK));
         rust_side.extend(tools(true));
         rust_side.extend(tab_context(2, true));
         rust_side.extend(security(
@@ -3238,7 +3203,7 @@ mod tests {
         // `true` so Duplicate Line and Move Line Up/Down are enabled here
         // too -- they are outside the editor window either way, but a
         // disabled row would skip the check below and prove nothing.
-        for item in edit(&clips, true).iter().filter(|i| i.enabled) {
+        for item in edit(&clips).iter().filter(|i| i.enabled) {
             if widget_rows.contains(&item.action) {
                 continue;
             }
@@ -3257,7 +3222,7 @@ mod tests {
             bp_clipboard::Entry::new("first"),
             bp_clipboard::Entry::new("second"),
         ];
-        let items = edit(&clips, false);
+        let items = edit(&clips);
         // Bounded above by `clip_end()`: both entries are plain text and
         // single words, so each also offers transform rows (As Bullet
         // List, As Code Block) whose ids live past `clip_end()` -- an
@@ -3288,7 +3253,7 @@ mod tests {
         let clips: Vec<bp_clipboard::Entry> = (0..bp_clipboard::MAX_ENTRIES)
             .map(|i| bp_clipboard::Entry::new(&format!("first line {i}\nsecond line {i}")))
             .collect();
-        let items = edit(&clips, true);
+        let items = edit(&clips);
 
         // A row is 28px. Against the 680px client area the window starts with,
         // and menus opening 28px down, about 23 rows is all that fits.
@@ -3321,7 +3286,7 @@ mod tests {
         // change. The plain-paste row must still be there; nothing beyond
         // it should be.
         let clips = [bp_clipboard::Entry::new("/usr/local/bin")];
-        let items = edit(&clips, false);
+        let items = edit(&clips);
 
         assert!(
             items.iter().any(|i| i.action == action::CLIP_BASE),
@@ -3339,7 +3304,7 @@ mod tests {
         // shell is supposed to route them to `bp-data` instead, and the
         // menu row is the proof that routing actually happens.
         let clips = [bp_clipboard::Entry::new(r#"{"b":1,"a":2}"#)];
-        let items = edit(&clips, false);
+        let items = edit(&clips);
 
         assert!(
             items.iter().any(|i| i.label.contains("Pretty-Print JSON")),
@@ -3382,8 +3347,13 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_and_move_line_rows_are_present_but_disabled_without_the_custom_editor_view() {
-        let items = edit(&[], false);
+    fn duplicate_and_move_line_rows_are_live_in_the_build_a_user_runs() {
+        // **Two tests became one under ADR-0080.** There were a pair here,
+        // one asserting these rows greyed without `--editor-view` and one
+        // asserting them enabled with it. The flag is gone from `edit`
+        // because the premise behind it was never true, so there is one
+        // claim left to make and this is it.
+        let items = edit(&[]);
         for id in [
             action::DUPLICATE_LINE,
             action::MOVE_LINE_UP,
@@ -3393,27 +3363,7 @@ mod tests {
                 .iter()
                 .find(|i| i.action == id)
                 .unwrap_or_else(|| panic!("row for action {id} is missing"));
-            assert!(
-                !row.enabled,
-                "'{}' needs the caret, which TextInput does not expose",
-                row.label
-            );
-        }
-    }
-
-    #[test]
-    fn duplicate_and_move_line_rows_are_enabled_under_the_custom_editor_view() {
-        let items = edit(&[], true);
-        for id in [
-            action::DUPLICATE_LINE,
-            action::MOVE_LINE_UP,
-            action::MOVE_LINE_DOWN,
-        ] {
-            let row = items
-                .iter()
-                .find(|i| i.action == id)
-                .unwrap_or_else(|| panic!("row for action {id} is missing"));
-            assert!(row.enabled, "'{}' should be usable here", row.label);
+            assert!(row.enabled, "'{}' is live in both surfaces now", row.label);
         }
     }
 
@@ -3565,7 +3515,7 @@ mod tests {
 
     #[test]
     fn an_empty_clipboard_history_says_so_rather_than_showing_nothing() {
-        let items = edit(&[], false);
+        let items = edit(&[]);
         assert!(
             items.iter().any(|i| i.label.contains("nothing copied yet")),
             "an empty section with no explanation reads as broken"

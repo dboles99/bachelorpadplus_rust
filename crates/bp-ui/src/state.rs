@@ -617,9 +617,13 @@ impl AppState {
     /// reaches here anyway is safer treated as doing nothing than acted on
     /// against a caret position this crate cannot trust.
     pub(crate) fn run_line_edit(&mut self, id: i32) {
-        if !self.editor_view {
-            return;
-        }
+        // **No `editor_view` guard (ADR-0080).** There was one, and enabling
+        // the three menu rows without removing it made each an enabled row
+        // that silently did nothing -- worse than the greyed row it replaced,
+        // and exactly what this crate's menu convention exists to prevent.
+        // `dispatch::adopt_widget_caret` has put the rope's caret where the
+        // widget's is by the time this runs, in either surface.
+        //
         // Compared rather than assumed: Duplicate Line always changes the
         // document, but Move Line Up/Down is a deliberate no-op at the
         // first or last line, and `bp-editor` reports that only through its
@@ -1399,6 +1403,24 @@ impl AppState {
     /// specs.md section 3 asks for line and column. Under `TextInput` the
     /// caret is reachable only through a property marked internal and
     /// undocumented, so the honest answer there is the thing we do know.
+    ///
+    /// **This comment was the only place in the repository that had the
+    /// property right, and [ADR-0080](../../../docs/decisions/ADR-0080.md) is
+    /// what it cost to find that out.** Somebody located
+    /// `cursor-position-byte-offset`, decided -- defensibly -- not to depend on
+    /// a toolkit internal merely to label a status bar, and wrote the reason
+    /// here. Meanwhile `menus.rs`, `app.slint`, `MENU_MAP.md` and ADR-0018 all
+    /// went on saying the caret was **unreadable**, which is a different and
+    /// stronger claim, and thirteen menu rows stayed greyed on it for eight
+    /// sessions. *"Reachable only through an internal property"* and *"not
+    /// reachable"* are not the same sentence, and the gap between them was
+    /// never reconciled because nothing forced the two to be read together.
+    ///
+    /// The label itself is deliberately still the line count here. ADR-0080
+    /// took the caret for the rows that *edit* at it, where a wrong answer is
+    /// visible immediately; a status bar refreshed on every keystroke is a
+    /// different risk profile and wants its own decision, which is a queue
+    /// item rather than a side effect of this one.
     pub(crate) fn cursor_label(&self) -> String {
         // A viewer has no caret -- there is no rope for a position to be in --
         // so it reports where in the document the screen is instead. Asked
@@ -2268,19 +2290,34 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_and_move_line_do_nothing_outside_the_custom_editor_view() {
-        // The row is disabled in that view, but a shortcut key reaches
-        // `run_line_edit` directly and must not act on a caret this crate
-        // cannot trust `TextInput` to have reported correctly.
+    fn duplicate_line_acts_in_either_surface_and_not_only_the_custom_one() {
+        // **This asserted the exact opposite until ADR-0080**, and it is why
+        // that ADR's own change was briefly wrong: the three menu rows were
+        // enabled while `run_line_edit` still returned early without
+        // `--editor-view`, so each became an enabled row that silently did
+        // nothing -- and the whole suite stayed green because this test was
+        // here insisting that was correct.
+        //
+        // **Trap 4, from the inside.** Two claims about one function coexist
+        // for as long as nothing asks, and inverting the *menu* tests while
+        // leaving the *state* test is how the pair got out of step.
         let mut state = AppState::new();
         state.edit("one\ntwo\nthree".to_owned());
         let id = state.workspace.active_id().unwrap();
         state.workspace.get_mut(id).unwrap().record_disk_save(now());
+        assert!(
+            !state.editor_view,
+            "the default surface, which is the point"
+        );
 
         state.run_line_edit(action::DUPLICATE_LINE);
 
-        assert_eq!(state.active_text(), "one\ntwo\nthree");
-        assert!(!state.is_dirty(id));
+        assert_eq!(
+            state.active_text(),
+            "one\none\ntwo\nthree",
+            "the caret starts at the top, so the first line is duplicated"
+        );
+        assert!(state.is_dirty(id), "and the document is modified by it");
     }
 
     // --- Save Copy ------------------------------------------------------

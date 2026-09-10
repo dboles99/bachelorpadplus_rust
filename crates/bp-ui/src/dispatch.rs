@@ -210,8 +210,79 @@ pub(crate) fn select(ui: &AppWindow, state: &mut AppState, range: &std::ops::Ran
         ui.invoke_focus_editor();
         return;
     }
-    let start = i32::try_from(range.start).unwrap_or(i32::MAX);
-    let end = i32::try_from(range.end).unwrap_or(i32::MAX);
+    let (start, end) = toolkit_offsets(state, range);
+    ui.invoke_select_range(start, end);
+}
+
+/// A character range as the byte offsets `TextInput` selects by.
+///
+/// **`set-selection-offsets` takes bytes**, and everything that produces a
+/// range here counts characters -- `bp_search` says so in its own module
+/// header and has a test named `offsets_are_characters_not_bytes`. For as long
+/// as these two functions passed the character range straight through, Find in
+/// the default editor surface highlighted the wrong span on any document with
+/// a multi-byte character before the match: `safe_byte_offset` clamps to a
+/// character boundary rather than refusing, so the only symptom was the
+/// highlight being in the wrong place.
+///
+/// The conversion needs the rope, so a document with no `Editor` -- one served
+/// from disk -- has nothing to convert against. Those never reach here: the
+/// viewer owns finding in a huge document (ADR-0042). Falling back to the
+/// character range keeps that path behaving exactly as it did rather than
+/// inventing an answer.
+fn toolkit_offsets(state: &AppState, range: &std::ops::Range<usize>) -> (i32, i32) {
+    let bytes = match state.active_editor() {
+        Some(editor) => editor.bytes_of_chars(range),
+        None => range.clone(),
+    };
+    (
+        i32::try_from(bytes.start).unwrap_or(i32::MAX),
+        i32::try_from(bytes.end).unwrap_or(i32::MAX),
+    )
+}
+
+/// Bring the rope's caret up to date with the widget's, before an action that
+/// edits **at the caret**.
+///
+/// Under `--editor-view` this crate owns the caret and there is nothing to
+/// learn. Under `TextInput` the widget owns it, so an action inserting at the
+/// caret has to ask where it is first -- otherwise it edits wherever the
+/// rope's caret was last left, which for a document nobody has searched is
+/// position 0, i.e. the top of the file.
+///
+/// **This is what made thirteen rows unreachable rather than wrong.** They
+/// were greyed instead, on a premise about `TextInput` that ADR-0080 shows was
+/// never true.
+///
+/// The anchor makes the trip too: a construct inserted over a selection
+/// replaces it, and an anchor left behind turns that replacement into an
+/// insertion somewhere else.
+fn adopt_widget_caret(ui: &AppWindow, state: &mut AppState) {
+    if state.editor_view {
+        return;
+    }
+    let caret = usize::try_from(ui.get_caret_byte_offset()).unwrap_or(0);
+    let anchor = usize::try_from(ui.get_anchor_byte_offset()).unwrap_or(caret);
+    if let Some(editor) = state.active_editor_mut() {
+        editor.select_bytes(anchor, caret);
+    }
+}
+
+/// Put the widget's caret where the rope's caret now is, after such an edit.
+///
+/// **Called after `refresh`, never before.** `PushText::Yes` replaces the
+/// widget's whole text, and a selection set before that push addresses the
+/// document as it was -- which for an insert is off by the length of what was
+/// just inserted.
+fn hand_caret_back(ui: &AppWindow, state: &AppState) {
+    if state.editor_view {
+        return;
+    }
+    let Some(editor) = state.active_editor() else {
+        return;
+    };
+    let at = editor.cursor();
+    let (start, end) = toolkit_offsets(state, &(at..at));
     ui.invoke_select_range(start, end);
 }
 
@@ -249,8 +320,7 @@ pub(crate) fn reveal(ui: &AppWindow, state: &mut AppState, range: &std::ops::Ran
         draw_editor_view(ui, state);
         return;
     }
-    let start = i32::try_from(range.start).unwrap_or(i32::MAX);
-    let end = i32::try_from(range.end).unwrap_or(i32::MAX);
+    let (start, end) = toolkit_offsets(state, range);
     ui.invoke_preview_range(start, end);
 }
 
@@ -269,6 +339,9 @@ pub fn handle_menu_action(
     use crate::{close_with_prompt, refresh, save_with_prompt};
 
     let mut push = PushText::Yes;
+    // Set by the arms that edit at the caret, and acted on after `refresh`
+    // rather than inside the arm -- see [`hand_caret_back`].
+    let mut restore_caret = false;
     match id {
         action::NEW => state.borrow_mut().new_document(),
         action::OPEN => {
@@ -731,14 +804,17 @@ pub fn handle_menu_action(
 
         id if (action::STAMP_BASE..menus::stamp_end()).contains(&id) => {
             let index = usize::try_from(id - action::STAMP_BASE).unwrap_or(0);
+            adopt_widget_caret(ui, &mut state.borrow_mut());
             let mut s = state.borrow_mut();
             if !s.insert_stamp(index) {
-                // The rows are disabled without the custom editor view, so
-                // this is only reachable by a keyboard route that does not
-                // exist yet -- but a silent no-op would be a bug report
-                // nobody could describe.
-                s.error = Some("date and time insertion needs --editor-view".to_owned());
+                // Not "needs --editor-view" any more (ADR-0080): the rows are
+                // live in both surfaces, so the only way to reach this is a
+                // document with no editor at all, and a silent no-op would be
+                // a bug report nobody could describe.
+                s.error = Some("no document to insert into".to_owned());
             }
+            drop(s);
+            restore_caret = true;
             // `PushText::Yes`, the default: the document changed, same as
             // Duplicate Line beside it.
         }
@@ -755,15 +831,16 @@ pub fn handle_menu_action(
                 action::INSERT_CODE_BLOCK => ("```\n```", 3),
                 _ => ("| Header | Header |\n| --- | --- |\n| Cell | Cell |", 0),
             };
+            adopt_widget_caret(ui, &mut state.borrow_mut());
             let mut s = state.borrow_mut();
             if !s.insert_markdown(text, step_back) {
-                // Same shape as the date/time stamps above: the rows are
-                // disabled without the custom editor view, so this is only
-                // reachable by a route that does not exist yet -- but a
-                // silent no-op would still be a bug report nobody could
-                // describe.
-                s.error = Some("markdown insertion needs --editor-view".to_owned());
+                // Same shape as the date/time stamps above, and the same
+                // change under ADR-0080: live in both surfaces now, so the
+                // only way here is a document with no editor at all.
+                s.error = Some("no document to insert into".to_owned());
             }
+            drop(s);
+            restore_caret = true;
             // `PushText::Yes`, the default: the document changed.
         }
 
@@ -1092,7 +1169,9 @@ pub fn handle_menu_action(
         // operations above: those replace the whole document, these need
         // the caret, and `run_line_edit` is where that distinction lives.
         id if (action::DUPLICATE_LINE..=action::MOVE_LINE_DOWN).contains(&id) => {
+            adopt_widget_caret(ui, &mut state.borrow_mut());
             state.borrow_mut().run_line_edit(id);
+            restore_caret = true;
         }
 
         // Recently opened files. Bounded by the length of the list
@@ -1116,5 +1195,8 @@ pub fn handle_menu_action(
     }
 
     refresh(ui, &mut state.borrow_mut(), push);
+    if restore_caret {
+        hand_caret_back(ui, &state.borrow());
+    }
     None
 }

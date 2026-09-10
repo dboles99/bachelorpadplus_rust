@@ -291,7 +291,7 @@ fn refresh(ui: &AppWindow, state: &mut state::AppState, push_text: state::PushTe
     // Rebuilt rather than set once, because the previews are rendered from
     // the clock: a menu built at startup would still be offering this
     // morning's time this afternoon.
-    ui.set_insert_items(model(menus::insert(state::now(), state.editor_view)));
+    ui.set_insert_items(model(menus::insert(state::now())));
     ui.set_data_items(model(menus::data(format)));
     ui.set_note_items(model(menus::note(state.active_has_content())));
     // Rebuilt rather than set once, for the same reason `note_items` is not
@@ -310,7 +310,7 @@ fn refresh(ui: &AppWindow, state: &mut state::AppState, push_text: state::PushTe
     // Real as of ADR-0045, and it reads the active document, so it moves out
     // of `set_static_menus` for the same reason Organize and Research did.
     ui.set_notebook_items(model(menus::notebook(state.active_has_content())));
-    ui.set_edit_items(model(menus::edit(state.clips.entries(), state.editor_view)));
+    ui.set_edit_items(model(menus::edit(state.clips.entries())));
     // Rebuilt rather than set once: it shows the *active* document's profile
     // and what that profile permits, both of which change with the tab.
     let encrypted = state

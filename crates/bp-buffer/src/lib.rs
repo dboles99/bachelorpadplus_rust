@@ -127,6 +127,36 @@ impl Buffer {
         self.rope.len_bytes()
     }
 
+    /// The character index containing a byte offset, clamped to the buffer.
+    ///
+    /// **The one place this crate answers a question asked in bytes, and it
+    /// exists because the toolkit is the thing asking.** Slint's `TextInput`
+    /// reports its caret as a byte offset and takes selection offsets in
+    /// bytes; everything above the rope counts characters -- `bp_editor`'s
+    /// caret, `bp_search`'s match ranges, this buffer's own `insert` and
+    /// `remove`. Converting here rather than in the shell means the two
+    /// numbers cannot be confused for each other at a call site, which is a
+    /// mistake that is invisible on an ASCII document and wrong on every
+    /// other one.
+    ///
+    /// A byte interior to a character rounds **down** to the character
+    /// containing it. That is the only answer that keeps a caret inside the
+    /// document it was reported from, and it matches what the toolkit does
+    /// with a byte offset it is handed.
+    pub fn char_of_byte(&self, byte_idx: usize) -> usize {
+        // Clamped rather than trusted: `byte_to_char` panics past the end,
+        // and this is reached from UI code, like `insert` above it.
+        self.rope.byte_to_char(byte_idx.min(self.len_bytes()))
+    }
+
+    /// The byte offset at a character index, clamped to the buffer.
+    ///
+    /// The outgoing direction of [`Buffer::char_of_byte`]: for handing a
+    /// character range back to a toolkit that selects by byte.
+    pub fn byte_of_char(&self, char_idx: usize) -> usize {
+        self.rope.char_to_byte(char_idx.min(self.len_chars()))
+    }
+
     pub fn is_empty(&self) -> bool {
         self.rope.len_chars() == 0
     }
@@ -296,6 +326,57 @@ mod tests {
         assert_eq!(b.len_bytes(), 8);
         assert_eq!(b.position_of(1), Position::new(1, 2));
         assert_eq!(b.position_of(3), Position::new(1, 4));
+    }
+
+    #[test]
+    fn a_byte_offset_becomes_the_character_index_containing_it() {
+        // The accent is two bytes, so every character after it sits at a byte
+        // offset one greater than its character index. That divergence is the
+        // whole reason the conversion exists, and "cat" is where a search
+        // result would land.
+        let b = Buffer::from_text("héllo cat");
+        assert_eq!(b.char_of_byte(0), 0);
+        assert_eq!(b.char_of_byte(1), 1, "h is one byte");
+        assert_eq!(b.char_of_byte(3), 2, "é occupies bytes 1 and 2");
+        assert_eq!(
+            b.char_of_byte(7),
+            6,
+            "the c of cat: byte 7, character 6 -- ask for character 6 in bytes \
+             and the toolkit selects from the l instead"
+        );
+    }
+
+    #[test]
+    fn a_byte_inside_a_character_rounds_down_to_that_character() {
+        let b = Buffer::from_text("héllo");
+        assert_eq!(
+            b.char_of_byte(2),
+            1,
+            "byte 2 is the second half of é, and a caret reported there \
+             belongs on é rather than past it"
+        );
+    }
+
+    #[test]
+    fn a_four_byte_character_converts_in_both_directions() {
+        // Outside the basic multilingual plane, where a UTF-16 assumption
+        // would also be wrong, not only a byte one.
+        let b = Buffer::from_text("a🌍b");
+        assert_eq!(b.len_chars(), 3);
+        assert_eq!(b.len_bytes(), 6);
+        assert_eq!(b.byte_of_char(2), 5, "b is the third character, byte 5");
+        assert_eq!(b.char_of_byte(5), 2);
+        assert_eq!(b.char_of_byte(b.byte_of_char(1)), 1, "a round trip");
+    }
+
+    #[test]
+    fn a_byte_or_character_past_the_end_clamps_rather_than_panicking() {
+        // `byte_to_char` and `char_to_byte` both panic past the end, and both
+        // of these are reached from UI code -- a caret arriving from a widget
+        // that has already been handed new text is exactly the case.
+        let b = Buffer::from_text("hé");
+        assert_eq!(b.char_of_byte(999), 2);
+        assert_eq!(b.byte_of_char(999), 3);
     }
 
     #[test]
