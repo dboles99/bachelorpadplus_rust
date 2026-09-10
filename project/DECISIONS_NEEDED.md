@@ -18,13 +18,30 @@ reason these rows sit unanswered is that a session opens by *reading* rather
 than by *asking*. Do not wait for the answer before starting; do not stop
 halfway through an item to ask one thing.
 
-> **Nothing is open.** D15 and D16 were both answered on 2026-08-23 and are
-> recorded in [ADR-0055](../docs/decisions/ADR-0055.md) and
-> [ADR-0056](../docs/decisions/ADR-0056.md). D4 is still prepared and needs a
-> reviewer rather than a decision ([ADR-0050](../docs/decisions/ADR-0050.md)).
+> **Eleven rows opened on 2026-09-10**, all of them from
+> [V1_1_1_PLAN.md](V1_1_1_PLAN.md) -- a thirty-day plan to ship **v1.1.1 on
+> 2026-10-10**. **Every one has a default in the plan's section 1**, so silence
+> is an answer to eight of them and work does not stop.
 >
-> **`project/WORK_QUEUE.md` has seven ready items**, and none of them is
-> blocked on anything. Take a batch and start.
+> **Three cannot be defaulted, because none is an agent's to make:**
+>
+> - **D25 -- hosted CI?** The downstream repository restored it
+>   ([ADR-0073 there](../../bachelorpluslite/docs/decisions/ADR-0073.md)) on the
+>   grounds that **ADR-0016's premise was never re-checked**. `CLAUDE.md` and
+>   R011 both still assert there is none, so adopting it edits the entry point.
+> - **D26 -- which licence?** Every manifest here claims `MIT OR Apache-2.0`;
+>   the repository derived from this one is **GPL-3.0-only**. `--version`
+>   prints it and the archive carries the texts, so a wrong answer ships in the
+>   artefact. **Needed by day 22.**
+> - **D21 -- does `--editor-view` survive?** *Do not answer before day 7.* The
+>   evidence arrives then; answering now is answering on a claim.
+>
+> **And one is a public-facing contradiction**: D27, what the website's
+> countdown counts to. Its own ADR says early-access signup closing; the
+> instruction that produced the plan says the release.
+>
+> D4 is still prepared and needs a reviewer rather than a decision
+> ([ADR-0050](../docs/decisions/ADR-0050.md)).
 
 ---
 
@@ -43,8 +60,40 @@ halfway through an item to ask one thing.
 
 ## Open
 
-**Empty, as of 2026-08-23.** Both rows lasted less than a day, and the second
-of them is the more interesting.
+**Eleven rows, opened 2026-09-10.** Full reasoning, and a default for each, in
+[V1_1_1_PLAN.md](V1_1_1_PLAN.md) section 1. Kept short here because the plan
+owns the argument and this file owns the queue.
+
+| # | Question | Default in the plan | Whose |
+| --- | --- | --- | --- |
+| D17 | `1.1.1` from `0.1.0`, with nothing ever shipped? | Take `1.1.1`; record why it starts there | either |
+| D18 | Does an experimental flag survive a restart? | Persist, and show active flags in the status bar | either |
+| D19 | Does a ticket ever leave the machine by itself? | **No, and never** | either |
+| D20 | Where do tickets go? | A pre-filled GitHub issue URL | Daniel |
+| D21 | Does `--editor-view` survive 1.1.1? | Retire the flag, keep the surface. **Not before day 7** | Daniel |
+| D22 | Unsigned at 1.1.1? | Ship unsigned and say so; start a certificate now if you want one for 1.2 | Daniel |
+| D23 | ~~The icon~~ | **Answered by looking.** It exists downstream, and so does the reason it must be a PNG | -- |
+| D24 | ~~Installer or zip?~~ | **Answered by looking.** Downstream ADR-0067: no installer | -- |
+| D25 | Hosted CI, against ADR-0016? | Read ADR-0073 there and adopt it. **Edits `CLAUDE.md`** | **Daniel** |
+| D26 | `MIT OR Apache-2.0`, or GPL-3.0-only? | Undecided; needed by day 22 | **Daniel** |
+| D27 | What does the countdown count to? | The release, and ADR-0076 is edited to say so | **Daniel** |
+
+**Two of the eleven were answered by looking rather than by asking**, which is
+trap 8 arriving from a new direction: **D23 and D24 were both already decided,
+with the reasoning written and the code shipped, in the repository this one
+spawned twelve days earlier.** [V1_1_1_PLAN.md](V1_1_1_PLAN.md) section 0b has
+the rest of what was found there -- nineteen ADRs, six of which answer questions
+this file or `WORK_QUEUE.md` was still carrying.
+
+**The lesson is the one worth keeping**, and it is in `DECISIONS.md`: *a derived
+repository is a second reader of every decision this one made, and it re-checks
+premises for free.* `NEXT_SESSION.md` recorded the clone as **inheriting** this
+project's formats. The inheritance ran the other way too, and went unread.
+
+## Answered the day it emptied, kept for the shape
+
+**Empty from 2026-08-23 to 2026-09-10.** Both rows lasted less than a day, and
+the second of them is the more interesting.
 
 | # | Question | Answer | Where it landed |
 | --- | --- | --- | --- |

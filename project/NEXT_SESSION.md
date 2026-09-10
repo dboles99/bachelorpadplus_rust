@@ -1,10 +1,43 @@
 # Next session plan
 
-Written 2026-08-23, at the end of the thirteenth build session.
+> **Superseded for scope, 2026-09-10, by [V1_1_1_PLAN.md](V1_1_1_PLAN.md)** --
+> a thirty-day plan to ship **v1.1.1 on 2026-10-10**. What is below is still
+> the truthful account of where the code stands and is not rewritten; what
+> changed is which work comes next and why.
+>
+> **Three things in this file are now known to be wrong, and each is worth
+> more than the correction:**
+>
+> - **`TextInput` will say where the caret is.** An undocumented internal
+>   `out property` on 1.17.1, checked by compiling. Thirteen menu rows are
+>   greyed in the build every user runs for a reason that was never true, and
+>   [ADR-0018](../docs/decisions/ADR-0018.md)'s measured "tax" may be zero.
+> - **The derived repository was not irrelevant to this one.** Section 1a says
+>   the fourteenth session "produced no change here" and that nothing here
+>   depends on `bachelorpluslite`. True of the product; **false of the
+>   decisions.** It is nineteen ADRs ahead, and six of them answer questions
+>   this project was still carrying -- including **the icon (P2) and the
+>   installer (P5)**, both of which section 3 lists as work.
+> - **`specs.md` §22's warm-start target and the memory drift are still
+>   unmeasured**, and a release is the deadline that makes both real.
+>
+> The plan's section 0 is the evidence for all three.
 
-State: **25 crates, 1,986 tests on Windows and 1,991 on Linux, 0 ignored**,
+
+Written 2026-08-24, at the end of the thirteenth build session -- which ran
+past midnight, so its three commits are dated 2026-08-23 and this plan is not.
+
+**Updated 2026-08-29, and the plan below is carried forward rather than
+rewritten.** The fourteenth session spent itself outside this repository and
+took nothing from it, so every item still stands exactly as it was sized
+(section 1a). **This repository is unchanged by that session**: same branch,
+same HEAD `3589205`, the same five modified files.
+
+State: **25 crates, 1,990 tests on Windows and 1,995 on Linux, 0 ignored**,
 green across all eleven gate stages. 56 ADRs. The gate takes ~13 minutes with
-both legs.
+both legs, and **pre-push now recognises a full gate that already covers the
+content and skips re-running it** -- so a commit made minutes after a green
+gate pushes immediately.
 
 > **Phase 20 started and this product now produces a release.**
 > [ADR-0054](../docs/decisions/ADR-0054.md) made the command line an
@@ -39,8 +72,11 @@ named one such piece — phase 20 was the only *Not started* phase not blocked
 on a decision — and starting it produced D15 inside an afternoon, plus four
 defects nobody had a reason to look for.
 
-`WORK_QUEUE.md` now has five ready items again, all of them phase 20's
-artefact half plus one design pass.
+**`WORK_QUEUE.md` has seven ready items and `DECISIONS_NEEDED.md` has none.**
+That combination is the healthy one, and it took three sessions of the reverse
+to recognise it. The seven: P2 and P5 (what is left of packaging), M1 (a
+measurement mis-filed as a decision for several sessions), R1 (a design pass),
+and E1–E3 (phase 10, sizeable at last).
 
 ---
 
@@ -55,11 +91,45 @@ artefact half plus one design pass.
 
 ---
 
-## 1. What the last session did, so nobody re-derives it
+## 1a. The fourteenth session produced no change here
 
-**The thirteenth session started phase 20**, inventory first as ADR-0048
-recommends, and the inventory found four things in a product 1,972 passing
-tests deep ([ADR-0054](../docs/decisions/ADR-0054.md)):
+**2026-08-29. It made a derived repository and did nothing to this one.**
+BachelorPlusLite was cloned out of this repository at `3589205` into
+`G:\dev2\bachelorpluslite`, with its own private remote and this
+repository kept as a read-only `upstream`. It is a separate product with a
+separate plan and **it is deliberately absent from section 3**.
+
+Two things follow for whoever reads this next, and neither is about that
+repository:
+
+- **Nothing in section 3 was taken.** E1, M1, P2, P5, R1 and the manual pass
+  are all still first in the queue, still decision-free, and still sized as
+  they were on 2026-08-24. Start there without re-deriving the order.
+- **The rename turned up a lesson this repository will need**, and it is in
+  `DECISIONS.md` rather than here: an identity has four layers, and the two
+  that break silently are the on-disk ones. It is the reason
+  `what_an_earlier_build_wrote.rs` exists, arriving from a new direction.
+
+---
+
+## 1. What the thirteenth session did, so nobody re-derives it
+
+**Three commits, three ADRs, and phase 20 went from *Not started* to mostly
+done.** `c922630`, `1d56355`, `3589205` — all on PR #2.
+
+| | |
+| --- | --- |
+| [ADR-0054](../docs/decisions/ADR-0054.md) | The command line becomes an interface: `--help`, `--version`, `--line=N`, a reported typo, and the licences every manifest already claimed |
+| [ADR-0055](../docs/decisions/ADR-0055.md) | Signing deferred, self-signing **refused**; the archive, the checksums and a one-command signing step built anyway. D15 closed |
+| [ADR-0056](../docs/decisions/ADR-0056.md) | All three embedding sources as choices — and the axis for them had existed since ADR-0020. D16 closed |
+
+Plus P3, which needed no ADR: `what_an_earlier_build_wrote.rs` holds the four
+files this product leaves on a disk still readable by a later build.
+
+### The inventory, which is where it started
+
+**Phase 20 began with an inventory rather than an estimate**, as ADR-0048
+recommends, and it found four things in a product 1,972 passing tests deep:
 
 - **The binary could not say its own version.** `--version` printed nothing
   and opened a window; so did `--help`. Twelve flags were accepted and the
@@ -99,9 +169,37 @@ has two of those.
 because `Result` already carries `#[must_use]`. Both legs, same line, and
 nothing else in eleven stages.
 
+### Then the release, and two lessons from building it
+
+`scripts/New-Release.ps1` and `scripts/release-linux.sh` build, stage, archive
+and checksum both targets — binary, both licence texts, a `bpad` short
+spelling, and a `BUILD.txt` naming the commit. **Both archives were extracted
+and run before it was called done.** Two things went wrong and both are
+lessons rather than fixes, in `DECISIONS.md`:
+
+- The Linux leg was a PowerShell string inside `bash -c` around a bash
+  `$(...)` around an `awk '{print $2}'`. It did not error — it compared an
+  empty version string and reported "the Linux leg failed" with the cause
+  invisible. **When quoting nests three deep, write a file.**
+- Staging on the `/mnt` mount produced world-writable licence files, because
+  **DrvFs ignores `chmod` silently**: exit 0, no warning, no change. **A call
+  that succeeds and changes nothing is worse than one that fails.**
+
+### And P3, which found the hole trap 7 only half-closed
+
+ADR-0050 fixed golden vectors for `.bpadx` last session. The same hole was
+open for **every other file this product leaves behind** — `config.toml`,
+`recent.toml`, the security history and the recovery journal — each covered by
+a write-then-read-back test that proves one build agrees with itself.
+
+The worst is `recent.toml`: `Recent::parse` ends in `unwrap_or_default()`, so
+a format change there does not fail, it **silently empties the user's recent
+list**. Every guard was watched failing before the file was called done, by
+mutating all four fixtures at once.
+
 ### The twelfth session, for context
 
-**It took `NEXT_SESSION.md` §3a and finished it.**
+**It took what was then the top of the plan -- prepare D4's envelope review -- and finished it.**
 [ADR-0050](../docs/decisions/ADR-0050.md):
 [BPADX_ENVELOPE_REVIEW.md](../docs/architecture/BPADX_ENVELOPE_REVIEW.md) is
 the brief D4 needed -- the byte layout, the four call sites, a self-audit
@@ -124,8 +222,8 @@ Writing it found two things, both in the seam ADR-0049 was already about:
   refusal rather than the work -- real measurements of the wrong thing. The
   control is now one KiB past the ceiling instead of sixteen times past it.
 
-**Then it drove the window at §3b**, which had three rows no script had ever
-been pointed at. [ADR-0051](../docs/decisions/ADR-0051.md), four defects:
+**Then it drove the window**, over three rows no script had ever been
+pointed at. [ADR-0051](../docs/decisions/ADR-0051.md), four defects:
 
 - **Run's greyed readout denied there was anything to run** while an enabled
   Run Document three rows below ran the file correctly. `document_runnable`
@@ -226,90 +324,93 @@ did nothing else about it either. **"I cannot do this" is not the same as
 
 ---
 
-## 3. What to do, in priority order
+## 3. The plan for the next session — day 3 of thirty
 
-### a. What is left of phase 20's artefact half
+**Rewritten 2026-09-10.** The old section 3 planned the fifteenth session
+around E1, M1, P2, P5 and R1. **Three of those five are gone** — P2, P5 and R1
+were answered in the repository downstream — and the rest is now sequenced by
+[V1_1_1_PLAN.md](V1_1_1_PLAN.md) against a release dated **2026-10-10**.
 
-**P1, P3 and P4 landed on 2026-08-23**: `scripts/New-Release.ps1` builds,
-stages, archives and checksums both targets, and both archives were extracted
-and run before it was called done; `what_an_earlier_build_wrote.rs` pins the
-four files this product leaves on a disk, with every guard watched failing
-first. What remains, and **neither is wiring**:
+### What the sixteenth session did
 
-- **P2, an icon and the `.desktop` file** — `AppInfo::bachelorpad` already
-  names its icon after `APP_ID` and there is no icon anywhere in the tree.
-  Windows takes one from a build-time resource, which is **a new dependency
-  and therefore an ADR**.
-- **P5, an installer, or a decision that there is not one** — new, and only
-  askable now an archive exists. A zip that unpacks anywhere is a defensible
-  answer for this product. **Decision before estimate.**
+The plan, and **days 1–2 of it**, in one sitting: [ADR-0080](../docs/decisions/ADR-0080.md).
 
-### ~~b. D4 — prepare the envelope review~~ **Done, ADR-0050**
+- **Thirteen greyed rows went live in the build a user runs.** `TextInput` does
+  report its caret; the record denied it in five places.
+- **Find was highlighting the wrong span** on any document with a multi-byte
+  character before the match, silently, because character ranges were handed to
+  a toolkit that selects by bytes.
+- **`Buffer::{set_access, with_access}` have zero callers** outside their own
+  crate, so the read-only guards in `insert`/`remove` have **never fired**. That
+  answers R1 with evidence.
 
-What is left of it is Daniel's: send
-[BPADX_ENVELOPE_REVIEW.md](../docs/architecture/BPADX_ENVELOPE_REVIEW.md) and
-`crates/bp-crypto/` to somebody who did not write them. The brief names ten
-questions; **three are live design questions rather than rhetorical ones**,
-and a "no" to any of them is an ADR and a format version:
+### Take these, in this order
 
-1. nonce uniqueness rests entirely on the 16-byte salt -- AES-256-GCM
-   contributes only 4 random nonce bytes of its own;
-2. no key commitment, so a partitioning oracle is available in principle;
-3. no domain separation -- a document, a recovery checkpoint, an audit line
-   and an Ed25519 signing seed share one construction with nothing telling
-   them apart.
+#### a. Drive the window over the thirteen rows. **Start here.**
 
-### c. Drive the window over things that are not dialogs
+**Nothing built on 2026-09-10 has ever been clicked**, and it lands in the one
+seam this repository says no test can reach — five defects have lived there,
+including a passphrase typed into the open document.
 
-**Three of the four rows here were done on 2026-08-22 and found four defects**
-([ADR-0051](../docs/decisions/ADR-0051.md)). What is left:
+**An agent can do all of this**: none of these rows opens an `rfd` dialog, which
+is what usually makes a manual pass a person's job.
 
-| Check | Why it matters |
+| Check | Why this one |
 | --- | --- |
-| **Notebook ▸ Export as .ipynb** | Opens a save dialog, which `rfd` will not let a script past. Reading the dialog is possible; completing it is not. **A person's job** |
-| **Typing, resizing, the wheel** | Checked clean 2026-08-21, before five sessions of change |
-| **Cross-file results** | Reached through the find bar's "In Folder…", which opens an `rfd` folder picker. **A person's job** |
+| **Insert ▸ Date with the caret mid-document** | `adopt_widget_caret` reads `caret-byte-offset` *at click time*, and a `MenuPopup` takes focus when it opens. The property is stored state rather than focus-derived, so it *should* hold — **"should" is the word that cost eight sessions**. If it reads 0, the stamp lands at the top of the file |
+| **The same with a selection active** | The anchor makes the trip too, so the insert must *replace* the selection rather than insert beside it |
+| **Insert ▸ Date in a document containing `é` before the caret** | The byte-to-character conversion, in the one case where getting it wrong is visible |
+| **Ctrl+D, Alt+Up, Alt+Down** | These reach `run_line_edit` by *shortcut*, not through the menu, so they never pass through `dispatch`'s menu arm. **Check they adopt the caret too** — if they do not, the fix is incomplete in the way that is hardest to see |
+| **Find `cat` in `héllo cat`** | The Find fix, directly. Screenshot the highlight |
+| **Then the same six under `--editor-view`** | Trap 3: a wiring change usually needs both surfaces |
 
-**Confirmed working on a document taller than the window**, so nobody
-re-checks them: Go to Line scrolls and highlights; Find puts the query in the
-box rather than the document, scrolls to the match and counts it; Find Next
-steps between matches without editing the document (ADR-0052); Run ▸ Run
-Document runs a real `.py` in a fresh subprocess and reports the right answer
-in a panel rather than a dialog; and **Notebook ▸ Cell Outline jumps to a cell
-below the fold**, scrolling the document and highlighting the fence.
+`Drive-Window.ps1 -Keys "..."` takes a **list**, and a bar takes the caret a
+tick after the row that opens it.
 
-That last one is worth more than it looks. It is the `dispatch::select` path
-ADR-0052 deliberately **left alone** while routing three others to `reveal`,
-and it is the check that the split was drawn in the right place: a panel click
-still takes the caret, because there is no box to take it from.
+#### b. Finish the inventory — passes A, C and D
 
-**It is also drivable with no foreground**, which is how it got checked at all
-— clicks are *posted* to the window and need nothing in front, so a menu, a
-panel and a row in it are all reachable when `SendKeys` is not.
+[V1_1_1_PLAN.md](V1_1_1_PLAN.md) §2 has the methods. Pass A is every row
+clicked, and (a) above is its first slice. **Pass D already has two entries**:
+`Policy::embeddings`, an axis two inspectors read out and nothing computes, and
+`Buffer::access` above.
 
-The reasons the rest is a person's job have not changed: **`rfd` modals
-swallow synthetic input**, and File ▸ Set as Default Editor changes state
-outside this application. Completing a signature writes a real Ed25519 key
-into `%LOCALAPPDATA%`.
+#### c. Wire `Buffer::access`, or delete it — but decide with the evidence
 
-**`Drive-Window.ps1` got two fixes in the doing**, and both are worth knowing
-before using it: it now waits for the window it will actually photograph
-rather than for `MainWindowHandle` (which transiently names a 0x0 window, and
-produced a 1x1 capture on the first run of the session), and `-Keys` takes a
-**list** -- `-Keys "^g","555{ENTER}"` -- because one send cannot drive a bar
-that takes the caret a tick later.
+Downstream deleted it, correctly, because Lite has neither a huge-document
+viewer nor Lock Document. **This product has both**, so here the same finding
+argues for *wiring*: `LargeFile::open` already computes an `Access`, and
+Security ▸ Lock Document is a second producer nobody connected.
 
-### d. The one unexplained failure
+**Adapt, do not adopt** — that distinction is what pass E is for.
 
-A Linux gate run failed once on 2026-08-22 and never again. `nextest` exits
-100 for a test failure, so something genuinely failed; five whole-suite Linux
-runs and two gate runs since were clean. **The name is unknown because the
-gate's output had been truncated** — `CLAUDE.md` now forbids that.
+#### d. The status bar could now say `Ln 42, Col 18` in both surfaces
 
-If a Linux-only failure appears again, that is the second data point. Keep the
-whole output.
+`cursor_label` returns a line count under `TextInput` because reading the caret
+meant depending on a toolkit internal. That is now depended on anyway, so the
+reason has changed and specs.md §3 asks for line and column.
 
----
+**Deliberately not done on 2026-09-10, and the reason is the useful part.**
+ADR-0080 took the caret for rows that *edit* at it, where a wrong answer shows
+up immediately. A status bar refreshed on **every keystroke** is a different
+risk profile and wants its own decision — and it needs a caret feed into
+`AppState`, which `cursor_label` has no access to today.
+
+#### e. Then week 2 of the plan: the Experimental menu and `bp-feedback`
+
+Both are decision-free. Ids **1000–1049**, and 950–999 left as the gap that
+proves somebody checked `RUN_CELL_BASE`'s bound.
+
+### What is waiting on Daniel, and what it blocks
+
+| # | Question | Blocks |
+| --- | --- | --- |
+| **D26** | `MIT OR Apache-2.0` or GPL-3.0-only? | **Day 22.** It ships inside the artefact. Escalate on day 8, not day 22 |
+| **D25** | Hosted CI, against ADR-0016? | Nothing yet; it edits `CLAUDE.md` |
+| **D21** | Does `--editor-view` survive? | Answer on (a)'s evidence. **Not before it** |
+| **D27** | What does the countdown count to? | The website, on day 29 |
+
+**Everything else in the plan has a default and is not waiting.**
+
 
 ## 4. Blocked on Slint 1.17.1, checked in its source rather than assumed
 
@@ -333,12 +434,13 @@ Honest inventory, for whoever wants to size something:
   `bp-editor` to carry a set of carets through every command, selection and
   undo entry, and it can only work under `--editor-view`. A real feature with
   a real design pass in front of it.
-- **Phase 10, semantic search.** Needs embeddings; nothing computes one, and
-  doing so reaches [ADR-0033](../docs/decisions/ADR-0033.md). **Now D16**, so
-  it is a question in the queue rather than a paragraph in this file.
-- ~~**Phase 20, packaging and release.** Not started~~ **Started 2026-08-23**,
-  ADR-0054. The half a person meets at the command line is done; the half they
-  download is `WORK_QUEUE.md`'s P1-P4 and is the top of §3 above.
+- ~~**Phase 10, semantic search.** Needs embeddings~~ **Decided 2026-08-23,
+  [ADR-0056](../docs/decisions/ADR-0056.md), and now three queue items rather
+  than a phase.** E1 is the one to take: it needs neither provider to exist.
+- ~~**Phase 20, packaging and release.** Not started~~ **Started and mostly
+  done, 2026-08-23.** P1, P3 and P4 landed; the product builds archives for
+  both targets with checksums. P2 (an icon, half of which is Daniel's) and P5
+  (an installer, or a decision there is not one) are what remain.
 - **Print.** Platform work with no cross-platform story yet.
 - ~~**`benches/` holds a README and no benchmark**~~ **Done, 2026-08-22.**
   `cargo bench -p bp-editor --bench scroll` measures the half of ADR-0017's
@@ -352,13 +454,19 @@ Honest inventory, for whoever wants to size something:
 
 ## Housekeeping
 
-- **`crates/bp-ui/src/menus.rs` at 3,478 lines is the largest file in the
-  crate**, and grew ~300 lines last session. Roughly half is tests. Its seam,
-  if it needs one, is the `action` module against the builders.
+- **`crates/bp-ui/src/menus.rs` at 3,574 lines is the largest file in the
+  crate.** Roughly half is tests. Its seam, if it needs one, is the `action`
+  module against the builders. It did not grow this session -- the command
+  line is not a menu.
 - **No phase is "Built, unwired".** That count was three for four sessions.
   `ROADMAP.md` keeps the legend because the state is real and will recur.
 - **`cargo-nextest` is installed on this machine and in `Ubuntu-24.04`.** A
   fresh clone works without it, more slowly.
+- **A derived repository exists downstream**, `bachelorpluslite`, cloned at
+  `3589205` on 2026-08-29. It has its own remote and its own plan; nothing in
+  this repository depends on it and no work here is blocked by it. Recorded
+  only because **it inherits every on-disk format decision this project has
+  made**, so a format change here is now a change with a reader elsewhere.
 - **Three orphaned files sit in `%APPDATA%\bachelorpad\`**: `recent.toml`,
   `security-history.log`, and an empty `recovery` folder. Safe to delete.
 - **A single stray recovery journal blocks every launch, and therefore all
@@ -386,13 +494,31 @@ Honest inventory, for whoever wants to size something:
 - **The panic lints are on** — `unwrap_used`, `panic`, `todo`,
   `unimplemented`. `expect_used`, `unreachable` and `indexing_slicing` are
   not; each is a change to the code rather than the policy.
+- **`artifacts/releases/` holds ~23 MB of built archives and is gitignored.**
+  Safe to delete; `./scripts/New-Release.ps1 -Linux` rebuilds them in about a
+  minute once the release profile is warm.
+- **The release script refuses a dirty working tree** and says which files.
+  That is deliberate -- an archive built from a tree nobody can check out
+  again is a copy, not a release -- and `-AllowDirty` is there for trying it
+  out.
+- **`clippy::double_must_use` is denied by the gate**, and `Result` already
+  carries `#[must_use]`. Adding one to a function returning `Result` fails the
+  build; it cost one gate run on 2026-08-23.
 
 ---
 
 ## The traps, and where they live
 
-`CLAUDE.md` names all six and `DECISIONS.md` explains each. The two added last
-session are both about verification itself:
+`CLAUDE.md` names all **nine** and `DECISIONS.md` explains each. The one
+added this session is the mirror of the one added last:
+
+> **Before asking a question, grep for its answer.** Trap 6 says a claim in
+> the record is not a property of the repository. This is the other
+> direction: a decision recorded in a *type* is still a decision, and it is
+> the kind least likely to be re-read, because nothing about a queue of
+> questions suggests looking in `src/`. D16 cost two sessions to that.
+
+The two added the session before are both about verification itself:
 
 > **"Unique" must mean no *earlier* run either.** A scheme that prevents
 > collisions and never deletes anything is a scheme that fails eventually, and
