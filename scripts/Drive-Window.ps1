@@ -101,7 +101,30 @@ $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 $exe = Join-Path $Root 'target/release/bachelorpad.exe'
 if (-not (Test-Path $exe)) {
-    throw "$exe is missing -- cargo build --release -p bp-ui"
+    throw "$exe is missing -- cargo build --release"
+}
+
+# **A stale binary is more dangerous than a missing one, and this check exists
+# because a missing one already threw while an eighteen-day-old one did not.**
+#
+# On 2026-09-10 this script drove a binary built on 2026-08-23 against a change
+# made that morning. It reproduced the *old* behaviour perfectly -- nothing in
+# the default surface, correct under `--editor-view` -- which is exactly what a
+# broken fix would look like, and the captures agreed. The conclusion "the fix
+# does not work" was one step from being written down, and the only thing that
+# disproved it was `ls` on the executable.
+#
+# A verification tool that silently measures the wrong artefact is worse than
+# no verification: it produces confident, specific, false results. Absent fails
+# loudly; stale fails convincingly.
+$newestSource = Get-ChildItem -Path (Join-Path $Root 'crates'), (Join-Path $Root 'apps') `
+    -Recurse -File -Include *.rs, *.slint -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if ($newestSource -and $newestSource.LastWriteTime -gt (Get-Item $exe).LastWriteTime) {
+    throw ("target/release/bachelorpad.exe is OLDER than the source. " +
+        "$($newestSource.Name) changed $($newestSource.LastWriteTime), the binary is " +
+        "$((Get-Item $exe).LastWriteTime). Driving it would photograph the previous " +
+        "build and look like a finding. Run: cargo build --release")
 }
 
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
