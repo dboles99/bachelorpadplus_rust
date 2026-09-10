@@ -33,8 +33,8 @@ took nothing from it, so every item still stands exactly as it was sized
 (section 1a). **This repository is unchanged by that session**: same branch,
 same HEAD `3589205`, the same five modified files.
 
-State: **25 crates, 1,990 tests on Windows and 1,995 on Linux, 0 ignored**,
-green across all eleven gate stages. 56 ADRs. The gate takes ~13 minutes with
+State: **25 crates, 1,997 tests on Windows and 2,002 on Linux, 0 ignored**,
+green across all eleven gate stages. 57 ADRs. The gate takes ~13 minutes with
 both legs, and **pre-push now recognises a full gate that already covers the
 content and skips re-running it** -- so a commit made minutes after a green
 gate pushes immediately.
