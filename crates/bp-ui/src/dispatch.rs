@@ -28,8 +28,35 @@ Ctrl+X/C/V      Cut / Copy / Paste
 Ctrl+A          Select all
 Ctrl+= / Ctrl+- Zoom in / out
 Ctrl+0          Reset zoom
-Ctrl+D          Duplicate line (--editor-view)
-Alt+Up / Down   Move line up / down (--editor-view)";
+Ctrl+G          Go to line
+Ctrl+D          Duplicate line
+Alt+Up / Down   Move line up / down
+Insert          Overwrite on / off
+Ctrl+,          Settings";
+
+/// Run `operation` at the caret, in either view.
+///
+/// The operations are `bp-editor`'s and act on its caret. Under the custom
+/// surface that is the caret on screen. Under `TextInput` it is copied in
+/// from the widget first, and after the new text is pushed -- which puts the
+/// widget's caret back at the start -- the editor's caret is put back into
+/// the widget, so a moved line stays under the caret that moved it.
+fn at_the_caret(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    operation: impl FnOnce(&mut AppState),
+) {
+    {
+        let mut s = state.borrow_mut();
+        s.follow_widget_caret(ui.get_editor_anchor(), ui.get_editor_cursor());
+        operation(&mut s);
+    }
+    crate::refresh(ui, &mut state.borrow_mut(), PushText::Yes);
+    let caret = state.borrow().caret_range();
+    if let Some(caret) = caret {
+        select(ui, &mut state.borrow_mut(), &caret);
+    }
+}
 
 /// Tools ▸ Open Log Folder: the folder the binary really logs to. A failure
 /// is a status line.
@@ -255,9 +282,11 @@ pub(crate) fn confirm_replace(
 /// Select a character range in the editor.
 ///
 /// Under the custom surface we own the selection, so this sets it and asks
-/// only for the focus back. Under `TextInput` the widget owns it, and the
-/// offsets are clamped into `i32` because that is what its API takes -- a
-/// document long enough to overflow one would have other problems first.
+/// only for the focus back. Under `TextInput` the widget owns it and counts
+/// UTF-8 bytes, so the range is converted -- passing the characters straight
+/// through put Find's selection a few places off after every accented
+/// letter. Clamped into `i32` because that is what its API takes; a document
+/// long enough to overflow one would have other problems first.
 pub(crate) fn select(ui: &AppWindow, state: &mut AppState, range: &std::ops::Range<usize>) {
     use crate::editor_view::draw_editor_view;
 
@@ -270,9 +299,8 @@ pub(crate) fn select(ui: &AppWindow, state: &mut AppState, range: &std::ops::Ran
         ui.invoke_focus_editor();
         return;
     }
-    let start = i32::try_from(range.start).unwrap_or(i32::MAX);
-    let end = i32::try_from(range.end).unwrap_or(i32::MAX);
-    ui.invoke_select_range(start, end);
+    let byte = |char_idx: usize| i32::try_from(state.char_to_byte(char_idx)).unwrap_or(i32::MAX);
+    ui.invoke_select_range(byte(range.start), byte(range.end));
 }
 
 /// Handle a menu action id from the UI.
@@ -673,16 +701,12 @@ pub fn handle_menu_action(
 
         id if (action::STAMP_BASE..menus::stamp_end()).contains(&id) => {
             let index = usize::try_from(id - action::STAMP_BASE).unwrap_or(0);
-            let mut s = state.borrow_mut();
-            if !s.insert_stamp(index) {
-                // The rows are disabled without the custom editor view, so
-                // this is only reachable by a keyboard route that does not
-                // exist yet -- but a silent no-op would be a bug report
-                // nobody could describe.
-                s.error = Some("date and time insertion needs --editor-view".to_owned());
-            }
-            // `PushText::Yes`, the default: the document changed, same as
-            // Duplicate Line beside it.
+            at_the_caret(ui, state, |s| {
+                if !s.insert_stamp(index) {
+                    s.error = Some("there is no document to insert into".to_owned());
+                }
+            });
+            return None;
         }
 
         action::LINE_ENDING_LF => state.borrow_mut().set_line_ending(LineEnding::Lf),
@@ -831,7 +855,8 @@ pub fn handle_menu_action(
         // operations above: those replace the whole document, these need
         // the caret, and `run_line_edit` is where that distinction lives.
         id if (action::DUPLICATE_LINE..=action::MOVE_LINE_DOWN).contains(&id) => {
-            state.borrow_mut().run_line_edit(id);
+            at_the_caret(ui, state, |s| s.run_line_edit(id));
+            return None;
         }
 
         // Recently opened files. Bounded by the length of the list

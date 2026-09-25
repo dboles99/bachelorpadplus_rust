@@ -129,6 +129,14 @@ export component AppWindow inherits Window {
     callback close-active-tab();
     callback cycle-theme();
     callback text-edited(string);
+    /// The `TextInput` view's caret and selection anchor, as UTF-8 byte
+    /// offsets. Rust reads them when it needs the caret -- the line
+    /// operations, Insert Date/Time, the status bar's Ln/Col -- and converts
+    /// to characters, which is what everything else counts in.
+    out property <int> editor-cursor: editor.cursor-position_byte-offset;
+    out property <int> editor-anchor: editor.anchor-position-byte-offset;
+    /// The `TextInput` caret moved; Rust reads it from the two above.
+    callback caret-moved();
 
     // --- overwrite mode (the Insert key) --------------------------------
     // Rust owns the flag, so both editor views and the status bar agree on
@@ -755,6 +763,7 @@ export component AppWindow inherits Window {
                                 } else if (x + 10px + flick.viewport-x > flick.width) {
                                     flick.viewport-x = min(0px, flick.width - x - 10px);
                                 }
+                                root.caret-moved();
                             }
 
                             // Insert and overwrite. `TextInput` has no such
@@ -770,6 +779,22 @@ export component AppWindow inherits Window {
                             // upgrade removes it, this fails to compile rather
                             // than misbehaving.
                             key-pressed(event) => {
+                                // Move Line Up/Down. The window's Alt+Up and
+                                // Alt+Down bindings never see these: the
+                                // widget takes an arrow as caret movement
+                                // whatever the modifier, so it moved the caret
+                                // and left the line where it was. Caught here,
+                                // before the widget acts on the key.
+                                if (event.modifiers.alt && !event.modifiers.control && !event.modifiers.shift) {
+                                    if (event.text == Key.UpArrow) {
+                                        root.dispatch(96);
+                                        return accept;
+                                    }
+                                    if (event.text == Key.DownArrow) {
+                                        root.dispatch(97);
+                                        return accept;
+                                    }
+                                }
                                 // Copy and cut, by every key that means them,
                                 // are reported to Rust first: see
                                 // `copied-from-editor`.
