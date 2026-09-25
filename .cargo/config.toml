@@ -1,0 +1,45 @@
+# Build configuration every cargo invocation in this checkout picks up
+# (release plan M1-13). Keep it short: rustflags set here apply to every
+# build of that target -- dev, test, clippy, release -- and are part of every
+# crate's fingerprint, so a flag added here rebuilds the world once and must
+# be right for all of those builds, not only the release.
+
+# Link the C runtime statically on Windows. Without it the exe depends on
+# `vcruntime140.dll`, which a clean Windows 10 or 11 install is not
+# guaranteed to have, and a missing DLL fails before `main` with a system
+# dialog -- no crash report, no log. With it the exe needs nothing beyond
+# what ships with Windows, and no installer has to chain the VC++
+# redistributable. MSVC allows dylibs under `+crt-static`, so proc macros
+# and build scripts still build; C code compiled by the `cc` crate
+# (`bp-storage`'s SQLite) sees the feature and switches to `/MT` to match.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+# --remap-path-prefix is deliberately NOT set here, although release plan
+# M1-13 names this file for it. A release binary embeds absolute paths in
+# its panic locations: nearly a thousand under the builder's
+# `$CARGO_HOME/registry/src`, and a few under the target directory
+# (generated code included from `OUT_DIR`, such as Slint's `app.rs`). The
+# prefixes to remap are those absolute paths, and this file cannot name
+# them: cargo does not expand environment variables in `rustflags`, and a
+# hard-coded `/home/<someone>` or `C:\Users\<someone>` would be wrong on every
+# other machine. Cargo's `trim-paths` profile option, which would do this
+# portably, is still unstable in cargo 1.94.1 (checked: "feature
+# `trim-paths` is required"), as is rustc's `--remap-path-scope`. A remap
+# here would also rewrite the paths in every compiler diagnostic during
+# development.
+#
+# So the remap belongs to the release script (M3-03), which knows the paths
+# at run time. It must ADD to the flags above, not replace them: a
+# `RUSTFLAGS` environment variable replaces `[target.<triple>].rustflags`
+# outright and would silently drop `+crt-static`. `--config` on the command
+# line joins instead -- every matching `target.<triple>` and `target.<cfg>`
+# rustflags entry is used (checked with `cargo build -v` on 1.94.1) -- so
+# the script should pass, with the real paths substituted:
+#
+#   cargo build --release --locked --config "target.'cfg(all())'.rustflags = [
+#       '--remap-path-prefix=<CARGO_HOME>=/cargo',
+#       '--remap-path-prefix=<workspace root>=/bachelorpad']"
+#
+# and a third entry for the target directory when CARGO_TARGET_DIR puts it
+# outside the workspace root.

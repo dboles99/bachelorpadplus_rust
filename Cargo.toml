@@ -62,8 +62,73 @@ unimplemented = "warn"
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+# The floor, not the pin. `rust-toolchain.toml` pins the exact compiler every
+# build here uses (1.94.1); this states the oldest one the code claims to
+# build with, so an older toolchain stops with "requires rustc 1.94" rather
+# than an obscure error halfway through a dependency. The minor release, not
+# the point release: a point release fixes regressions and adds no language
+# or library surface. Every member inherits it (`rust-version.workspace`).
+rust-version = "1.94"
 license = "MIT OR Apache-2.0"
 authors = ["BachelorPad+ contributors"]
+
+# What ships (release plan M1-13). Only `cargo build --release`, and the
+# release script built on it (M3-03), use this profile; `cargo test`, clippy
+# and the gate build the dev profile and are untouched by it.
+[profile.release]
+# One codegen unit and thin LTO trade build time for a smaller, faster
+# binary: the optimiser sees each crate whole and can inline across crate
+# boundaries. Thin rather than fat because fat LTO costs far more build time
+# for a gain that, on a binary dominated by Slint and winit, is in the noise.
+lto = "thin"
+codegen-units = 1
+# Explicit although it is the default, because it is load-bearing. The panic
+# hook in `apps/bachelorpad/src/logging.rs` writes a crash report and then
+# hands over to the previous hook; with `unwind` a panic after that still
+# runs destructors (passphrases are wiped on drop, files are closed) and a
+# panic on a worker thread ends that thread rather than the whole process.
+# `abort` would make the binary a little smaller and lose all of that.
+panic = "unwind"
+# Line tables only: enough to turn a crash address into file, line and
+# inlined function -- what crash analysis needs -- for a fraction of full
+# debuginfo's build time and size. Reading a backtrace needs no variables or
+# types.
+debug = "line-tables-only"
+# `split-debuginfo` is deliberately left at each target's default, because
+# no single value is right for both desktop targets:
+#
+# * x86_64-pc-windows-msvc -- the default is `packed`, and it is the only
+#   value rustc 1.94 accepts there (`off` and `unpacked` are errors: "is
+#   unstable on this platform"). The linker writes the line tables to a
+#   separate `bachelorpad.pdb`, cargo copies it next to the exe, and the exe
+#   records only the PDB's file name (`/PDBALTPATH:%_PDB%`), not the build
+#   path. rustc ignores `strip` for MSVC -- it always links with `/DEBUG` --
+#   so the exe is symbol-free and the PDB is kept: exactly the split wanted.
+#
+# * x86_64-unknown-linux-gnu -- the default is `off`. `packed` would write a
+#   `bachelorpad.dwp`, but one that is useless after `strip` below: split
+#   DWARF leaves the line tables and the address table in the executable,
+#   `strip` removes them, and the `.dwp` is left holding entries that resolve
+#   to no address (checked with llvm-dwarfdump on a stripped 1.94.1 build: no
+#   `.debug_line`, no `.debug_addr`). The split that works on Linux is
+#   objcopy's, and it belongs to the release script: build with
+#   `--config profile.release.strip=false`, then
+#   `objcopy --only-keep-debug bachelorpad bachelorpad.debug` and
+#   `objcopy --strip-all --add-gnu-debuglink=bachelorpad.debug bachelorpad`
+#   (checked on 1.94.1: `addr2line -e bachelorpad.debug` resolves function
+#   and line, and std's backtrace follows the debuglink when the file sits
+#   beside the binary).
+#
+# Symbols are removed from the exe on both targets, so unless the PDB or
+# `.debug` file is installed beside it, the in-process backtrace in a crash
+# report prints `<unknown>` frames (the panic's own file:line survives -- it
+# is a string, not debuginfo). Reading such a report offline against the
+# kept symbols needs raw addresses and the module's load base in the report,
+# which it does not record yet.
+#
+# `symbols` removes the symbol table as well as debuginfo. On MSVC it is a
+# no-op (see above); on Linux it is most of the saving.
+strip = "symbols"
 
 [workspace.dependencies]
 anyhow = "1"

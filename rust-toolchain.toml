@@ -1,3 +1,10 @@
+# Pinned to an exact release, not `stable`. With `stable` the compiler a
+# build used was whatever rustup last updated to, so two machines -- or one
+# machine a month apart -- built the same commit with different compilers,
+# and a new clippy lint could fail the gate on a commit that passed it the
+# day before. A pin makes the compiler part of the commit: moving to a newer
+# Rust is a deliberate one-line change, gated like any other. Keep
+# `rust-version` in the workspace `Cargo.toml` no newer than this.
 [toolchain]
-channel = "stable"
+channel = "1.94.1"
 components = ["rustfmt", "clippy"]
