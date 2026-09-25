@@ -101,11 +101,25 @@ pub fn load_recent(path: &Path) -> Recent {
 ///
 /// Failures are ignored: not remembering a filename is not worth an error in
 /// front of someone who is trying to write.
+///
+/// Written beside the target and renamed over it, so a crash or a full disk
+/// mid-write leaves the previous list rather than half of one. A torn file
+/// would parse as empty -- `Recent::parse` forgives it -- and the user's whole
+/// list would be gone for the sake of one entry. `std::fs::rename` replaces
+/// the target on both platforms. Not `bp_files::atomic_write`: this crate
+/// sits below `bp-files` and the list needs no read-back verification.
 pub fn save_recent(path: &Path, recent: &Recent) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let _ = std::fs::write(path, recent.to_toml());
+    let mut temporary = path.as_os_str().to_owned();
+    temporary.push(".tmp");
+    let temporary = PathBuf::from(temporary);
+    if std::fs::write(&temporary, recent.to_toml()).is_err()
+        || std::fs::rename(&temporary, path).is_err()
+    {
+        let _ = std::fs::remove_file(&temporary);
+    }
 }
 
 #[cfg(test)]
@@ -251,6 +265,29 @@ mod tests {
         save_recent(&path, &recent);
 
         assert_eq!(load_recent(&path), recent);
+    }
+
+    #[test]
+    fn saving_replaces_the_list_and_leaves_no_temporary_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let existing = dir.path().join("a.txt");
+        std::fs::write(&existing, b"").unwrap();
+        let path = dir.path().join(FILE_NAME);
+        std::fs::write(&path, b"paths = []\n").unwrap();
+
+        let mut recent = Recent::new();
+        recent.push(&existing);
+        save_recent(&path, &recent);
+
+        assert_eq!(load_recent(&path), recent);
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert!(
+            names.iter().all(|n| !n.to_string_lossy().ends_with(".tmp")),
+            "{names:?}"
+        );
     }
 
     #[test]
