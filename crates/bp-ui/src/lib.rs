@@ -367,28 +367,7 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
         // by another route must not be able to hand the editor a 0 pt font.
         initial.font_size = bp_config::zoom(size, 0);
     }
-    // Both, when there are both: `AppState::new` may already hold a notice
-    // about files it could not move, and a configuration warning must not
-    // silently replace it.
-    initial.error = match (options.startup_notice.clone(), initial.error.take()) {
-        (Some(config), Some(moved)) => Some(format!("{config}; {moved}")),
-        (config, moved) => config.or(moved),
-    };
-
-    // Files from the command line. The first one replaces the empty document
-    // opened at startup, so `bachelorpad note.txt` shows one tab rather than
-    // an untouched Untitled beside it.
-    if !options.files.is_empty() {
-        let blank = initial.workspace.active_id();
-        for path in &options.files {
-            initial.open(path.clone());
-        }
-        if let Some(blank) = blank
-            && initial.workspace.len() > 1
-        {
-            initial.close(blank);
-        }
-    }
+    initial.start_up(options.startup_notice.clone(), &options.files);
 
     // Offer to recover anything a previous session left unsaved, before the
     // window appears — so nobody starts typing over work they have not been

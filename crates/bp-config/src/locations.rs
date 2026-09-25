@@ -205,9 +205,25 @@ impl Adoption {
 ///
 /// Rule 3 is the reason this returns a path to use rather than a success
 /// flag: the caller has no decision to make.
+///
+/// "Nothing at `legacy`" means the filesystem *said* nothing is there. An
+/// old location that cannot be examined -- a permission, an I/O error -- is
+/// kept and reported rather than taken as absent: absent would switch to the
+/// new location silently, the next launch would find both occupied, and an
+/// old journal would never be adopted at all.
 pub fn adopt(legacy: &Path, current: &Path) -> Adoption {
-    if legacy == current || std::fs::symlink_metadata(legacy).is_err() {
+    if legacy == current {
         return Adoption::NothingToMove;
+    }
+    match std::fs::symlink_metadata(legacy) {
+        Ok(_) => {}
+        Err(error) if is_absence(&error) => return Adoption::NothingToMove,
+        Err(error) => {
+            return Adoption::KeptLegacy {
+                legacy: legacy.to_path_buf(),
+                error,
+            };
+        }
     }
     if is_occupied(current) {
         return Adoption::BothOccupied {
@@ -230,11 +246,41 @@ pub fn adopt(legacy: &Path, current: &Path) -> Adoption {
 
     match moved {
         Ok(()) => Adoption::Moved,
-        Err(error) => Adoption::KeptLegacy {
+        Err(error) => after_a_failed_move(legacy, current, error),
+    }
+}
+
+/// What a failed rename actually left behind.
+///
+/// Two copies of the program launched together -- a file association
+/// opening several files at once does exactly this -- both see the old
+/// journal and both try to move it. One wins. The other's rename fails
+/// because its source is gone, and keeping "the old location" would point it
+/// at a directory that no longer exists: it would miss the moved checkpoints
+/// and start a second journal there that the next launch never reads. So the
+/// state is looked at again rather than assumed: the old location gone and
+/// the new one occupied means the move happened, just not here.
+fn after_a_failed_move(legacy: &Path, current: &Path, error: io::Error) -> Adoption {
+    let legacy_gone = matches!(std::fs::symlink_metadata(legacy), Err(e) if is_absence(&e));
+    if legacy_gone && is_occupied(current) {
+        Adoption::Moved
+    } else {
+        Adoption::KeptLegacy {
             legacy: legacy.to_path_buf(),
             error,
-        },
+        }
     }
+}
+
+/// Whether an error from examining a path means nothing is there.
+///
+/// `NotADirectory` counts: a path under something that is a file cannot
+/// hold anything either.
+fn is_absence(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+    )
 }
 
 /// Whether `path` holds anything worth not overwriting.
@@ -465,6 +511,60 @@ mod tests {
             fs::read(legacy.join("1.checkpoint")).unwrap(),
             b"unsaved work"
         );
+    }
+
+    #[test]
+    fn an_old_location_that_cannot_be_examined_is_kept_not_taken_as_absent() {
+        // A NUL byte makes every platform refuse to look, without needing a
+        // permission the test runner (often root) would ignore. What matters
+        // is the class: an error that is not "nothing is there".
+        let dir = tempdir().unwrap();
+        let legacy = PathBuf::from("unreadable\0journal");
+        let current = dir.path().join("new");
+
+        let adoption = adopt(&legacy, &current);
+
+        assert!(
+            matches!(&adoption, Adoption::KeptLegacy { legacy: l, .. } if *l == legacy),
+            "{adoption:?}"
+        );
+        assert!(adoption.needs_reporting());
+        assert!(!current.exists(), "nothing may be created in its place");
+    }
+
+    #[test]
+    fn a_rename_that_lost_a_race_uses_what_the_winner_moved() {
+        // Another copy of the program moved the journal between this one's
+        // checks and its rename: the source is gone, the destination holds
+        // the checkpoints. The old location must not be chosen.
+        let dir = tempdir().unwrap();
+        let legacy = dir.path().join("old").join(RECOVERY_DIR);
+        let current = dir.path().join("new");
+        fs::create_dir_all(&current).unwrap();
+        fs::write(current.join("1.checkpoint"), b"moved by the other copy").unwrap();
+
+        let adoption =
+            after_a_failed_move(&legacy, &current, io::Error::from(io::ErrorKind::NotFound));
+
+        assert!(matches!(adoption, Adoption::Moved), "{adoption:?}");
+        assert_eq!(adoption.path_to_use(&current), current);
+    }
+
+    #[test]
+    fn a_rename_that_failed_with_the_journal_still_in_place_keeps_it() {
+        // The other half of the recheck: the ordinary failure is untouched.
+        let dir = tempdir().unwrap();
+        let legacy = a_journal_in(dir.path());
+        let current = dir.path().join("new");
+
+        let adoption =
+            after_a_failed_move(&legacy, &current, io::Error::other("cross-device link"));
+
+        assert!(
+            matches!(&adoption, Adoption::KeptLegacy { .. }),
+            "{adoption:?}"
+        );
+        assert_eq!(adoption.path_to_use(&current), legacy);
     }
 
     #[test]
