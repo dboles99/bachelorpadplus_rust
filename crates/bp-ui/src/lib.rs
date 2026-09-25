@@ -490,44 +490,6 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
         s.new_document();
     });
 
-    // Ctrl+O, the same as the menu row -- which, unlike the handler that
-    // used to be here, knows an encrypted file from a plain one.
-    {
-        let cell = Rc::clone(&state);
-        let weak = ui.as_weak();
-        ui.on_open_document(move || {
-            if let Some(ui) = weak.upgrade() {
-                let _ = dispatch::handle_menu_action(&ui, &cell, menus::action::OPEN);
-            }
-        });
-    }
-
-    {
-        let cell = Rc::clone(&state);
-        let weak = ui.as_weak();
-        ui.on_save_document(move || {
-            let Some(ui) = weak.upgrade() else { return };
-            let id = cell.borrow().workspace.active_id();
-            match id {
-                Some(id) => save_with_prompt(&ui, &cell, id, refresh_after(&cell)),
-                None => refresh(&ui, &mut cell.borrow_mut(), state::PushText::Yes),
-            }
-        });
-    }
-
-    {
-        let cell = Rc::clone(&state);
-        let weak = ui.as_weak();
-        ui.on_save_as_document(move || {
-            let Some(ui) = weak.upgrade() else { return };
-            let id = cell.borrow().workspace.active_id();
-            match id {
-                Some(id) => save_as(&ui, &cell, id),
-                None => refresh(&ui, &mut cell.borrow_mut(), state::PushText::Yes),
-            }
-        });
-    }
-
     wire!(on_cycle_theme, |s| {
         s.theme = s.theme.next();
         s.follow_system_theme = false;
@@ -535,69 +497,7 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
         s.remember(|c| c.theme = Some(name.to_owned()));
     });
 
-    {
-        let cell = Rc::clone(&state);
-        let weak = ui.as_weak();
-        let target = Rc::clone(&state);
-        let target_weak = ui.as_weak();
-        ui.on_tab_context_target(move |raw| {
-            let Some(ui) = target_weak.upgrade() else {
-                return;
-            };
-            let mut s = target.borrow_mut();
-            s.tab_context = state::find_id(&s.workspace, raw);
-            // Built now rather than on every refresh: it is the only menu
-            // whose contents depend on which tab the pointer is over, and
-            // that is knowable only at this moment.
-            let (others, has_path) = s.tab_context_shape();
-            ui.set_tab_items(slint::ModelRc::new(slint::VecModel::from(
-                menus::tab_context(others, has_path),
-            )));
-        });
-
-        ui.on_select_tab(move |raw| {
-            {
-                let mut s = cell.borrow_mut();
-                if let Some(id) = state::find_id(&s.workspace, raw) {
-                    s.workspace.set_active(id);
-                }
-            }
-            if let Some(ui) = weak.upgrade() {
-                refresh(&ui, &mut cell.borrow_mut(), state::PushText::Yes);
-            }
-        });
-    }
-
-    {
-        let cell = Rc::clone(&state);
-        let weak = ui.as_weak();
-        ui.on_close_tab(move |raw| {
-            let id = cell
-                .borrow()
-                .workspace
-                .iter()
-                .map(Document::id)
-                .find(|id| i32::try_from(id.get()).unwrap_or(i32::MAX) == raw);
-            let Some(ui) = weak.upgrade() else { return };
-            match id {
-                Some(id) => close_with_prompt(&ui, &cell, id, refresh_after(&cell)),
-                None => refresh(&ui, &mut cell.borrow_mut(), state::PushText::Yes),
-            }
-        });
-    }
-
-    {
-        let cell = Rc::clone(&state);
-        let weak = ui.as_weak();
-        ui.on_close_active_tab(move || {
-            let Some(ui) = weak.upgrade() else { return };
-            let id = cell.borrow().workspace.active_id();
-            match id {
-                Some(id) => close_with_prompt(&ui, &cell, id, refresh_after(&cell)),
-                None => refresh(&ui, &mut cell.borrow_mut(), state::PushText::Yes),
-            }
-        });
-    }
+    bind_files(&ui, &state);
 
     // Closing the window must not be a quieter way to lose the same work
     // that closing a tab prompts about.
@@ -1226,6 +1126,113 @@ fn show_search_report(
         }
     }
     ui.set_results_open(true);
+}
+
+/// Wire Open, Save, Save As, and selecting and closing tabs. A function of
+/// its own so the window tests drive exactly what `run_with` wires -- Ctrl+S
+/// end to end included (release plan M1-12).
+fn bind_files(ui: &AppWindow, state: &Rc<RefCell<state::AppState>>) {
+    // Ctrl+O, the same as the menu row -- which, unlike the handler that
+    // used to be here, knows an encrypted file from a plain one.
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_open_document(move || {
+            if let Some(ui) = weak.upgrade() {
+                let _ = dispatch::handle_menu_action(&ui, &cell, menus::action::OPEN);
+            }
+        });
+    }
+
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_save_document(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let id = cell.borrow().workspace.active_id();
+            match id {
+                Some(id) => save_with_prompt(&ui, &cell, id, refresh_after(&cell)),
+                None => refresh(&ui, &mut cell.borrow_mut(), state::PushText::Yes),
+            }
+        });
+    }
+
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_save_as_document(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let id = cell.borrow().workspace.active_id();
+            match id {
+                Some(id) => save_as(&ui, &cell, id),
+                None => refresh(&ui, &mut cell.borrow_mut(), state::PushText::Yes),
+            }
+        });
+    }
+
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        let target = Rc::clone(state);
+        let target_weak = ui.as_weak();
+        ui.on_tab_context_target(move |raw| {
+            let Some(ui) = target_weak.upgrade() else {
+                return;
+            };
+            let mut s = target.borrow_mut();
+            s.tab_context = state::find_id(&s.workspace, raw);
+            // Built now rather than on every refresh: it is the only menu
+            // whose contents depend on which tab the pointer is over, and
+            // that is knowable only at this moment.
+            let (others, has_path) = s.tab_context_shape();
+            ui.set_tab_items(slint::ModelRc::new(slint::VecModel::from(
+                menus::tab_context(others, has_path),
+            )));
+        });
+
+        ui.on_select_tab(move |raw| {
+            {
+                let mut s = cell.borrow_mut();
+                if let Some(id) = state::find_id(&s.workspace, raw) {
+                    s.workspace.set_active(id);
+                }
+            }
+            if let Some(ui) = weak.upgrade() {
+                refresh(&ui, &mut cell.borrow_mut(), state::PushText::Yes);
+            }
+        });
+    }
+
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_close_tab(move |raw| {
+            let id = cell
+                .borrow()
+                .workspace
+                .iter()
+                .map(Document::id)
+                .find(|id| i32::try_from(id.get()).unwrap_or(i32::MAX) == raw);
+            let Some(ui) = weak.upgrade() else { return };
+            match id {
+                Some(id) => close_with_prompt(&ui, &cell, id, refresh_after(&cell)),
+                None => refresh(&ui, &mut cell.borrow_mut(), state::PushText::Yes),
+            }
+        });
+    }
+
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_close_active_tab(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let id = cell.borrow().workspace.active_id();
+            match id {
+                Some(id) => close_with_prompt(&ui, &cell, id, refresh_after(&cell)),
+                None => refresh(&ui, &mut cell.borrow_mut(), state::PushText::Yes),
+            }
+        });
+    }
 }
 
 /// Wire the editor's text, caret, Go to Line and tab-cycling callbacks. A
