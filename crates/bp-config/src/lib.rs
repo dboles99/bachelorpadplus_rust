@@ -25,8 +25,10 @@ use std::path::PathBuf;
 use bp_platform::dirs::{self, DirKind};
 use serde::Deserialize;
 
+pub mod cli;
 pub mod locations;
 pub mod recent;
+use cli::Setting;
 pub use locations::{Adoption, Locations};
 pub use recent::{MAX_RECENT, Recent, load_recent, save_recent};
 
@@ -315,7 +317,8 @@ fn beside_the_config_file(platform: Platform, env: &EnvSnapshot, name: &str) -> 
 /// Resolve configuration from already-gathered inputs.
 ///
 /// `file` is the *contents* of the config file, not a path, so this function
-/// never touches the filesystem.
+/// never touches the filesystem. `args` excludes the program name, as for
+/// [`cli::parse`].
 pub fn resolve(file: Option<&str>, env: &Env, args: &[String]) -> (Config, Vec<Notice>) {
     let mut config = Config::default();
     let mut notices = Vec::new();
@@ -388,18 +391,19 @@ pub fn resolve(file: Option<&str>, env: &Env, args: &[String]) -> (Config, Vec<N
     }
 
     // --- command line (highest) ----------------------------------------
-    for arg in args {
-        let Some((key, value)) = arg.strip_prefix("--").and_then(|a| a.split_once('=')) else {
-            continue;
-        };
-        match key {
-            "theme" => config.theme = Some(value.to_owned()),
-            "renderer" => apply_renderer(&mut config, value, &mut notices),
-            "log" => config.log = value.to_owned(),
-            "font-size" => apply_font_size(&mut config, value, &mut notices),
-            "tab-width" => apply_tab_width(&mut config, value, &mut notices),
-            "indent-spaces" => apply_indent_spaces(&mut config, value, &mut notices),
-            _ => {}
+    // Which arguments are settings is `cli`'s answer, not a second scan here:
+    // two parsers disagreed once already, and the loser opened a file called
+    // `427`. Command-line *warnings* (unknown flags) are not repeated as
+    // notices -- the caller already has them from `cli::parse`, and one
+    // mistake should produce one message.
+    for (setting, value) in cli::parse(args).settings {
+        match setting {
+            Setting::Theme => config.theme = Some(value),
+            Setting::Renderer => apply_renderer(&mut config, &value, &mut notices),
+            Setting::Log => config.log = value,
+            Setting::FontSize => apply_font_size(&mut config, &value, &mut notices),
+            Setting::TabWidth => apply_tab_width(&mut config, &value, &mut notices),
+            Setting::IndentSpaces => apply_indent_spaces(&mut config, &value, &mut notices),
         }
     }
 
@@ -480,6 +484,8 @@ fn apply_indent_spaces(config: &mut Config, value: &str, notices: &mut Vec<Notic
 }
 
 /// Load configuration from the real environment and filesystem.
+///
+/// `args` excludes the program name, as for [`cli::parse`].
 pub fn load(args: &[String]) -> Loaded {
     let env = Env::from_process();
     let path = env
@@ -968,6 +974,53 @@ mod tests {
             &Env::default(),
             &args(&["--measure-exit", "--self-check", "-v", "file.txt"]),
         );
+        assert_eq!(c, Config::default());
+        assert!(n.is_empty());
+    }
+
+    #[test]
+    fn every_setting_the_command_line_knows_is_one_resolve_applies() {
+        // The drift guard. `resolve` matches on `cli::Setting` exhaustively,
+        // so a new setting cannot compile without being handled; this checks
+        // the other direction, that each one actually reaches the config, in
+        // both spellings the parser accepts.
+        for setting in Setting::ALL {
+            let (flag, value) = (setting.flag(), sample(*setting));
+            for form in [
+                args(&[&format!("--{flag}={value}")]),
+                args(&[&format!("--{flag}"), value]),
+            ] {
+                let (c, n) = resolve(None, &Env::default(), &form);
+                assert_ne!(c, Config::default(), "{form:?} changed nothing");
+                assert!(n.is_empty(), "{form:?} warned: {n:?}");
+            }
+        }
+    }
+
+    /// A valid, non-default value for each setting.
+    fn sample(setting: Setting) -> &'static str {
+        match setting {
+            Setting::Theme => "Dark",
+            Setting::Renderer => "platform",
+            Setting::Log => "debug",
+            Setting::FontSize => "20",
+            Setting::TabWidth => "8",
+            Setting::IndentSpaces => "true",
+        }
+    }
+
+    #[test]
+    fn a_settings_value_is_not_also_read_as_something_else() {
+        // `--theme Dark` used to leave `Dark` for main.rs to open as a file.
+        let invocation = cli::parse(&args(&["--theme", "Dark", "a.txt"]));
+        assert_eq!(invocation.files, vec![PathBuf::from("a.txt")]);
+        let (c, _) = resolve(None, &Env::default(), &args(&["--theme", "Dark", "a.txt"]));
+        assert_eq!(c.theme.as_deref(), Some("Dark"));
+    }
+
+    #[test]
+    fn a_setting_after_a_double_dash_is_a_file_name_not_a_setting() {
+        let (c, n) = resolve(None, &Env::default(), &args(&["--", "--theme=Dark"]));
         assert_eq!(c, Config::default());
         assert!(n.is_empty());
     }
