@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=BachelorPad+
+GenericName=Text Editor
+Comment=Text editor for notes, data and logs
+Exec=bachelorpad %F
+TryExec=bachelorpad
+Icon=io.github.dboles99.BachelorPad
+Terminal=false
+StartupNotify=true
+Categories=Utility;TextEditor;
+Keywords=text;editor;notes;markdown;log;
+MimeType=application/x-bachelorpad-encrypted;text/plain;text/x-log;

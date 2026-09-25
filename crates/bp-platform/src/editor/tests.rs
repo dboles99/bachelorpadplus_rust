@@ -261,6 +261,139 @@ fn the_mime_package_defines_only_the_products_own_types() {
     assert_eq!(package.matches("<glob pattern=\"*.ps").count(), 3);
 }
 
+// --- the application id and the packaged assets ----------------------------
+
+#[test]
+fn the_application_id_is_reverse_dns_and_the_directory_name_did_not_move() {
+    // ADR-0032: the id is an identity, the directory is a path, and moving
+    // the second would move every user's settings for nothing.
+    assert_eq!(crate::APP_ID, "io.github.dboles99.BachelorPad");
+    assert_eq!(crate::APP_DIR, "bachelorpad");
+    assert!(
+        !crate::APP_ID.contains('+'),
+        "a desktop-file id may not contain a plus"
+    );
+    let app = app();
+    assert_eq!(app.app_id, crate::APP_ID);
+    assert_eq!(
+        app.icon,
+        crate::APP_ID,
+        "hicolor icons are named for the id"
+    );
+    assert_eq!(
+        desktop::desktop_file_name(&app),
+        "io.github.dboles99.BachelorPad.desktop"
+    );
+    assert_eq!(
+        desktop::mime_package_file_name(&app),
+        "io.github.dboles99.BachelorPad.xml"
+    );
+    assert_eq!(
+        desktop::metainfo_file_name(&app),
+        "io.github.dboles99.BachelorPad.metainfo.xml"
+    );
+}
+
+#[test]
+fn the_windows_registry_script_keeps_the_name_it_always_had() {
+    // The id is a Linux identity; nothing a Windows user sees derives from it.
+    let plan = plan(Platform::Windows, &windows_app(), &everything());
+    assert_eq!(
+        plan.artefact(ArtefactKind::RegistryScript)
+            .map(|a| a.relative_path.as_str()),
+        Some("bachelorpad-file-types.reg")
+    );
+    assert!(
+        plan.registry_values
+            .iter()
+            .all(|v| !v.key.contains(crate::APP_ID) && !v.data.contains(crate::APP_ID)),
+        "no registry key or value names the Linux application id"
+    );
+}
+
+#[test]
+fn the_packaged_entry_launches_the_program_on_path() {
+    let entry = desktop::desktop_entry(
+        &AppInfo::packaged(),
+        &AssociationSelection::preset(desktop::PACKAGED_PRESET),
+    );
+    assert!(entry.contains("\nExec=bachelorpad %F\n"), "{entry}");
+    assert!(entry.contains("\nTryExec=bachelorpad\n"), "{entry}");
+    assert!(
+        entry.contains("\nIcon=io.github.dboles99.BachelorPad\n"),
+        "{entry}"
+    );
+}
+
+#[test]
+fn the_metainfo_provides_exactly_the_types_the_desktop_entry_claims() {
+    // Two lists of the same MIME types kept by hand drift the first time a
+    // file type is added; both come from the selection, and this holds them
+    // to it.
+    let app = AppInfo::packaged();
+    let selection = AssociationSelection::preset(desktop::PACKAGED_PRESET);
+    let entry = desktop::desktop_entry(&app, &selection);
+    let claimed: Vec<&str> = entry
+        .lines()
+        .find_map(|line| line.strip_prefix("MimeType="))
+        .expect("the packaged entry claims types")
+        .split(';')
+        .filter(|m| !m.is_empty())
+        .collect();
+    let metainfo = desktop::metainfo(&app, &selection);
+    let provided: Vec<&str> = metainfo
+        .lines()
+        .filter_map(|line| {
+            line.trim()
+                .strip_prefix("<mediatype>")
+                .and_then(|l| l.strip_suffix("</mediatype>"))
+        })
+        .collect();
+    assert_eq!(claimed, provided);
+    assert!(metainfo.contains("<id>io.github.dboles99.BachelorPad</id>"));
+    assert!(metainfo.contains(
+        "<launchable type=\"desktop-id\">io.github.dboles99.BachelorPad.desktop</launchable>"
+    ));
+    assert!(metainfo.contains("<content_rating type=\"oars-1.1\"/>"));
+}
+
+#[test]
+fn the_newest_release_in_the_metainfo_is_the_workspace_version() {
+    // A software centre shows the newest release as "what's new"; bumping
+    // the version without adding a release here would advertise the old one.
+    assert_eq!(
+        desktop::RELEASES.first().map(|r| r.version),
+        Some(env!("CARGO_PKG_VERSION"))
+    );
+}
+
+#[test]
+fn the_per_user_marker_reads_the_same_in_both_comment_syntaxes() {
+    let marker = desktop::PER_USER_MARKER;
+    assert_eq!(desktop::escape_xml(marker), marker);
+    assert!(!marker.contains("--"), "an XML comment may not contain --");
+    assert!(!marker.contains('\n'));
+
+    let selection = AssociationSelection::preset(desktop::PACKAGED_PRESET);
+    let entry = desktop::per_user_desktop_entry(&app(), &selection);
+    let package = desktop::per_user_mime_package(&selection).expect("bpadx is ours");
+    assert!(desktop::is_per_user_registration(&entry));
+    assert!(desktop::is_per_user_registration(&package));
+    assert!(
+        package.starts_with("<?xml "),
+        "the declaration must stay first"
+    );
+    // The packaged files carry no marker: a package owns its files and
+    // Remove Registration must never take them.
+    for asset in desktop::packaged_assets() {
+        assert!(
+            !desktop::is_per_user_registration(&asset.contents),
+            "{}",
+            asset.file_name
+        );
+    }
+}
+
 // --- the Windows registry shape --------------------------------------------
 
 #[test]
@@ -435,7 +568,7 @@ fn the_handoff_names_the_command_that_would_set_the_default_and_stops_there() {
     };
     assert_eq!(*program, "xdg-mime");
     assert_eq!(args[0], "default");
-    assert_eq!(args[1], "bachelorpad.desktop");
+    assert_eq!(args[1], "io.github.dboles99.BachelorPad.desktop");
     assert!(args.contains(&"text/plain".to_owned()));
     assert!(plan.handoff.describe().contains("xdg-mime"));
 }
@@ -471,7 +604,7 @@ fn a_mimeapps_list_is_read_the_way_the_desktop_reads_it() {
 text/plain=someone-else.desktop;
 
 [Default Applications]
-text/plain = bachelorpad.desktop;gedit.desktop;
+text/plain = io.github.dboles99.BachelorPad.desktop;gedit.desktop;
 text/markdown=marker.desktop
 application/json=
 ";
@@ -544,7 +677,7 @@ fn the_report_is_read_from_a_directory_the_caller_names() {
     let dir = tempdir().unwrap();
     std::fs::write(
         dir.path().join("mimeapps.list"),
-        "[Default Applications]\ntext/plain=bachelorpad.desktop;\n",
+        "[Default Applications]\ntext/plain=io.github.dboles99.BachelorPad.desktop;\n",
     )
     .unwrap();
     let selection = AssociationSelection::custom(["txt", "md"]);
@@ -613,10 +746,17 @@ fn a_consented_install_writes_exactly_the_plans_artefacts_under_the_given_root()
         assert!(path.starts_with(dir.path()), "{path:?} escaped the root");
         assert!(path.is_file());
     }
-    let entry = std::fs::read_to_string(dir.path().join("applications/bachelorpad.desktop"))
-        .expect("the desktop entry landed where mimeapps.list will look for it");
+    let entry = std::fs::read_to_string(
+        dir.path()
+            .join("applications/io.github.dboles99.BachelorPad.desktop"),
+    )
+    .expect("the desktop entry landed where mimeapps.list will look for it");
     assert_eq!(entry, plan.artefacts[0].contents);
-    assert!(dir.path().join("mime/packages/bachelorpad.xml").is_file());
+    assert!(
+        dir.path()
+            .join("mime/packages/io.github.dboles99.BachelorPad.xml")
+            .is_file()
+    );
     assert_eq!(installed.follow_up, plan.follow_up);
 }
 
