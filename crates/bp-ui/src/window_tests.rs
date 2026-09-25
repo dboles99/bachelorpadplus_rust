@@ -812,3 +812,53 @@ fn the_planned_menus_are_off_the_bar_unless_asked_for() {
     let (ui, _) = wired(state);
     assert!(ui.get_show_planned_menus());
 }
+
+// --- Help ▸ About (release plan M1-02) ----------------------------------
+
+#[test]
+fn about_opens_with_the_licences_and_holds_the_keyboard_until_escape() {
+    let (ui, cell) = wired(crate::state::AppState::new());
+    crate::about::bind(&ui, &cell);
+    let before = ui.get_doc_text();
+
+    crate::dispatch::handle_menu_action(&ui, &cell, crate::menus::action::ABOUT);
+    assert!(ui.get_about_open());
+    assert!(
+        ui.get_about_body()
+            .contains("Slint Royalty-free Licence 2.0")
+    );
+    type_text(&ui, "typed");
+    assert_eq!(ui.get_doc_text(), before, "typing got past About");
+
+    press(&ui, Key::Escape);
+    assert!(!ui.get_about_open());
+    type_text(&ui, "Q");
+    assert!(
+        ui.get_doc_text().starts_with('Q'),
+        "the editor did not get the keys back"
+    );
+}
+
+#[test]
+fn notices_closes_about_and_shows_the_terms_as_a_question_would() {
+    let (ui, cell) = wired(crate::state::AppState::new());
+    crate::about::bind(&ui, &cell);
+    crate::dispatch::handle_menu_action(&ui, &cell, crate::menus::action::ABOUT);
+    assert_eq!(
+        ui.get_about_highlighted(),
+        3,
+        "Enter on arrival should close, not act"
+    );
+
+    // Left three times from Close is Notices.
+    press(&ui, Key::LeftArrow);
+    press(&ui, Key::LeftArrow);
+    press(&ui, Key::LeftArrow);
+    press(&ui, Key::Return);
+
+    assert!(!ui.get_about_open());
+    assert!(ui.get_dialog_open());
+    assert_eq!(ui.get_dialog_title(), "Notices");
+    press(&ui, Key::Escape);
+    assert!(!ui.get_dialog_open());
+}
