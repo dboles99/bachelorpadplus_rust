@@ -202,6 +202,7 @@ fn refresh(ui: &AppWindow, state: &mut state::AppState, push_text: state::PushTe
     ui.set_view_items(model(menus::view(
         state.theme,
         state.follow_system_theme,
+        state.system_dark.is_some(),
         state.show_gutter,
         state.wrap_text,
         state.font_size,
