@@ -55,8 +55,8 @@ each have a tested slice reachable in the product — phase 18 joined them when
 File ▸ Set as Default Editor shipped. Phases 4, 9, 12 and 13 are built and
 have no way in, which an audit put a number on: `bp-research`, `bp-notebook`
 and `bp-storage` have zero reverse dependencies anywhere in the application,
-and with `bp-buffer`'s large-file engine that is over ten thousand lines and
-237 unit tests behind code no user can reach.
+and with `bp-buffer`'s large-file engine that is over ten thousand lines,
+with their unit tests, behind code no user can reach.
 
 **The wiring backlog is real, and it shrank rather than grew.** Phase 6's
 YAML, phase 16's redaction and metadata inspector all have menu rows now, the

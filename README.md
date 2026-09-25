@@ -16,45 +16,69 @@ It begins as a fast Notepad-like editor and progressively adds:
 - Windows/Linux default-editor integration
 - original retro-futurist "text appliance" branding
 
+Not all of that is in the first release candidate. ADR-0030 defers notebook
+execution to 1.1, semantic organisation, related notes, duplicate detection
+and hybrid search to 1.2, and syntax highlighting to 1.x.
+
 The product philosophy is:
 
 > **Notepad when you want it. More when you need it.**
 
-## Install the repository scaffold
+## Build and run
 
-1. Put the release ZIP and `Install-BachelorPadPlusRepo.ps1` in your Windows Downloads folder.
-2. Open PowerShell 7.
-3. Run:
+There are **no installers or packages yet**: a Windows installer and Linux
+deb, rpm, tar.gz and PKGBUILD packages are release-plan milestone M3. Today
+you build from source.
 
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\Install-BachelorPadPlusRepo.ps1
+The toolchain is pinned in `rust-toolchain.toml` (Rust 1.94.1, with rustfmt
+and clippy); rustup picks it up by itself.
+
+```sh
+cargo run --release                       # the app
+cargo run --release -- --editor-view      # the experimental custom editor view (ADR-0018)
+cargo run --release -- --line 42 notes.txt
+cargo run --release -- --help             # every command-line option
 ```
 
-Default destination:
+A release build on Windows has no console, so `--help` and `--version` print
+nothing there until release-plan item M2-03; a debug build and Linux print
+them.
 
-```text
-G:\dev2\bachelorpadplus_rust
-```
+**Linux.** Building needs a C toolchain and the development headers listed in
+[docs/governance/LOCAL_CI.md](docs/governance/LOCAL_CI.md) ("Native Linux";
+on Ubuntu, `build-essential pkg-config libfontconfig1-dev libxkbcommon-dev`
+and the rest of that line). At run time the binary links `libfontconfig` and
+`libfreetype`, and loads `libxkbcommon-x11` (plus X11 or Wayland client
+libraries) when the window opens; install `libxkbcommon-x11-0` if your
+desktop does not already have it. The editor's font, DejaVu Sans Mono, is
+bundled, so no font package is needed. Message dialogs are drawn in the
+window; file pickers go through the XDG desktop portal.
 
-The installer is conservative: it will not silently overwrite an existing repository. It creates a timestamped backup if you explicitly use `-BackupExisting`.
+**Windows.** rustup's MSVC toolchain and the Visual Studio C++ build tools
+(`bp-storage` compiles its bundled SQLite from C). Nothing built since the
+sixth session has been run on Windows yet (release plan M0-12).
 
 ## Development
 
 ```powershell
 ./scripts/Install-GitHooks.ps1   # once per clone
-./scripts/Invoke-LocalCI.ps1     # format, check, clippy, test
+./scripts/Invoke-LocalCI.ps1     # the gate: format, locked check, clippy, test, launch, log hygiene, fuzz
 ```
+
+On Linux run the same gate under PowerShell 7, natively:
+`pwsh -NoProfile -File scripts/Invoke-LocalCI.ps1`.
 
 This project has **no hosted CI**. `scripts/Invoke-LocalCI.ps1` is the
 authoritative gate and runs from `pre-commit` and `pre-push`. See
 [docs/governance/LOCAL_CI.md](docs/governance/LOCAL_CI.md) and ADR-0016.
 
-```powershell
-cargo run --release            # the app
-cargo run --release -- --editor-view   # with the custom editor view (ADR-0018)
-./scripts/Measure-Startup.ps1  # startup and idle memory vs specs.md §22
+```sh
+scripts/smoke-linux.sh           # Linux: drive the built debug binary on Xvfb, both views
+./scripts/Measure-Startup.ps1    # Windows: startup and idle memory vs specs.md §22
 ```
+
+The smoke script is not a gate stage. It tests the binary it is given and
+builds nothing, and it needs `xvfb`, `python3-xlib` and `libxkbcommon-x11-0`.
 
 ## Current state (2026-09-25)
 
@@ -79,9 +103,12 @@ saves atomically, and does rather more than that:
 | Security (phase 16) | Privacy Mode, a session override that can only tighten; Scan for Secrets, which reports where a credential is and never what it is; Redact Found Secrets, as an undoable edit with a consent step; Inspect Metadata; Hash Document; Verify Signature; Security History, which every row above it writes into (ADR-0024). Signing is greyed with the reason on the row — there is nowhere to keep a key yet |
 
 Startup, with the software renderer ([ADR-0017](docs/decisions/ADR-0017.md)):
-**35.7 ms to window, 21.9 MB idle**, against targets of 150 ms and 50 MB.
-Idle memory rose ~2.7 MB this session; `std-widgets` is imported now, for the
-one thing that reports the desktop's light/dark preference.
+**35.7 ms to window, 21.9 MB idle**, against targets of 150 ms and 50 MB,
+measured on Windows 10 on 2026-08-19
+(`artifacts/benchmarks/startup-20260819-053242.json`). Idle memory had risen
+about 2.7 MB when `std-widgets` was first imported. Not measured since the
+in-window dialogs, Settings, About and the bundled font landed, and never on
+Linux or Windows 11 (release plan M4-01 to M4-03).
 
 Configuration precedence: command line (`--theme=`, `--renderer=`, `--log=`,
 `--font-size=`, `--tab-width=`, `--indent-spaces=`),
@@ -176,24 +203,29 @@ where they are, in use, and says so ([ADR-0029](docs/decisions/ADR-0029.md)).
   path's size guard, but the `LargeFile` viewer appears nowhere outside its
   own crate, so a file past the 32 MiB editable limit is refused with a
   notice rather than opened (the viewer is release-plan item M1-06) --
-  and it is over ten thousand lines defended by 237 unit tests that no user
+  and it is over ten thousand lines, with their unit tests, that no user
   can reach. It is still the largest thing standing between this
   repository and a product.
 
-  | Crate | Lines | Tests | Reached by |
-  | --- | --- | --- | --- |
-  | `bp-research` | 5,208 | 161 | nothing |
-  | `bp-notebook` | 3,514 | 55 | the fuzz harness and cross-crate tests only |
-  | `bp-buffer` ▸ `large.rs` | 1,198 | — | nothing |
-  | `bp-storage` | 721 | 21 | nothing, by decision (ADR-0019; kept unwired for RC1 by ADR-0030) |
+  | Crate | Reached by |
+  | --- | --- |
+  | `bp-research` | nothing (unwired for RC1, ADR-0030) |
+  | `bp-notebook` | the fuzz harness and cross-crate tests only (1.1, ADR-0030) |
+  | `bp-buffer` ▸ `large.rs` | nothing yet (the viewer, M1-06) |
+  | `bp-storage` | the cross-crate tests only, by decision (ADR-0019; kept unwired for RC1 by ADR-0030) |
+
+  Line and test counts are left out because they drift.
 
   `bp-integrity`, `bp-platform` and `bp-redaction` came off this list --
   Verify Signature, Set as Default Editor, redaction and the metadata
   inspector all have rows now.
-- **Still barely used in anger.** The tests cover the pieces and now the
-  seams; a person driving the application has done so once, several sessions
-  ago. The four rows added to the Security menu this session have never been
-  clicked.
+- **Still barely used by a person.** The tests cover the pieces and the
+  seams, the window tests drive the real window, and `scripts/smoke-linux.sh`
+  drives the real binary on Xvfb. A person driving the application is
+  recorded once, on 2026-08-17. The Security menu's rows (Scan for Secrets,
+  Redact, Inspect Metadata, Hash, Verify Signature, Security History) are
+  tested through `bp-ui`'s state, not through the window, and no record says
+  a person has clicked them.
 - **`bp-storage` is still not called by the application.** That is now a
   product decision rather than a security one: ADR-0020 permits recording a
   summary under Standard, and `record_document` honours the policy. What
