@@ -145,6 +145,12 @@ pub struct AppState {
     /// environment naming no configuration directory -- and then a change
     /// lasts for the session, as every change did before.
     pub(crate) settings: Option<SavedSettings>,
+    /// The Settings sheet, while it is open.
+    pub(crate) settings_sheet: Option<crate::settings_sheet::Sheet>,
+    /// Whether the menus of promises are on the bar (`show_planned_menus`).
+    pub(crate) show_planned_menus: bool,
+    /// Where the log and crash reports go, for Tools ▸ Open Log Folder.
+    pub(crate) log_dir: Option<PathBuf>,
     /// Whether typing overwrites (the Insert key).
     ///
     /// The window's, not a document's: one key switches it and every tab
@@ -283,6 +289,7 @@ impl AppState {
         self.record_other_programs = config.clipboard_record_other_programs;
         self.editable_limit = config.editable_limit_bytes();
         self.default_profile = profile_named(config.default_profile);
+        self.show_planned_menus = config.show_planned_menus;
         let ids: Vec<DocumentId> = self.workspace.iter().map(Document::id).collect();
         for id in ids {
             self.give_default_profile(id);
@@ -358,6 +365,9 @@ impl AppState {
             editable_limit: bp_files::EDITABLE_LIMIT_BYTES,
             default_profile: bp_security::Profile::Standard,
             settings: None,
+            settings_sheet: None,
+            show_planned_menus: false,
+            log_dir: None,
             overwrite: false,
             stamps: HashMap::new(),
             recent: locations

@@ -52,7 +52,7 @@ fn main() -> anyhow::Result<()> {
     // left no trace at all (release plan M0-10).
     let log_dir = logging::directory();
     logging::init(filter, log_dir.as_deref().and_then(logging::open_log));
-    logging::install_crash_hook(log_dir);
+    logging::install_crash_hook(log_dir.clone());
     if std::env::var_os(logging::CRASH_TEST_ENV).is_some() {
         crash_on_purpose();
     }
@@ -137,6 +137,7 @@ fn main() -> anyhow::Result<()> {
         // is for trying it once, `editor_view` in config.toml for keeping it.
         editor_view: invocation.editor_view || loaded.config.editor_view,
         settings_path: loaded.path.clone(),
+        log_dir,
         config: Some(loaded.config),
     })?;
     Ok(())

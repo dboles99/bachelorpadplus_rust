@@ -1,0 +1,241 @@
+// The Settings sheet (release plan M1-03).
+//
+// Drawn over the window the way `dialog.slint`'s questions are, and for the
+// same reasons: it sits outside the shortcut `FocusScope`, so nothing typed
+// while it is open reaches the document, and it needs no second window.
+//
+// Rust owns the settings. Every row's label, value and note arrive from
+// `src/settings_sheet.rs`, and every change goes back as "row N, one step
+// this way" -- so which values exist, what order they come in and what a step
+// from the last one does are decided in one place, and tested there without
+// a window.
+
+import { ScrollView } from "std-widgets.slint";
+import { SheetButton } from "dialog.slint";
+import { Palette, SettingRow } from "types.slint";
+
+component Stepper inherits Rectangle {
+    in property <string> glyph;
+    callback clicked();
+    width: 22px;
+    height: 22px;
+    border-radius: 3px;
+    background: ta.has-hover ? Palette.edge : transparent;
+
+    Text {
+        text: root.glyph;
+        color: Palette.ink;
+        font-size: 14px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    ta := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component SettingsSheet inherits Rectangle {
+    in property <bool> open;
+    in property <[SettingRow]> rows;
+    /// The row the keyboard is on. Out so the window tests can see it move.
+    out property <int> selected;
+
+    /// Row `row` moved one step: -1 back, +1 on.
+    callback stepped(int /* row */, int /* delta */);
+    callback saved();
+    callback cancelled();
+
+    public function take-focus() {
+        root.selected = 0;
+        scroller.viewport-y = 0;
+        keys.focus();
+    }
+
+    function move-by(delta: int) {
+        root.selected = Math.mod(root.selected + delta + root.rows.length, max(1, root.rows.length));
+        // Keep the selected row on screen.
+        let top = root.selected * 48px;
+        if (top + scroller.viewport-y < 0) {
+            scroller.viewport-y = -top;
+        }
+        if (top + 48px + scroller.viewport-y > scroller.visible-height) {
+            scroller.viewport-y = scroller.visible-height - top - 48px;
+        }
+    }
+
+    visible: root.open;
+    background: Palette.shell.with-alpha(0.7);
+
+    // Swallows clicks that miss the panel.
+    TouchArea { }
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                root.cancelled();
+                return accept;
+            }
+            if (event.text == Key.Return) {
+                root.saved();
+                return accept;
+            }
+            if (event.text == Key.DownArrow || event.text == Key.Tab) {
+                root.move-by(1);
+                return accept;
+            }
+            if (event.text == Key.UpArrow || event.text == Key.Backtab) {
+                root.move-by(-1);
+                return accept;
+            }
+            if (event.text == Key.LeftArrow) {
+                root.stepped(root.selected, -1);
+                return accept;
+            }
+            if (event.text == Key.RightArrow || event.text == " ") {
+                root.stepped(root.selected, 1);
+                return accept;
+            }
+            // Nothing else gets past the sheet to the document.
+            accept
+        }
+    }
+
+    panel := Rectangle {
+        width: min(600px, root.width - 32px);
+        height: min(layout.preferred-height, root.height - 32px);
+        x: (root.width - self.width) / 2;
+        y: max(16px, (root.height - self.height) / 3);
+        background: Palette.panel;
+        border-color: Palette.edge;
+        border-width: 1px;
+        border-radius: 4px;
+
+        accessible-role: groupbox;
+        accessible-label: "Settings";
+
+        TouchArea { }
+
+        layout := VerticalLayout {
+            padding: 16px;
+            spacing: 10px;
+
+            Text {
+                text: "Settings";
+                color: Palette.ink;
+                font-size: 15px;
+                font-weight: 700;
+            }
+
+            Text {
+                text: "Up and Down choose a setting, Left and Right change it. Saved to config.toml, keeping anything you wrote there by hand.";
+                color: Palette.ink-dim;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+
+            scroller := ScrollView {
+                min-height: 48px;
+                preferred-height: root.rows.length * 48px;
+                viewport-width: self.visible-width;
+                viewport-height: root.rows.length * 48px;
+
+                for row[i] in root.rows: Rectangle {
+                    x: 0;
+                    y: i * 48px;
+                    width: scroller.visible-width;
+                    height: 48px;
+                    background: i == root.selected ? Palette.edge : transparent;
+                    border-radius: 3px;
+
+                    accessible-role: list-item;
+                    accessible-label: row.label;
+                    accessible-value: row.value;
+                    accessible-description: row.note;
+
+                    TouchArea {
+                        clicked => {
+                            root.selected = i;
+                            keys.focus();
+                        }
+                    }
+
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        spacing: 8px;
+
+                        VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 1;
+
+                            Text {
+                                text: row.label;
+                                color: Palette.ink;
+                                font-size: 13px;
+                            }
+                            if row.note != "": Text {
+                                text: row.note;
+                                color: Palette.ink-dim;
+                                font-size: 11px;
+                                overflow: elide;
+                            }
+                        }
+
+                        VerticalLayout {
+                            alignment: center;
+                            Stepper {
+                                glyph: "‹";
+                                clicked => {
+                                    root.selected = i;
+                                    keys.focus();
+                                    root.stepped(i, -1);
+                                }
+                            }
+                        }
+                        Text {
+                            min-width: 120px;
+                            text: row.value;
+                            color: i == root.selected ? Palette.accent : Palette.ink;
+                            font-size: 13px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            Stepper {
+                                glyph: "›";
+                                clicked => {
+                                    root.selected = i;
+                                    keys.focus();
+                                    root.stepped(i, 1);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                alignment: end;
+                spacing: 8px;
+
+                SheetButton {
+                    label: "Save";
+                    highlighted: true;
+                    clicked => {
+                        root.saved();
+                    }
+                }
+                SheetButton {
+                    label: "Cancel";
+                    clicked => {
+                        root.cancelled();
+                    }
+                }
+            }
+        }
+    }
+}

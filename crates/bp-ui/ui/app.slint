@@ -41,11 +41,12 @@ import { PassphraseBar } from "passphrase_bar.slint";
 import { ResultsPanel } from "results_panel.slint";
 import { StatusBar } from "status_bar.slint";
 import { Tab } from "tab.slint";
-import { EditorRow, MenuItem, Palette, SearchHit, SelectionBox, TabInfo } from "types.slint";
+import { EditorRow, MenuItem, Palette, SearchHit, SelectionBox, SettingRow, TabInfo } from "types.slint";
+import { SettingsSheet } from "settings.slint";
 
 // Re-exported because `slint-build` generates Rust types only for what the
-// compiled entry file exports. `bp-ui` names all six.
-export { EditorRow, MenuItem, Palette, SearchHit, SelectionBox, TabInfo }
+// compiled entry file exports. `bp-ui` names all seven.
+export { EditorRow, MenuItem, Palette, SearchHit, SelectionBox, SettingRow, TabInfo }
 
 export component AppWindow inherits Window {
     title: "BachelorPad+";
@@ -105,6 +106,12 @@ export component AppWindow inherits Window {
     in property <[MenuItem]> security-items;
     in property <[MenuItem]> tools-items;
     in property <[MenuItem]> help-items;
+    /// Whether Notebook, Organize, Research and Run appear on the bar. Off
+    /// for a release (release plan M1-05): every row in them is a promise,
+    /// and a menu of promises reads as a broken product. `show_planned_menus`
+    /// in config.toml brings them back, for anyone who wants the roadmap on
+    /// screen.
+    in property <bool> show-planned-menus;
     /// The tab strip's context menu. Not a menu-bar menu, but built the same
     /// way and dispatched through the same ids.
     in property <[MenuItem]> tab-items;
@@ -235,6 +242,20 @@ export component AppWindow inherits Window {
         sheet.take-focus();
     }
 
+    // --- the Settings sheet (`settings.slint`, driven by
+    // `src/settings_sheet.rs`) ------------------------------------------
+    in-out property <bool> settings-open;
+    in property <[SettingRow]> setting-rows;
+    /// The row the keyboard is on. For the window tests.
+    out property <int> settings-selected: settings.selected;
+    callback setting-stepped(int, int);
+    callback settings-saved();
+    callback settings-cancelled();
+
+    public function focus-settings() {
+        settings.take-focus();
+    }
+
     /// Select a range in the editor. Called from Rust once it has worked out
     /// where the next match is -- `set-selection-offsets` is a function on
     /// the widget, so only Slint can invoke it.
@@ -325,7 +346,14 @@ export component AppWindow inherits Window {
         } else {
             root.menu-action(action);
         }
-        root.focus-editor();
+        // Back to the editor after a menu click -- unless the action just
+        // opened something that asked for the keyboard itself: a question,
+        // the Settings sheet, the passphrase or Go to Line. Taking it back
+        // unconditionally left a question from the Help menu on screen with
+        // the keys still typing into the document behind it.
+        if (!root.dialog-open && !root.settings-open && !root.passphrase-open && !root.goto-open) {
+            root.focus-editor();
+        }
     }
 
     // Shortcuts live in a FocusScope that *wraps* the content, because key
@@ -428,6 +456,14 @@ export component AppWindow inherits Window {
                 root.dispatch(34);
             }
         }
+        // Settings (bp-ui/src/menus.rs id 230), on the key most desktop
+        // editors use for it.
+        KeyBinding {
+            keys: @keys(Control + ",");
+            activated => {
+                root.dispatch(230);
+            }
+        }
         KeyBinding {
             keys: @keys(Control + "g");
             activated => {
@@ -501,24 +537,28 @@ export component AppWindow inherits Window {
                     }
                     notebook-label := MenuLabel {
                         label: "Notebook";
+                        shown: root.show-planned-menus;
                         clicked => {
                             notebook-menu.show();
                         }
                     }
                     organize-label := MenuLabel {
                         label: "Organize";
+                        shown: root.show-planned-menus;
                         clicked => {
                             organize-menu.show();
                         }
                     }
                     research-label := MenuLabel {
                         label: "Research";
+                        shown: root.show-planned-menus;
                         clicked => {
                             research-menu.show();
                         }
                     }
                     run-label := MenuLabel {
                         label: "Run";
+                        shown: root.show-planned-menus;
                         clicked => {
                             run-menu.show();
                         }
@@ -1006,6 +1046,28 @@ export component AppWindow inherits Window {
         items: root.help-items;
         chosen(a) => {
             root.dispatch(a);
+        }
+    }
+
+    settings := SettingsSheet {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        open: root.settings-open;
+        rows: root.setting-rows;
+        stepped(row, delta) => {
+            root.setting-stepped(row, delta);
+        }
+        saved => {
+            root.settings-open = false;
+            root.focus-editor();
+            root.settings-saved();
+        }
+        cancelled => {
+            root.settings-open = false;
+            root.focus-editor();
+            root.settings-cancelled();
         }
     }
 

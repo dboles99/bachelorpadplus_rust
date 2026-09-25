@@ -69,6 +69,7 @@ mod dialog;
 mod dispatch;
 mod editor_view;
 mod passphrase;
+mod settings_sheet;
 mod state;
 #[cfg(test)]
 mod window_tests;
@@ -179,6 +180,7 @@ fn refresh(ui: &AppWindow, state: &mut state::AppState, push_text: state::PushTe
     }
     ui.set_passphrase_status(state.passphrase_status.as_str().into());
 
+    ui.set_show_planned_menus(state.show_planned_menus);
     ui.set_show_gutter(state.show_gutter);
     ui.set_wrap_text(state.wrap_text);
     // Points to Slint's `length`. Both editor views read this one property,
@@ -246,7 +248,7 @@ fn set_static_menus(ui: &AppWindow) {
     ui.set_organize_items(model(menus::planned_menu("Organize")));
     ui.set_research_items(model(menus::planned_menu("Research")));
     ui.set_run_items(model(menus::planned_menu("Run")));
-    ui.set_tools_items(model(menus::planned_menu("Tools")));
+    ui.set_tools_items(model(menus::tools()));
 }
 
 /// The query the find bar currently describes.
@@ -337,6 +339,10 @@ pub struct RunOptions {
     /// defaults and saves nothing, which is what `run()` and the tests want.
     pub config: Option<bp_config::Config>,
     pub settings_path: Option<PathBuf>,
+    /// Where the log and crash reports are written, for Tools ▸ Open Log
+    /// Folder. Passed in rather than worked out again here, so the folder
+    /// opened is the one the binary actually writes to, override and all.
+    pub log_dir: Option<PathBuf>,
     /// Shown in the status bar at startup, where configuration problems go.
     /// A warning the user cannot see is a warning they will hit again.
     pub startup_notice: Option<String>,
@@ -396,6 +402,7 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
         initial.theme = theme;
     }
     initial.follow_system_theme = options.follow_system_theme;
+    initial.log_dir = options.log_dir.clone();
     if let Some(size) = options.font_size {
         // Clamped again rather than trusted. `bp-config` bounds what it
         // parses, but `RunOptions` is a public API and a caller reaching it
@@ -619,6 +626,8 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
             slint::CloseRequestResponse::KeepWindowShown
         });
     }
+
+    bind_settings(&ui, &state);
 
     // Every in-app question reports here; `dialog` runs what was waiting on
     // the answer.
@@ -1153,6 +1162,48 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
     ui.hide()?;
     drop(disk_timer);
     Ok(())
+}
+
+/// Wire the Settings sheet's callbacks. Each step changes the draft and
+/// redraws the rows; nothing reaches the live state until Save. A function
+/// of its own so the window tests wire the sheet exactly as `run_with` does.
+fn bind_settings(ui: &AppWindow, state: &Rc<RefCell<state::AppState>>) {
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_setting_stepped(move |row, delta| {
+            let Some(ui) = weak.upgrade() else { return };
+            let rows = {
+                let mut s = cell.borrow_mut();
+                let Some(sheet) = s.settings_sheet.as_mut() else {
+                    return;
+                };
+                sheet.step(row, delta);
+                sheet.rows()
+            };
+            ui.set_setting_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
+        });
+    }
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_settings_saved(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            {
+                let mut s = cell.borrow_mut();
+                if let Some(sheet) = s.settings_sheet.take() {
+                    sheet.save(&mut s);
+                }
+            }
+            refresh(&ui, &mut cell.borrow_mut(), state::PushText::No);
+        });
+    }
+    {
+        let cell = Rc::clone(state);
+        ui.on_settings_cancelled(move || {
+            cell.borrow_mut().settings_sheet = None;
+        });
+    }
 }
 
 /// Offer to recover what a previous session left unsaved.

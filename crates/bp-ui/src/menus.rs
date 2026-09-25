@@ -158,6 +158,13 @@ pub mod action {
     /// argument as the two blocks above.
     pub const SET_DEFAULT_EDITOR: i32 = 220;
 
+    /// The Tools menu (release plan M1-05): the application's own settings
+    /// and the folders it keeps its files in. A block of its own at 230-239,
+    /// for the reason every block above gives. 233-239 are free.
+    pub const SETTINGS: i32 = 230;
+    pub const OPEN_LOG_FOLDER: i32 = 231;
+    pub const OPEN_CONFIG_FOLDER: i32 = 232;
+
     /// Clipboard history occupies `CLIP_BASE ..` (bounded by [`super::clip_end`]).
     ///
     /// Slint's `dispatch` routes exactly `UNDO..=SELECT_ALL` to the widget and
@@ -276,7 +283,26 @@ fn row_end(label: &str, shortcut: &str, action: i32) -> MenuItem {
     }
 }
 
-/// A row that exists to say what is coming, and does nothing.
+/// A greyed row that reports something -- what a profile does, that the
+/// clipboard history is empty -- rather than offering anything.
+///
+/// Not [`planned`]: a readout is true and finished, where a planned row is a
+/// promise. The release menus hold readouts and never planned rows (release
+/// plan M1-05), and the test that says so tells them apart by which of the
+/// two built the row.
+fn readout(label: &str) -> MenuItem {
+    MenuItem {
+        label: label.into(),
+        shortcut: String::new().into(),
+        action: action::NONE,
+        enabled: false,
+        separator_after: false,
+    }
+}
+
+/// A row that exists to say what is coming, and does nothing. Only in the
+/// planned menus, which the menu bar shows only when `show_planned_menus`
+/// is set.
 fn planned(label: &str) -> MenuItem {
     MenuItem {
         label: label.into(),
@@ -494,7 +520,7 @@ pub fn edit(clips: &[bp_clipboard::Entry], editor_view: bool) -> Vec<MenuItem> {
     // Clipboard history. Each row shows a preview and what the entry looks
     // like, so a column of similar-looking clips is still distinguishable.
     if clips.is_empty() {
-        items.push(planned("Clipboard History — nothing copied yet"));
+        items.push(readout("Clipboard History — nothing copied yet"));
     } else {
         for (index, entry) in clips.iter().take(bp_clipboard::MAX_ENTRIES).enumerate() {
             let pin = if entry.pinned { "📌 " } else { "" };
@@ -550,10 +576,8 @@ pub fn edit(clips: &[bp_clipboard::Entry], editor_view: bool) -> Vec<MenuItem> {
         // and `TextInput`'s cannot be moved from here.
         MenuItem {
             enabled: editor_view,
-            ..row_end("Go to Line...", "Ctrl+G", action::GO_TO_LINE)
+            ..row("Go to Line...", "Ctrl+G", action::GO_TO_LINE)
         },
-        planned("Multi-cursor"),
-        arrives("phase 2"),
     ]);
     items
 }
@@ -600,17 +624,12 @@ pub fn view(
             action::ZOOM_OUT,
             font_size > bp_config::MIN_FONT_SIZE,
         ),
-        MenuItem {
-            separator_after: true,
-            ..row_enabled(
-                &format!("Reset Zoom ({font_size} pt)"),
-                "Ctrl+0",
-                action::ZOOM_RESET,
-                font_size != bp_config::DEFAULT_FONT_SIZE,
-            )
-        },
-        planned("Split / Preview"),
-        arrives("phase 8"),
+        row_enabled(
+            &format!("Reset Zoom ({font_size} pt)"),
+            "Ctrl+0",
+            action::ZOOM_RESET,
+            font_size != bp_config::DEFAULT_FONT_SIZE,
+        ),
     ]
 }
 
@@ -650,11 +669,7 @@ pub fn format(encoding: Encoding, line_ending: LineEnding, indent: Indent) -> Ve
         },
         toggle("Tab Width 2", indent.width == 2, action::TAB_WIDTH_2),
         toggle("Tab Width 4", indent.width == 4, action::TAB_WIDTH_4),
-        MenuItem {
-            separator_after: true,
-            ..toggle("Tab Width 8", indent.width == 8, action::TAB_WIDTH_8)
-        },
-        arrives("phase 5"),
+        toggle("Tab Width 8", indent.width == 8, action::TAB_WIDTH_8),
     ]
 }
 
@@ -694,17 +709,17 @@ pub fn security(
     // What the profile in force actually does, in the user's terms. Greyed,
     // because they are a readout rather than something to click.
     items.extend([
-        planned(&format!(
+        readout(&format!(
             "Recovery journal: {}",
             describe_recovery(policy.recovery, encrypted)
         )),
-        planned(&format!(
+        readout(&format!(
             "Clipboard history: {}",
             describe_clipboard(policy.clipboard)
         )),
         MenuItem {
             separator_after: true,
-            ..planned(&format!(
+            ..readout(&format!(
                 "Leaves this machine: {}",
                 match policy.network {
                     bp_security::Network::Allowed => "permitted",
@@ -799,8 +814,6 @@ pub fn security(
         // somebody most wants to look is when they think something should be
         // there and are not sure it is.
         row("Security History...", "", action::SECURITY_HISTORY),
-        planned("Lock Document"),
-        arrives("phase 16"),
     ]);
     items
 }
@@ -869,7 +882,7 @@ pub fn tab_context(others: usize, has_path: bool) -> Vec<MenuItem> {
 /// Caret rows, like Duplicate Line: inserting at the caret needs a caret, and
 /// `TextInput` does not expose one (ADR-0018).
 pub fn insert(at: time::OffsetDateTime, editor_view: bool) -> Vec<MenuItem> {
-    let mut items: Vec<MenuItem> = bp_naming::Stamp::all()
+    bp_naming::Stamp::all()
         .iter()
         .enumerate()
         .map(|(index, stamp)| MenuItem {
@@ -880,15 +893,7 @@ pub fn insert(at: time::OffsetDateTime, editor_view: bool) -> Vec<MenuItem> {
                 action::STAMP_BASE + i32::try_from(index).unwrap_or(0),
             )
         })
-        .collect();
-    if let Some(last) = items.last_mut() {
-        last.separator_after = true;
-    }
-    items.extend([
-        planned("Markdown constructs, citation, code block, table"),
-        arrives("phase 6"),
-    ]);
-    items
+        .collect()
 }
 
 /// The Data menu, which depends entirely on what the document is.
@@ -952,13 +957,13 @@ pub fn data(format: Format) -> Vec<MenuItem> {
             row("Report Shape", "", action::DATA_REPORT),
             row_end("Column Types", "", action::DATA_COLUMN_TYPES),
             row("Convert to JSON", "", action::DATA_CSV_TO_JSON),
-            row_end("Convert to JSON Lines", "", action::DATA_CSV_TO_JSONL),
+            row("Convert to JSON Lines", "", action::DATA_CSV_TO_JSONL),
         ],
         // One honest row. This used to append the phase-6 placeholder list,
         // which offered Validate and Format as "not implemented yet" on a
         // `.txt` -- while the same rows worked on the JSON document in the
         // next tab.
-        _ => vec![planned(&format!(
+        _ => vec![readout(&format!(
             "Nothing here for {} documents",
             format.label()
         ))],
@@ -997,20 +1002,25 @@ pub fn note(has_content: bool) -> Vec<MenuItem> {
         // Not gated on `has_content`: "0 words" is a legitimate answer to
         // "how long is this", and an empty document is exactly when someone
         // might check they are looking at the right tab.
-        row_end("Document Statistics", "", action::DOCUMENT_STATS),
-        planned("Tags"),
-        planned("Related Notes"),
-        planned("Revision History"),
-        arrives("phase 9"),
+        row("Document Statistics", "", action::DOCUMENT_STATS),
     ]
 }
 
 pub fn help() -> Vec<MenuItem> {
     vec![
         row("Keyboard Shortcuts", "", action::SHORTCUTS),
-        row_end("About BachelorPad+", "", action::ABOUT),
-        planned("Diagnostics"),
-        arrives("phase 19"),
+        row("About BachelorPad+", "", action::ABOUT),
+    ]
+}
+
+/// The Tools menu: the application's own settings, and the two folders a
+/// user is sent to when something goes wrong -- the log, and the
+/// configuration -- so nobody has to be told where either lives on their OS.
+pub fn tools() -> Vec<MenuItem> {
+    vec![
+        row_end("Settings...", "Ctrl+,", action::SETTINGS),
+        row("Open Log Folder", "", action::OPEN_LOG_FOLDER),
+        row("Open Config Folder", "", action::OPEN_CONFIG_FOLDER),
     ]
 }
 
@@ -1728,7 +1738,7 @@ mod tests {
     fn the_security_menu_no_longer_calls_the_history_planned() {
         // The same trap as the redaction row above: a planned label and a
         // live row for the same thing reads as the feature being in two
-        // states at once. `Lock Document` is still planned and must stay.
+        // states at once.
         let items = security_menu();
         assert!(
             !items
@@ -1736,12 +1746,103 @@ mod tests {
                 .any(|i| i.action == action::NONE && i.label.contains("audit history")),
             "the security history is live; it must not also be listed as planned"
         );
-        assert!(
-            items
-                .iter()
-                .any(|i| i.action == action::NONE && i.label.contains("Lock Document")),
-            "Lock Document is still planned and must still say so"
+    }
+
+    /// Every menu a release shows, in a representative state -- every Data
+    /// variant included, since that menu is rebuilt per format.
+    fn release_menus() -> Vec<(String, Vec<MenuItem>)> {
+        let now = time::macros::datetime!(2026-09-25 20:05 UTC);
+        let mut menus = vec![
+            ("File".to_owned(), file(true, true, &[])),
+            ("Edit".to_owned(), edit(&[], false)),
+            (
+                "View".to_owned(),
+                view(ThemeId::Green, false, true, false, 11),
+            ),
+            (
+                "Format".to_owned(),
+                format(Encoding::Utf8, LineEnding::Lf, Indent::default()),
+            ),
+            ("Security".to_owned(), security_menu()),
+            ("Tab".to_owned(), tab_context(2, true)),
+            ("Insert".to_owned(), insert(now, true)),
+            ("Note".to_owned(), note(true)),
+            ("Tools".to_owned(), tools()),
+            ("Help".to_owned(), help()),
+        ];
+        for format in [
+            Format::PlainText,
+            Format::Markdown,
+            Format::Json,
+            Format::JsonLines,
+            Format::Yaml,
+            Format::Toml,
+            Format::Csv,
+            Format::Tsv,
+            Format::Log,
+        ] {
+            menus.push((format!("Data ({})", format.label()), data(format)));
+        }
+        menus
+    }
+
+    #[test]
+    fn no_release_row_is_a_placeholder() {
+        // Release plan M1-05. A row that promises a feature and does nothing
+        // reads as a broken product; the promises live in the planned menus,
+        // which are off the bar unless `show_planned_menus` is set.
+        let planned_labels: Vec<String> = ["Insert", "Data", "Note", "Security", "Tools"]
+            .iter()
+            .flat_map(|name| planned_menu(name))
+            .map(|i| i.label.to_string())
+            .collect();
+        for (name, items) in release_menus() {
+            for item in &items {
+                assert!(
+                    !item.label.contains("not implemented"),
+                    "{name} still has a trailer: {:?}",
+                    item.label
+                );
+                if item.action == action::NONE {
+                    assert!(
+                        !planned_labels.contains(&item.label.to_string()),
+                        "{name} still lists a planned row: {:?}",
+                        item.label
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn no_release_menu_ends_on_a_divider() {
+        // Taking the trailers away left dividers under the last real row.
+        for (name, items) in release_menus() {
+            if let Some(last) = items.last() {
+                assert!(!last.separator_after, "{name} ends on a divider");
+            }
+        }
+    }
+
+    #[test]
+    fn the_tools_menu_is_live_and_its_ids_are_its_own() {
+        let items = tools();
+        assert!(items.iter().all(|i| i.enabled), "{items:?}");
+        let ids: Vec<i32> = items.iter().map(|i| i.action).collect();
+        assert_eq!(
+            ids,
+            [
+                action::SETTINGS,
+                action::OPEN_LOG_FOLDER,
+                action::OPEN_CONFIG_FOLDER
+            ]
         );
+        for id in ids {
+            assert!(
+                (230..240).contains(&id),
+                "id {id} is outside the Tools block"
+            );
+        }
     }
 
     #[test]
