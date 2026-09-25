@@ -33,6 +33,7 @@
 import "../fonts/DejaVuSansMono.ttf";
 import { Palette as SystemPalette } from "std-widgets.slint";
 import { MenuLabel, MenuPopup } from "menu.slint";
+import { DialogSheet } from "dialog.slint";
 import { EditorSurface } from "editor_surface.slint";
 import { FindBar } from "find_bar.slint";
 import { GotoBar } from "goto_bar.slint";
@@ -215,6 +216,24 @@ export component AppWindow inherits Window {
     in property <string> passphrase-action;
     callback passphrase-submitted(string);
     callback passphrase-cancelled();
+
+    // --- the in-app dialog (`dialog.slint`, driven by `src/dialog.rs`) ---
+    // Rust fills these, then calls `focus-dialog`. Only the chosen button's
+    // index comes back; what it means is Rust's business.
+    in-out property <bool> dialog-open;
+    in property <string> dialog-title;
+    in property <string> dialog-body;
+    in property <[string]> dialog-buttons;
+    in property <int> dialog-default;
+    in property <int> dialog-cancel;
+    /// Which button Enter would choose now. For the window tests.
+    out property <int> dialog-highlighted: sheet.highlighted;
+    out property <length> dialog-scroll-y: sheet.scrolled;
+    callback dialog-answered(int);
+
+    public function focus-dialog() {
+        sheet.take-focus();
+    }
 
     /// Select a range in the editor. Called from Rust once it has worked out
     /// where the next match is -- `set-selection-offsets` is a function on
@@ -987,6 +1006,29 @@ export component AppWindow inherits Window {
         items: root.help-items;
         chosen(a) => {
             root.dispatch(a);
+        }
+    }
+
+    // Last, so it draws over everything, and outside the shortcut
+    // `FocusScope`, so none of the window's shortcuts can fire while a
+    // question is open -- see `dialog.slint`.
+    sheet := DialogSheet {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        open: root.dialog-open;
+        title: root.dialog-title;
+        body: root.dialog-body;
+        buttons: root.dialog-buttons;
+        default-button: root.dialog-default;
+        cancel-button: root.dialog-cancel;
+        answered(chosen) => {
+            root.dialog-open = false;
+            // The editor first, so a continuation that opens a bar or asks
+            // its next question can take the focus from it.
+            root.focus-editor();
+            root.dialog-answered(chosen);
         }
     }
 }

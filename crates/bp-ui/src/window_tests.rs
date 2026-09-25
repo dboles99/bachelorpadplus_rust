@@ -329,3 +329,246 @@ fn ctrl_x_reports_a_cut_and_the_widget_still_cuts() {
         "the cut did not happen"
     );
 }
+
+// --- the in-app dialog (release plan M1-01) ------------------------------
+
+/// Route the sheet's answers to `dialog`, as `run_with` does.
+fn answer_through_dialog(ui: &AppWindow) {
+    let weak = ui.as_weak();
+    ui.on_dialog_answered(move |chosen| {
+        if let Some(ui) = weak.upgrade() {
+            crate::dialog::answered(&ui, chosen);
+        }
+    });
+}
+
+/// Ask a three-button question and record the answer it gets.
+fn ask_three(ui: &AppWindow, title: &str) -> Rc<std::cell::Cell<Option<usize>>> {
+    let got = Rc::new(std::cell::Cell::new(None));
+    let seen = Rc::clone(&got);
+    crate::dialog::ask(
+        ui,
+        crate::dialog::Dialog {
+            title: title.to_owned(),
+            body: "body".to_owned(),
+            buttons: vec!["One".to_owned(), "Two".to_owned(), "Three".to_owned()],
+            default: 0,
+            cancel: 2,
+        },
+        move |_, chosen| seen.set(Some(chosen)),
+    );
+    got
+}
+
+fn buttons(ui: &AppWindow) -> Vec<String> {
+    use slint::Model as _;
+    let model = ui.get_dialog_buttons();
+    (0..model.row_count())
+        .filter_map(|i| model.row_data(i))
+        .map(|s| s.to_string())
+        .collect()
+}
+
+#[test]
+fn a_question_holds_the_keyboard_so_nothing_reaches_the_document() {
+    let ui = window();
+    answer_through_dialog(&ui);
+    let new_documents = Rc::new(std::cell::Cell::new(0));
+    let count = Rc::clone(&new_documents);
+    ui.on_new_document(move || count.set(count.get() + 1));
+    let before = ui.get_doc_text();
+
+    let answer = ask_three(&ui, "Question");
+    assert!(ui.get_dialog_open());
+    type_text(&ui, "typed");
+    chord(&ui, Key::Control, "n");
+
+    assert_eq!(ui.get_doc_text(), before, "typing got past the question");
+    assert_eq!(
+        new_documents.get(),
+        0,
+        "a shortcut fired behind the question"
+    );
+    assert_eq!(answer.get(), None, "typing is not an answer");
+}
+
+#[test]
+fn escape_chooses_the_answer_that_changes_nothing() {
+    let ui = window();
+    answer_through_dialog(&ui);
+    let answer = ask_three(&ui, "Question");
+
+    press(&ui, Key::Escape);
+
+    assert_eq!(answer.get(), Some(2));
+    assert!(!ui.get_dialog_open());
+}
+
+#[test]
+fn enter_chooses_the_default_answer() {
+    let ui = window();
+    answer_through_dialog(&ui);
+    let answer = ask_three(&ui, "Question");
+
+    press(&ui, Key::Return);
+
+    assert_eq!(answer.get(), Some(0));
+}
+
+#[test]
+fn the_arrows_and_tab_move_the_answer_enter_gives_and_wrap_around() {
+    let ui = window();
+    answer_through_dialog(&ui);
+    let answer = ask_three(&ui, "Question");
+    assert_eq!(ui.get_dialog_highlighted(), 0);
+
+    press(&ui, Key::RightArrow);
+    assert_eq!(ui.get_dialog_highlighted(), 1);
+    press(&ui, Key::Tab);
+    assert_eq!(ui.get_dialog_highlighted(), 2);
+    press(&ui, Key::Tab);
+    assert_eq!(ui.get_dialog_highlighted(), 0, "Tab past the last wraps");
+    press(&ui, Key::LeftArrow);
+    assert_eq!(ui.get_dialog_highlighted(), 2, "Left past the first wraps");
+    press(&ui, Key::LeftArrow);
+
+    press(&ui, Key::Return);
+    assert_eq!(answer.get(), Some(1));
+}
+
+#[test]
+fn a_question_asked_while_another_is_open_waits_its_turn() {
+    let ui = window();
+    answer_through_dialog(&ui);
+    let first = ask_three(&ui, "First");
+    let second = ask_three(&ui, "Second");
+    assert_eq!(ui.get_dialog_title(), "First");
+
+    press(&ui, Key::Return);
+    assert_eq!(first.get(), Some(0));
+    assert_eq!(second.get(), None);
+    assert!(ui.get_dialog_open(), "the waiting question did not come up");
+    assert_eq!(ui.get_dialog_title(), "Second");
+
+    press(&ui, Key::Escape);
+    assert_eq!(second.get(), Some(2));
+    assert!(!ui.get_dialog_open());
+}
+
+#[test]
+fn the_keyboard_goes_back_to_the_document_once_the_question_is_answered() {
+    let ui = window();
+    answer_through_dialog(&ui);
+    chord(&ui, Key::Control, Key::Home);
+    let _answer = ask_three(&ui, "Question");
+    press(&ui, Key::Escape);
+
+    type_text(&ui, "Q");
+    assert!(ui.get_doc_text().starts_with("Qline 001"));
+}
+
+/// The window, with the shell's state behind it and one unsaved document.
+fn window_with_unsaved_work() -> (
+    AppWindow,
+    Rc<std::cell::RefCell<crate::state::AppState>>,
+    bp_core::DocumentId,
+) {
+    let ui = window();
+    answer_through_dialog(&ui);
+    let mut state = crate::state::AppState::new();
+    state.edit("unsaved work".to_owned());
+    let id = state.workspace.active_id().expect("a document");
+    assert!(state.is_dirty(id));
+    (ui, Rc::new(std::cell::RefCell::new(state)), id)
+}
+
+#[test]
+fn closing_unsaved_work_offers_save_dont_save_and_cancel() {
+    let (ui, cell, id) = window_with_unsaved_work();
+
+    crate::close_with_prompt(&ui, &cell, id, |_, _| {});
+
+    assert!(ui.get_dialog_open());
+    assert_eq!(buttons(&ui), ["Save", "Don't Save", "Cancel"]);
+    assert_eq!(ui.get_dialog_default(), 0, "Enter saves");
+    assert_eq!(ui.get_dialog_cancel(), 2, "Escape cancels");
+}
+
+#[test]
+fn escape_on_closing_unsaved_work_keeps_the_tab_and_its_changes() {
+    let (ui, cell, id) = window_with_unsaved_work();
+    let closed = Rc::new(std::cell::Cell::new(None));
+    let seen = Rc::clone(&closed);
+    crate::close_with_prompt(&ui, &cell, id, move |_, went| seen.set(Some(went)));
+
+    press(&ui, Key::Escape);
+
+    assert_eq!(closed.get(), Some(false));
+    assert!(cell.borrow().workspace.get(id).is_some(), "the tab went");
+    assert!(cell.borrow().is_dirty(id), "the changes went");
+}
+
+#[test]
+fn dont_save_closes_the_tab() {
+    let (ui, cell, id) = window_with_unsaved_work();
+    let closed = Rc::new(std::cell::Cell::new(None));
+    let seen = Rc::clone(&closed);
+    crate::close_with_prompt(&ui, &cell, id, move |_, went| seen.set(Some(went)));
+
+    press(&ui, Key::RightArrow);
+    press(&ui, Key::Return);
+
+    assert_eq!(closed.get(), Some(true));
+    assert!(cell.borrow().workspace.get(id).is_none());
+}
+
+#[test]
+fn cancel_stops_closing_the_rest_of_the_tabs() {
+    // Close All with two unsaved tabs: Cancel on the first is a cancel of
+    // the whole close, not a skip to the next question.
+    let (ui, cell, first) = window_with_unsaved_work();
+    let second = {
+        let mut s = cell.borrow_mut();
+        s.new_document();
+        s.edit("more unsaved work".to_owned());
+        s.workspace.active_id().expect("a second document")
+    };
+
+    crate::close_each(&ui, &cell, [first, second].into());
+    press(&ui, Key::Escape);
+
+    assert!(!ui.get_dialog_open(), "a second question followed a cancel");
+    let s = cell.borrow();
+    assert!(s.workspace.get(first).is_some());
+    assert!(s.workspace.get(second).is_some());
+}
+
+#[test]
+fn a_long_body_pages_from_the_keyboard_and_starts_at_the_top_each_time() {
+    // The redaction consent lists every finding, unbounded. The sheet
+    // scrolls rather than growing past the window, and since the focus is in
+    // the sheet, only its own keys can move it.
+    let ui = window();
+    answer_through_dialog(&ui);
+    let long: Vec<String> = (1..200).map(|i| format!("finding {i}")).collect();
+    crate::dialog::inform(&ui, "Findings", &long.join("\n"));
+    assert_eq!(ui.get_dialog_scroll_y(), 0.0);
+
+    press(&ui, Key::PageDown);
+    let paged = ui.get_dialog_scroll_y();
+    assert!(paged < -100.0, "Page Down scrolled only {paged}px");
+    press(&ui, Key::DownArrow);
+    assert!(ui.get_dialog_scroll_y() < paged, "Down did not scroll");
+    press(&ui, Key::PageUp);
+    press(&ui, Key::PageUp);
+    assert_eq!(ui.get_dialog_scroll_y(), 0.0, "Page Up stops at the top");
+
+    press(&ui, Key::PageDown);
+    press(&ui, Key::Escape);
+    crate::dialog::inform(&ui, "Findings again", &long.join("\n"));
+    assert_eq!(
+        ui.get_dialog_scroll_y(),
+        0.0,
+        "the next question opened scrolled"
+    );
+}

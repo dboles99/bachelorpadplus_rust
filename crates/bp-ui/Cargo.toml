@@ -48,9 +48,11 @@ arboard = "3"
 # Passphrases and decrypted document bytes are wiped rather than dropped.
 zeroize.workspace = true
 slint = "1.17"
-# Native file dialogs. xdg-portal rather than gtk3 on Linux, so the app does
-# not need a specific desktop environment installed just to open a file
-# (BP-ADR-0001). `pollster` supplies the executor the blocking API needs,
+# Native file dialogs -- and only those. Every message dialog is drawn in the
+# window instead (`ui/dialog.slint`, release plan M1-01): on Linux rfd shows
+# one by running zenity, which many desktops do not have. xdg-portal rather
+# than gtk3 on Linux, so the app does not need a specific desktop environment
+# installed just to open a file (BP-ADR-0001). `pollster` supplies the executor the blocking API needs,
 # since the portal backend is async underneath.
 #
 # `common-controls-v6` is deliberately NOT enabled. It embeds a side-by-side

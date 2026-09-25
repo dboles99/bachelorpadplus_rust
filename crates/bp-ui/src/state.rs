@@ -1183,8 +1183,9 @@ impl AppState {
     /// Returns whether the document changed, so the caller knows whether to
     /// re-push the text into the widget.
     pub(crate) fn apply_redaction(&mut self, plan: &RedactionPlan) -> bool {
-        // The offsets were measured when the dialog opened, and `rfd` pumps
-        // events while it is up. ADR-0028 is built on the rule that stale
+        // The offsets were measured when the question opened, and it is
+        // answered later, from an event, with timers free to run in between.
+        // ADR-0028 is built on the rule that stale
         // offsets destroy the wrong text and report success, and its own
         // `PastEnd` catches only the half of that which runs off the end --
         // an edit that left the length alone would slip straight through. So
@@ -1906,6 +1907,16 @@ impl AppState {
 
     pub(crate) fn close(&mut self, id: DocumentId) {
         self.error = None;
+        // Its checkpoints go with it. A clean document has none worth
+        // keeping, and a dirty one reaches here only after the user chose
+        // Don't Save -- leaving its journal behind offered that same work
+        // for "recovery" at the next launch, and kept a plaintext copy of it
+        // on disk in the meantime. Sealed checkpoints are keyed by path, as
+        // in `save_document`.
+        let _ = self.journal.discard(id.get());
+        if let Some(path) = self.workspace.get(id).and_then(Document::path) {
+            let _ = self.journal.discard_sealed_for(path);
+        }
         if self.workspace.close(id).is_some() {
             self.editors.remove(&id);
             // Holding a passphrase for the session is a deliberate trade;
@@ -2774,22 +2785,24 @@ pub(crate) enum RecoveryChoice {
     Keep,
 }
 
+/// The recovery prompt's buttons, left to right. Their order is the mapping
+/// [`recovery_choice`] reads back.
+pub(crate) const RECOVERY_BUTTONS: [&str; 3] = ["Restore", "Discard", "Not Now"];
+
 /// The one place the prompt's answer becomes an action.
 ///
-/// **Only an explicit No discards.** This was a data-loss bug on Linux: rfd
-/// shows message dialogs by running `zenity`, and when zenity is absent --
-/// most KDE installations -- the dialog cannot appear and rfd reports
-/// `Cancel`. The prompt used to treat every answer but Yes as a decision to
-/// discard, so recovered work was deleted without the user ever seeing the
-/// question. Worse, zenity's Yes/No dialog reports a window closed with Esc
-/// or the title-bar button as `No`, which is why the prompt now asks
-/// Yes/No/Cancel: closing it is Cancel, and Cancel keeps.
-pub(crate) fn recovery_choice(answer: &rfd::MessageDialogResult) -> RecoveryChoice {
-    match answer {
-        rfd::MessageDialogResult::Yes => RecoveryChoice::Restore,
-        rfd::MessageDialogResult::No => RecoveryChoice::Discard,
-        // Cancel, a dialog that could not be shown, a closed window, a
-        // custom button no build of ours defines: none is a decision.
+/// **Only an explicit Discard discards.** This was a data-loss bug on Linux
+/// while the prompt was an `rfd` dialog: rfd shows message dialogs by running
+/// `zenity`, and when zenity is absent -- most KDE installations -- the
+/// dialog could not appear and rfd reported `Cancel`. The prompt used to
+/// treat every answer but Yes as a decision to discard, so recovered work was
+/// deleted without the user ever seeing the question. The prompt is drawn in
+/// the window now (release plan M1-01), but the rule stays: Escape, and any
+/// index that is not a button, keep the work.
+pub(crate) fn recovery_choice(chosen: usize) -> RecoveryChoice {
+    match chosen {
+        0 => RecoveryChoice::Restore,
+        1 => RecoveryChoice::Discard,
         _ => RecoveryChoice::Keep,
     }
 }
@@ -3378,18 +3391,16 @@ mod tests {
     }
 
     #[test]
-    fn only_an_explicit_no_discards_recovered_work() {
-        use rfd::MessageDialogResult as Answer;
-        assert_eq!(recovery_choice(&Answer::Yes), RecoveryChoice::Restore);
-        assert_eq!(recovery_choice(&Answer::No), RecoveryChoice::Discard);
-        // What rfd reports when zenity is missing, and when the window is
-        // closed: the two ways the old prompt deleted work unasked.
-        assert_eq!(recovery_choice(&Answer::Cancel), RecoveryChoice::Keep);
-        assert_eq!(recovery_choice(&Answer::Ok), RecoveryChoice::Keep);
-        assert_eq!(
-            recovery_choice(&Answer::Custom("Later".to_owned())),
-            RecoveryChoice::Keep
-        );
+    fn only_an_explicit_discard_discards_recovered_work() {
+        assert_eq!(RECOVERY_BUTTONS[0], "Restore");
+        assert_eq!(recovery_choice(0), RecoveryChoice::Restore);
+        assert_eq!(RECOVERY_BUTTONS[1], "Discard");
+        assert_eq!(recovery_choice(1), RecoveryChoice::Discard);
+        assert_eq!(RECOVERY_BUTTONS[2], "Not Now");
+        assert_eq!(recovery_choice(2), RecoveryChoice::Keep);
+        // Nothing the sheet can send, but not a decision if it ever did.
+        assert_eq!(recovery_choice(3), RecoveryChoice::Keep);
+        assert_eq!(recovery_choice(usize::MAX), RecoveryChoice::Keep);
     }
 
     #[test]
@@ -4114,6 +4125,32 @@ mod tests {
 
         assert!(state.clips.is_empty(), "clipboard history survived");
         assert!(state.journal.pending().is_empty(), "the journal survived");
+    }
+
+    #[test]
+    fn closing_a_tab_without_saving_leaves_nothing_to_recover() {
+        // Don't Save is a decision. The checkpoint used to outlive the tab,
+        // so the next launch offered to "recover" the work the user had just
+        // thrown away -- and a plaintext copy of it sat on disk until then.
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = AppState::new();
+        state.journal = bp_history::Journal::new(dir.path().to_path_buf());
+        state.edit("thrown away".to_owned());
+        state.new_document();
+        state.edit("kept".to_owned());
+        state.checkpoint_all();
+        assert_eq!(state.journal.pending().len(), 2);
+
+        let first = state.workspace.iter().map(Document::id).next().unwrap();
+        state.close(first);
+
+        let left: Vec<String> = state
+            .journal
+            .pending()
+            .into_iter()
+            .map(|(_, c)| c.text)
+            .collect();
+        assert_eq!(left, ["kept"], "only the open tab's work is journalled");
     }
 
     #[test]
@@ -5414,8 +5451,8 @@ a = 2
 
     #[test]
     fn a_plan_measured_against_text_that_has_since_changed_is_refused() {
-        // `rfd` pumps events while its dialog is up, so a callback can edit
-        // the buffer underneath one. `RedactionError::PastEnd` only catches
+        // The consent sheet is answered later, from an event, so something
+        // else can edit the buffer while it is open. `RedactionError::PastEnd` only catches
         // the half of that which runs off the end -- an edit that left the
         // length alone would redact the wrong bytes and report success.
         let mut state = AppState::new();

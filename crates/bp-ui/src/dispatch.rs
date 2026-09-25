@@ -4,6 +4,7 @@
 //! that the action arms and find/replace share.
 
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -12,8 +13,8 @@ use bp_platform::editor::{Consent, InstallRefusal, RegistrationPlan};
 use bp_theme::ThemeId;
 
 use crate::menus::{self, action};
-use crate::state::{AppState, NoteOutcome, PushText, SaveResult, secret_scan_report};
-use crate::{AppWindow, set_os_clipboard};
+use crate::state::{AppState, NoteOutcome, PushText, secret_scan_report};
+use crate::{AppWindow, dialog, set_os_clipboard};
 
 const SHORTCUTS: &str = "\
 Ctrl+N          New
@@ -29,33 +30,6 @@ Ctrl+= / Ctrl+- Zoom in / out
 Ctrl+0          Reset zoom
 Ctrl+D          Duplicate line (--editor-view)
 Alt+Up / Down   Move line up / down (--editor-view)";
-
-/// Static information, shown in a native dialog rather than built as a
-/// bespoke window.
-fn show_info(title: &str, body: &str) {
-    rfd::MessageDialog::new()
-        .set_level(rfd::MessageLevel::Info)
-        .set_title(title)
-        .set_description(body)
-        .set_buttons(rfd::MessageButtons::Ok)
-        .show();
-}
-
-/// Ask about unsaved work before discarding it.
-///
-/// Blocking and native. The three-way answer matters: "Cancel" has to be
-/// distinguishable from "Discard", or the safe choice becomes the
-/// destructive one.
-pub(crate) fn ask_about_unsaved(name: &str) -> rfd::MessageDialogResult {
-    rfd::MessageDialog::new()
-        .set_level(rfd::MessageLevel::Warning)
-        .set_title("Unsaved changes")
-        .set_description(format!(
-            "{name} has unsaved changes.\n\nSave before closing?"
-        ))
-        .set_buttons(rfd::MessageButtons::YesNoCancel)
-        .show()
-}
 
 /// Open a file, starting in a sensible directory.
 pub(crate) fn pick_file(state: &crate::state::AppState) -> Option<PathBuf> {
@@ -125,18 +99,65 @@ fn pick_registry_script(state: &AppState, plan: &RegistrationPlan) -> Option<Pat
 /// and a user cannot keep control of a change they were not shown the
 /// starting point of. The answer becomes the `Consent` value
 /// `bp_platform::editor::install` refuses to act without.
-fn confirm_registration(body: &str) -> Consent {
-    if rfd::MessageDialog::new()
-        .set_level(rfd::MessageLevel::Warning)
-        .set_title("Set as default editor")
-        .set_description(body)
-        .set_buttons(rfd::MessageButtons::OkCancel)
-        .show()
-        == rfd::MessageDialogResult::Ok
-    {
-        Consent::Granted
-    } else {
-        Consent::Withheld
+fn confirm_registration(
+    ui: &AppWindow,
+    body: String,
+    then: impl FnOnce(&AppWindow, Consent) + 'static,
+) {
+    dialog::confirm(ui, "Set as default editor", body, "Register", |ui, go| {
+        then(
+            ui,
+            if go {
+                Consent::Granted
+            } else {
+                Consent::Withheld
+            },
+        );
+    });
+}
+
+/// Act on the answer to [`confirm_registration`], and say what happened.
+fn register(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    offer: &crate::default_editor::Offer,
+    consent: Consent,
+) -> String {
+    match (consent, offer.root.as_deref()) {
+        (Consent::Withheld, _) => InstallRefusal::ConsentWithheld.describe(),
+        // The only call in this application that writes into a directory
+        // the desktop environment reads. It takes the root `bp-platform`
+        // named and the consent the user just gave, and neither has a
+        // default.
+        (Consent::Granted, Some(root)) => {
+            let (status, body) = crate::default_editor::install_outcome(
+                bp_platform::editor::install(&offer.plan, root, consent),
+                &offer.plan.handoff,
+                root,
+            );
+            if let Some(body) = body {
+                dialog::inform(ui, "Set as default editor", &body);
+            }
+            status
+        }
+        // No install root means this platform has no supported install --
+        // Windows. The `.reg` script is what ADR-0012 leaves in its place: a
+        // file the user chose the location of and can read before running.
+        (Consent::Granted, None) => {
+            let chosen = pick_registry_script(&state.borrow(), &offer.plan);
+            let Some(path) = chosen else {
+                return "nothing was written — no location was chosen for the registry script"
+                    .to_owned();
+            };
+            match crate::default_editor::save_registry_script(&offer.plan, &path) {
+                Ok(status) => {
+                    let note = crate::default_editor::handoff_note(&offer.plan.handoff);
+                    dialog::inform(ui, "Set as default editor", &format!("{status}\n\n{note}"));
+                    status
+                }
+                Err(refusal) => refusal,
+            }
+        }
     }
 }
 
@@ -144,18 +165,21 @@ fn confirm_registration(body: &str) -> Consent {
 ///
 /// The listing is not bounded the way `confirm_replace`'s is. A scan that
 /// found four hundred credentials is a document nobody should redact without
-/// reading the list, and a truncated list is one nobody read.
-fn confirm_redaction(plan: &crate::state::RedactionPlan) -> bool {
-    rfd::MessageDialog::new()
-        .set_level(rfd::MessageLevel::Warning)
-        .set_title("Redact")
-        .set_description(plan.consent_body())
-        .set_buttons(rfd::MessageButtons::OkCancel)
-        .show()
-        == rfd::MessageDialogResult::Ok
+/// reading the list, and a truncated list is one nobody read -- the sheet
+/// scrolls instead.
+fn confirm_redaction(
+    ui: &AppWindow,
+    plan: crate::state::RedactionPlan,
+    then: impl FnOnce(&AppWindow, crate::state::RedactionPlan, bool) + 'static,
+) {
+    let body = plan.consent_body();
+    dialog::confirm(ui, "Redact", body, "Redact", move |ui, go| {
+        then(ui, plan, go)
+    });
 }
 
-/// Show what Replace All would do, and ask before doing it.
+/// Show what Replace All would do, and ask before doing it. `then` gets the
+/// plan back only if the user chose to go ahead.
 ///
 /// specs.md section 6 wants the changes visible before they are applied.
 /// Replace All is the one search operation that rewrites the document in
@@ -163,17 +187,18 @@ fn confirm_redaction(plan: &crate::state::RedactionPlan) -> bool {
 /// undo covers a mistake, but only if you notice you made one.
 ///
 /// The listing is bounded: a preview of forty thousand replacements is not a
-/// preview, and a dialog taller than the screen has no buttons on it.
-pub(crate) fn confirm_replace(plan: &bp_search::ReplacePlan) -> bool {
+/// preview.
+pub(crate) fn confirm_replace(
+    ui: &AppWindow,
+    plan: bp_search::ReplacePlan,
+    then: impl FnOnce(&AppWindow, Option<bp_search::ReplacePlan>) + 'static,
+) {
     const SHOWN: usize = 12;
 
-    rfd::MessageDialog::new()
-        .set_level(rfd::MessageLevel::Warning)
-        .set_title("Replace All")
-        .set_description(format!("{}\n\n{}", plan.summary(), plan.preview(SHOWN)))
-        .set_buttons(rfd::MessageButtons::OkCancel)
-        .show()
-        == rfd::MessageDialogResult::Ok
+    let body = format!("{}\n\n{}", plan.summary(), plan.preview(SHOWN));
+    dialog::confirm(ui, "Replace All", body, "Replace All", move |ui, go| {
+        then(ui, go.then_some(plan));
+    });
 }
 
 /// Select a character range in the editor.
@@ -211,7 +236,9 @@ pub fn handle_menu_action(
     id: i32,
 ) -> Option<PushText> {
     use crate::editor_view::apply_editor_command;
-    use crate::{close_with_prompt, refresh, save_with_prompt};
+    use crate::{
+        close_each, close_with_prompt, refresh, refresh_after, save_each, save_with_prompt,
+    };
 
     let mut push = PushText::Yes;
     match id {
@@ -232,7 +259,8 @@ pub fn handle_menu_action(
         action::SAVE => {
             let id = state.borrow().workspace.active_id();
             if let Some(id) = id {
-                save_with_prompt(&mut state.borrow_mut(), id);
+                save_with_prompt(ui, state, id, refresh_after(state));
+                return None;
             }
         }
         action::SAVE_AS => {
@@ -245,15 +273,10 @@ pub fn handle_menu_action(
             }
         }
         action::SAVE_ALL => {
-            let dirty: Vec<DocumentId> =
+            let dirty: VecDeque<DocumentId> =
                 state.borrow().workspace.dirty().map(Document::id).collect();
-            for id in dirty {
-                // Stop at the first refusal rather than firing a
-                // dialog per document at someone who just cancelled.
-                if save_with_prompt(&mut state.borrow_mut(), id) != SaveResult::Saved {
-                    break;
-                }
-            }
+            save_each(ui, state, dirty);
+            return None;
         }
         action::RELOAD => {
             let (dirty, name) = {
@@ -264,8 +287,17 @@ pub fn handle_menu_action(
                     id.map(|i| s.display_name(i)).unwrap_or_default(),
                 )
             };
-            // Reloading discards edits, so it asks like closing does.
-            if dirty && ask_about_unsaved(&name) != rfd::MessageDialogResult::No {
+            // Reloading discards edits, so it asks like closing does -- and
+            // goes ahead only on Don't Save, since Save followed by a reload
+            // is a reload of what was just written.
+            if dirty {
+                let cell = Rc::clone(state);
+                dialog::ask_about_unsaved(ui, &name, move |ui, answer| {
+                    if answer == dialog::Unsaved::Discard {
+                        cell.borrow_mut().reload();
+                        refresh(ui, &mut cell.borrow_mut(), PushText::Yes);
+                    }
+                });
                 return None;
             }
             state.borrow_mut().reload();
@@ -273,7 +305,8 @@ pub fn handle_menu_action(
         action::CLOSE_TAB => {
             let id = state.borrow().workspace.active_id();
             if let Some(id) = id {
-                close_with_prompt(state, id);
+                close_with_prompt(ui, state, id, refresh_after(state));
+                return None;
             }
         }
 
@@ -363,19 +396,16 @@ pub fn handle_menu_action(
             let keep = (id == action::CLOSE_OTHER_TABS)
                 .then(|| state.borrow().tab_context_id())
                 .flatten();
-            let doomed: Vec<DocumentId> = state
+            let doomed: VecDeque<DocumentId> = state
                 .borrow()
                 .workspace
                 .iter()
                 .map(Document::id)
                 .filter(|id| Some(*id) != keep)
                 .collect();
-            // `close_with_prompt` for each, so unsaved work still asks --
-            // closing several tabs is exactly when losing one would hurt.
-            for id in doomed {
-                close_with_prompt(state, id);
-            }
-            refresh(ui, &mut state.borrow_mut(), PushText::Yes);
+            // Asking about each, so unsaved work still asks -- closing
+            // several tabs is exactly when losing one would hurt.
+            close_each(ui, state, doomed);
             return None;
         }
         action::COPY_TAB_PATH => {
@@ -443,18 +473,15 @@ pub fn handle_menu_action(
             // reaching back into the document to quote it would undo the one
             // decision the crate is built around.
             if !findings.is_empty() {
-                show_info("Possible credentials", &secret_scan_report(&findings));
+                dialog::inform(ui, "Possible credentials", &secret_scan_report(&findings));
             }
             push = PushText::No;
         }
 
         action::HASH_DOCUMENT => {
-            // The borrow ends with the statement, before the dialog opens:
-            // `rfd` pumps events, and a re-entrant callback on a live borrow
-            // panics.
             let report = state.borrow_mut().hash_active_document();
             if let Some(report) = report {
-                show_info("Document hash", &report);
+                dialog::inform(ui, "Document hash", &report);
             }
             push = PushText::No;
         }
@@ -496,72 +523,23 @@ pub fn handle_menu_action(
         }
 
         action::SET_DEFAULT_EDITOR => {
-            push = PushText::No;
-            // Nothing is borrowed while a dialog is up: `rfd` pumps events,
-            // and a re-entrant callback on a live `borrow_mut()` panics.
             match crate::default_editor::offer() {
                 Err(reason) => state.borrow_mut().error = Some(reason),
                 Ok(offer) => {
-                    let consent = confirm_registration(&offer.body);
-                    let message = match (consent, offer.root.as_deref()) {
-                        (Consent::Withheld, _) => InstallRefusal::ConsentWithheld.describe(),
-                        // The only call in this application that writes into
-                        // a directory the desktop environment reads. It takes
-                        // the root `bp-platform` named and the consent the
-                        // user just gave, and neither has a default.
-                        (Consent::Granted, Some(root)) => {
-                            let (status, body) = crate::default_editor::install_outcome(
-                                bp_platform::editor::install(&offer.plan, root, consent),
-                                &offer.plan.handoff,
-                                root,
-                            );
-                            if let Some(body) = body {
-                                show_info("Set as default editor", &body);
-                            }
-                            status
-                        }
-                        // No install root means this platform has no
-                        // supported install -- Windows. The `.reg` script is
-                        // what ADR-0012 leaves in its place: a file the user
-                        // chose the location of and can read before running.
-                        (Consent::Granted, None) => {
-                            let chosen = pick_registry_script(&state.borrow(), &offer.plan);
-                            match chosen {
-                                Some(path) => {
-                                    match crate::default_editor::save_registry_script(
-                                        &offer.plan,
-                                        &path,
-                                    ) {
-                                        Ok(status) => {
-                                            let note = crate::default_editor::handoff_note(
-                                                &offer.plan.handoff,
-                                            );
-                                            show_info(
-                                                "Set as default editor",
-                                                &format!("{status}\n\n{note}"),
-                                            );
-                                            status
-                                        }
-                                        Err(refusal) => refusal,
-                                    }
-                                }
-                                None => "nothing was written — no location was chosen for the \
-                                         registry script"
-                                    .to_owned(),
-                            }
-                        }
-                    };
-                    state.borrow_mut().error = Some(message);
+                    let cell = Rc::clone(state);
+                    let body = offer.body.clone();
+                    confirm_registration(ui, body, move |ui, consent| {
+                        let message = register(ui, &cell, &offer, consent);
+                        cell.borrow_mut().error = Some(message);
+                        refresh(ui, &mut cell.borrow_mut(), PushText::No);
+                    });
+                    return None;
                 }
             }
+            push = PushText::No;
         }
 
         action::REDACT_SECRETS => {
-            // Three statements, each ending its borrow before the next, and
-            // the dialog in between opened while nothing is borrowed at all:
-            // `rfd` pumps events, and a re-entrant callback on a live
-            // `borrow_mut()` panics.
-            //
             // The consent is not ceremony. Redaction destroys text the user
             // wrote, in places on the screen they cannot all see at once, and
             // it is offered because a scanner *guessed* the text was a
@@ -570,36 +548,37 @@ pub fn handle_menu_action(
             let plan = state.borrow_mut().plan_redaction();
             push = PushText::No;
             if let Some(plan) = plan {
-                if confirm_redaction(&plan) {
-                    // The document changed, so its text has to be re-pushed
-                    // -- and only then, because re-pushing throws away
+                let cell = Rc::clone(state);
+                confirm_redaction(ui, plan, move |ui, plan, go| {
+                    // The document changed only if it was redacted, so only
+                    // then is its text re-pushed -- re-pushing throws away
                     // `TextInput`'s caret.
-                    if state.borrow_mut().apply_redaction(&plan) {
-                        push = PushText::Yes;
-                    }
-                } else {
-                    state.borrow_mut().decline_redaction(&plan);
-                }
+                    let push = if go && cell.borrow_mut().apply_redaction(&plan) {
+                        PushText::Yes
+                    } else {
+                        if !go {
+                            cell.borrow_mut().decline_redaction(&plan);
+                        }
+                        PushText::No
+                    };
+                    refresh(ui, &mut cell.borrow_mut(), push);
+                });
+                return None;
             }
         }
 
         action::SECURITY_HISTORY => {
-            // Same shape as Inspect Metadata: the borrow ends with the
-            // statement, before the dialog opens. `rfd` pumps events, and a
-            // re-entrant callback on a live `borrow_mut()` panics.
             let report = state.borrow_mut().security_history();
             if let Some(report) = report {
-                show_info("Security History", &report);
+                dialog::inform(ui, "Security History", &report);
             }
             push = PushText::No;
         }
 
         action::INSPECT_METADATA => {
-            // Same shape as Hash Document: the borrow ends with the
-            // statement, before the dialog opens.
             let report = state.borrow_mut().inspect_metadata();
             if let Some(report) = report {
-                show_info("Metadata", &report);
+                dialog::inform(ui, "Metadata", &report);
             }
             push = PushText::No;
         }
@@ -647,8 +626,9 @@ pub fn handle_menu_action(
         action::ENCODING_UTF8 => state.borrow_mut().set_encoding(Encoding::Utf8),
         action::ENCODING_UTF8_BOM => state.borrow_mut().set_encoding(Encoding::Utf8Bom),
 
-        action::SHORTCUTS => show_info("Keyboard shortcuts", SHORTCUTS),
-        action::ABOUT => show_info(
+        action::SHORTCUTS => dialog::inform(ui, "Keyboard shortcuts", SHORTCUTS),
+        action::ABOUT => dialog::inform(
+            ui,
             "About BachelorPad+",
             &format!(
                 "BachelorPad+ {}\n\nNotepad when you want it. More when you need it.\n\n\
@@ -740,7 +720,7 @@ pub fn handle_menu_action(
         id if (action::NOTE_TITLE..=action::NOTE_OUTLINE).contains(&id) => {
             let outcome = state.borrow().note_action(id);
             match outcome {
-                NoteOutcome::Show { title, body } => show_info(&title, &body),
+                NoteOutcome::Show { title, body } => dialog::inform(ui, &title, &body),
                 NoteOutcome::SaveAs => {
                     let target = state.borrow().workspace.active_id();
                     if let Some(doc_id) = target {

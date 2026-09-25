@@ -33,6 +33,7 @@
 #![deny(unsafe_code)]
 
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -64,6 +65,7 @@ mod menus;
 
 mod audit;
 mod default_editor;
+mod dialog;
 mod dispatch;
 mod editor_view;
 mod passphrase;
@@ -397,64 +399,12 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
     }
     initial.start_up(options.startup_notice.clone(), &options.files);
 
-    // Offer to recover anything a previous session left unsaved, before the
-    // window appears — so nobody starts typing over work they have not been
-    // told about.
+    // What a previous session left unsaved is claimed now, before anything
+    // else can journal, and offered once the window is up -- see
+    // `offer_recovery`. Claimed here, so of two windows opened at once only
+    // one asks.
     initial.journal.clean_temporaries();
     let pending = initial.journal.pending();
-    if !pending.is_empty() {
-        let names: Vec<&str> = pending
-            .iter()
-            .map(|(_, c)| c.name.as_str())
-            .take(5)
-            .collect();
-        // Yes/No/Cancel with standard labels rather than custom ones: on
-        // Windows, without comctl32 v6, rfd falls back to `MessageBoxW`, which
-        // cannot show custom labels; and on Linux, zenity reports a closed
-        // Yes/No dialog as No. With a Cancel button, closing it is Cancel.
-        let count = pending.len();
-        let answer = rfd::MessageDialog::new()
-            .set_level(rfd::MessageLevel::Warning)
-            .set_title("Unsaved work recovered")
-            .set_description(format!(
-                "BachelorPad+ closed with {count} unsaved document(s):\n\n{}\n\n\
-                 Yes: restore them now.\n\
-                 No: discard them for good.\n\
-                 Cancel: keep them and ask again next time.",
-                names.join("\n")
-            ))
-            .set_buttons(rfd::MessageButtons::YesNoCancel)
-            .show();
-
-        // Each journal writes into its own instance folder and holds a lock
-        // on it while it lives, so what `pending` lists is work from windows
-        // that have ended. `pending` also claims it, so of two windows
-        // opened at once only one asks.
-        match state::recovery_choice(&answer) {
-            // Restored documents are journalled again under this session's
-            // ids first, and only then are the ended sessions' copies
-            // removed, so there is no moment with no copy on disk.
-            state::RecoveryChoice::Restore => {
-                initial.restore(pending);
-                initial.checkpoint_all();
-                let _ = initial.journal.discard_recovered();
-            }
-            // An explicit No is a decision; honour it rather than asking
-            // again every launch.
-            state::RecoveryChoice::Discard => {
-                let _ = initial.journal.discard_all();
-            }
-            // Beside whatever startup already had to say, never over it:
-            // `start_up` composed those notices a moment ago.
-            state::RecoveryChoice::Keep => {
-                initial.journal.keep_for_later();
-                initial.add_notice(format!(
-                    "{count} unsaved document(s) from last time were kept, not restored; \
-                     you will be asked again at the next launch"
-                ));
-            }
-        }
-    }
     // Work another window is still journalling is neither offered nor
     // touched here -- it is that window's. Said, so nobody wonders where it
     // went.
@@ -525,11 +475,18 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
         }
     });
 
-    wire!(on_save_document, |s| {
-        if let Some(id) = s.workspace.active_id() {
-            save_with_prompt(&mut s, id);
-        }
-    });
+    {
+        let cell = Rc::clone(&state);
+        let weak = ui.as_weak();
+        ui.on_save_document(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let id = cell.borrow().workspace.active_id();
+            match id {
+                Some(id) => save_with_prompt(&ui, &cell, id, refresh_after(&cell)),
+                None => refresh(&ui, &mut cell.borrow_mut(), state::PushText::Yes),
+            }
+        });
+    }
 
     wire!(on_save_as_document, |s| {
         if let Some(id) = s.workspace.active_id()
@@ -586,11 +543,10 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
                 .iter()
                 .map(Document::id)
                 .find(|id| i32::try_from(id.get()).unwrap_or(i32::MAX) == raw);
-            if let Some(id) = id {
-                close_with_prompt(&cell, id);
-            }
-            if let Some(ui) = weak.upgrade() {
-                refresh(&ui, &mut cell.borrow_mut(), state::PushText::Yes);
+            let Some(ui) = weak.upgrade() else { return };
+            match id {
+                Some(id) => close_with_prompt(&ui, &cell, id, refresh_after(&cell)),
+                None => refresh(&ui, &mut cell.borrow_mut(), state::PushText::Yes),
             }
         });
     }
@@ -599,12 +555,11 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
         let cell = Rc::clone(&state);
         let weak = ui.as_weak();
         ui.on_close_active_tab(move || {
+            let Some(ui) = weak.upgrade() else { return };
             let id = cell.borrow().workspace.active_id();
-            if let Some(id) = id {
-                close_with_prompt(&cell, id);
-            }
-            if let Some(ui) = weak.upgrade() {
-                refresh(&ui, &mut cell.borrow_mut(), state::PushText::Yes);
+            match id {
+                Some(id) => close_with_prompt(&ui, &cell, id, refresh_after(&cell)),
+                None => refresh(&ui, &mut cell.borrow_mut(), state::PushText::Yes),
             }
         });
     }
@@ -626,28 +581,40 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
 
     // Closing the window must not be a quieter way to lose the same work
     // that closing a tab prompts about.
+    //
+    // The answer to a close request has to be given now, and the questions
+    // are answered later, so a window with unsaved work refuses the request
+    // and asks; `settle_then_quit` closes it once every document is settled.
     {
         let cell = Rc::clone(&state);
+        let weak = ui.as_weak();
         ui.window().on_close_requested(move || {
-            let dirty: Vec<DocumentId> =
-                cell.borrow().workspace.dirty().map(Document::id).collect();
-
-            for id in dirty {
-                let name = cell.borrow().display_name(id);
-                match dispatch::ask_about_unsaved(&name) {
-                    rfd::MessageDialogResult::Yes => {
-                        let mut s = cell.borrow_mut();
-                        if save_with_prompt(&mut s, id) != state::SaveResult::Saved {
-                            // Save failed or was abandoned. Quitting now would
-                            // discard exactly what the user asked to keep.
-                            return slint::CloseRequestResponse::KeepWindowShown;
-                        }
-                    }
-                    rfd::MessageDialogResult::No => {}
-                    _ => return slint::CloseRequestResponse::KeepWindowShown,
-                }
+            // A question is already open. It is answered first, whatever it
+            // is about -- quitting past the recovery prompt would leave the
+            // work it is asking about neither restored nor kept on purpose.
+            if dialog::is_open() {
+                return slint::CloseRequestResponse::KeepWindowShown;
             }
-            slint::CloseRequestResponse::HideWindow
+            let dirty: VecDeque<DocumentId> =
+                cell.borrow().workspace.dirty().map(Document::id).collect();
+            if dirty.is_empty() {
+                return slint::CloseRequestResponse::HideWindow;
+            }
+            if let Some(ui) = weak.upgrade() {
+                settle_then_quit(&ui, &cell, dirty, Vec::new());
+            }
+            slint::CloseRequestResponse::KeepWindowShown
+        });
+    }
+
+    // Every in-app question reports here; `dialog` runs what was waiting on
+    // the answer.
+    {
+        let weak = ui.as_weak();
+        ui.on_dialog_answered(move |chosen| {
+            if let Some(ui) = weak.upgrade() {
+                dialog::answered(&ui, chosen);
+            }
         });
     }
 
@@ -894,17 +861,29 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
                 Ok(plan) if plan.is_empty() => {
                     cell.borrow_mut().find_status = "no matches".to_owned();
                 }
-                Ok(plan) if !dispatch::confirm_replace(&plan) => {
-                    cell.borrow_mut().find_status = "cancelled".to_owned();
-                }
                 Ok(plan) => {
-                    let n = plan.count();
-                    let mut s = cell.borrow_mut();
-                    // An ordinary edit, so it is undoable and nothing reaches
-                    // disk until the user saves.
-                    s.edit(plan.apply());
-                    s.matches.clear();
-                    s.find_status = format!("replaced {n}");
+                    // The rest happens once the preview is answered.
+                    let cell = Rc::clone(&cell);
+                    dispatch::confirm_replace(&ui, plan, move |ui, plan| {
+                        {
+                            let mut s = cell.borrow_mut();
+                            match plan {
+                                None => s.find_status = "cancelled".to_owned(),
+                                Some(plan) => {
+                                    let n = plan.count();
+                                    // An ordinary edit, so it is undoable and
+                                    // nothing reaches disk until the user
+                                    // saves.
+                                    s.edit(plan.apply());
+                                    s.matches.clear();
+                                    s.find_status = format!("replaced {n}");
+                                }
+                            }
+                        }
+                        ui.set_find_status(cell.borrow().find_status.as_str().into());
+                        refresh(ui, &mut cell.borrow_mut(), state::PushText::Yes);
+                    });
+                    return;
                 }
             }
             ui.set_find_status(cell.borrow().find_status.as_str().into());
@@ -1150,9 +1129,93 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
 
     set_static_menus(&ui);
     refresh(&ui, &mut state.borrow_mut(), state::PushText::Yes);
-    ui.run()?;
+    // `run` spelled out, because the recovery question needs the window
+    // shown before it can take the keyboard focus.
+    ui.show()?;
+    if !pending.is_empty() {
+        offer_recovery(&ui, &state, pending);
+    }
+    slint::run_event_loop()?;
+    ui.hide()?;
     drop(disk_timer);
     Ok(())
+}
+
+/// Offer to recover what a previous session left unsaved.
+///
+/// Asked as the window opens, over it, so nobody starts typing over work
+/// they have not been told about: the sheet holds the keyboard until it is
+/// answered. Each button says what it does, which `rfd`'s Yes/No/Cancel
+/// could not on Windows without comctl32 v6, and Escape keeps the work --
+/// only an explicit Discard deletes anything.
+fn offer_recovery(
+    ui: &AppWindow,
+    cell: &Rc<RefCell<state::AppState>>,
+    pending: Vec<(u64, bp_history::Checkpoint)>,
+) {
+    let count = pending.len();
+    let mut names: Vec<&str> = pending
+        .iter()
+        .map(|(_, c)| c.name.as_str())
+        .take(5)
+        .collect();
+    let more = format!("and {} more", count.saturating_sub(5));
+    if count > 5 {
+        names.push(&more);
+    }
+    let body = format!(
+        "BachelorPad+ closed with {count} unsaved document(s):\n\n{}\n\n\
+         Restore opens them now. Discard deletes them for good. \
+         Not Now keeps them and asks again next time.",
+        names.join("\n")
+    );
+
+    let cell = Rc::clone(cell);
+    dialog::ask(
+        ui,
+        dialog::Dialog {
+            title: "Unsaved work recovered".to_owned(),
+            body,
+            buttons: state::RECOVERY_BUTTONS
+                .iter()
+                .map(|&b| b.to_owned())
+                .collect(),
+            default: 0,
+            cancel: 2,
+        },
+        move |ui, chosen| {
+            {
+                let mut s = cell.borrow_mut();
+                match state::recovery_choice(chosen) {
+                    // Restored documents are journalled again under this
+                    // session's ids first, and only then are the ended
+                    // sessions' copies removed, so there is no moment with no
+                    // copy on disk.
+                    state::RecoveryChoice::Restore => {
+                        s.restore(pending);
+                        s.checkpoint_all();
+                        let _ = s.journal.discard_recovered();
+                    }
+                    // An explicit Discard is a decision; honour it rather
+                    // than asking again every launch. `discard_recovered`
+                    // rather than `discard_all`: the question was about the
+                    // ended sessions' work, and this one's own journal is
+                    // none of its business.
+                    state::RecoveryChoice::Discard => {
+                        let _ = s.journal.discard_recovered();
+                    }
+                    state::RecoveryChoice::Keep => {
+                        s.journal.keep_for_later();
+                        s.add_notice(format!(
+                            "{count} unsaved document(s) from last time were kept, not \
+                             restored; you will be asked again at the next launch"
+                        ));
+                    }
+                }
+            }
+            refresh(ui, &mut cell.borrow_mut(), state::PushText::Yes);
+        },
+    );
 }
 
 /// Measure the cost of one keystroke through the application's state path,
@@ -1250,67 +1313,201 @@ pub fn latency_probe() {
     println!("the same keystroke under --editor-view, which writes the rope directly.");
 }
 
+/// A continuation that refreshes the window, whatever the outcome it is
+/// handed. What most callers of the flows below want once they are done.
+fn refresh_after<T>(cell: &Rc<RefCell<state::AppState>>) -> impl FnOnce(&AppWindow, T) + 'static {
+    let cell = Rc::clone(cell);
+    move |ui, _| refresh(ui, &mut cell.borrow_mut(), state::PushText::Yes)
+}
+
 /// Save, escalating to Save As when the document has no path yet, and asking
-/// first if the file changed underneath us.
+/// first if the file changed underneath us. `then` gets the outcome once
+/// there is one -- straight away, unless there was something to ask.
 ///
 /// Save on a never-saved document must not silently do nothing, and Save on a
 /// file somebody else edited must not silently discard their work.
-fn save_with_prompt(state: &mut state::AppState, id: DocumentId) -> state::SaveResult {
-    if state.would_overwrite_external_change(id) {
-        let name = state.display_name(id);
-        let answer = rfd::MessageDialog::new()
-            .set_level(rfd::MessageLevel::Warning)
-            .set_title("Changed on disk")
-            .set_description(format!(
-                "{name} has changed on disk since you opened it.\n\n\
-                 Saving will overwrite those changes. Save anyway?"
-            ))
-            .set_buttons(rfd::MessageButtons::YesNo)
-            .show();
-        if answer != rfd::MessageDialogResult::Yes {
-            // Not a failure -- a refusal. Nothing was written either way, so
-            // the caller must not treat it as saved.
-            return state::SaveResult::NeedsPath;
-        }
+fn save_with_prompt(
+    ui: &AppWindow,
+    cell: &Rc<RefCell<state::AppState>>,
+    id: DocumentId,
+    then: impl FnOnce(&AppWindow, state::SaveResult) + 'static,
+) {
+    let changed = cell.borrow().would_overwrite_external_change(id);
+    if !changed {
+        let result = save_or_pick(&mut cell.borrow_mut(), id);
+        then(ui, result);
+        return;
     }
 
+    let name = cell.borrow().display_name(id);
+    let cell = Rc::clone(cell);
+    dialog::ask(
+        ui,
+        dialog::Dialog {
+            title: "Changed on disk".to_owned(),
+            body: format!(
+                "{name} has changed on disk since you opened it.\n\n\
+                 Saving will overwrite those changes."
+            ),
+            buttons: vec!["Save Anyway".to_owned(), "Cancel".to_owned()],
+            // Enter cancels here, unlike the other questions: the work
+            // Save Anyway destroys is somebody else's, and they are not the
+            // one pressing Enter.
+            default: 1,
+            cancel: 1,
+        },
+        move |ui, chosen| {
+            let result = if chosen == 0 {
+                save_or_pick(&mut cell.borrow_mut(), id)
+            } else {
+                // Not a failure -- a refusal. Nothing was written either
+                // way, so the caller must not treat it as saved.
+                state::SaveResult::NeedsPath
+            };
+            then(ui, result);
+        },
+    );
+}
+
+/// Save to the document's own path, or ask for one if it has none.
+fn save_or_pick(state: &mut state::AppState, id: DocumentId) -> state::SaveResult {
     match state.save_document(id, None) {
-        state::SaveResult::NeedsPath => {
-            match dispatch::pick_save_path(state, id) {
-                Some(path) => state.save_document(id, Some(path)),
-                // The user dismissed the dialog. Nothing was written, and the
-                // caller must not treat that as saved.
-                None => state::SaveResult::NeedsPath,
-            }
-        }
+        state::SaveResult::NeedsPath => match dispatch::pick_save_path(state, id) {
+            Some(path) => state.save_document(id, Some(path)),
+            // The user dismissed the dialog. Nothing was written, and the
+            // caller must not treat that as saved.
+            None => state::SaveResult::NeedsPath,
+        },
         other => other,
     }
 }
 
-/// Close a tab, asking first if it holds unsaved work.
-///
-/// Borrows are scoped tightly around each step: the dialogs block, and
-/// holding a `RefCell` borrow across one would panic the moment any other
-/// callback ran.
-fn close_with_prompt(cell: &Rc<RefCell<state::AppState>>, id: DocumentId) {
+/// Close a tab, asking first if it holds unsaved work. `then` gets whether
+/// the tab went: false after Cancel, or a save that did not happen, which
+/// is what a caller closing several tabs stops at.
+fn close_with_prompt(
+    ui: &AppWindow,
+    cell: &Rc<RefCell<state::AppState>>,
+    id: DocumentId,
+    then: impl FnOnce(&AppWindow, bool) + 'static,
+) {
     let (dirty, name) = {
         let s = cell.borrow();
         (s.is_dirty(id), s.display_name(id))
     };
-
-    if dirty {
-        match dispatch::ask_about_unsaved(&name) {
-            rfd::MessageDialogResult::Yes => {
-                let mut s = cell.borrow_mut();
-                if save_with_prompt(&mut s, id) != state::SaveResult::Saved {
-                    // Keep the tab open rather than discard unsaved work.
-                    return;
-                }
-            }
-            rfd::MessageDialogResult::No => {}
-            // Cancel, or the dialog was dismissed. Do nothing.
-            _ => return,
-        }
+    if !dirty {
+        cell.borrow_mut().close(id);
+        then(ui, true);
+        return;
     }
-    cell.borrow_mut().close(id);
+
+    let cell = Rc::clone(cell);
+    dialog::ask_about_unsaved(ui, &name, move |ui, answer| match answer {
+        dialog::Unsaved::Save => {
+            let after = Rc::clone(&cell);
+            save_with_prompt(ui, &cell, id, move |ui, result| {
+                // Keep the tab open rather than discard unsaved work.
+                let saved = result == state::SaveResult::Saved;
+                if saved {
+                    after.borrow_mut().close(id);
+                }
+                then(ui, saved);
+            });
+        }
+        dialog::Unsaved::Discard => {
+            cell.borrow_mut().close(id);
+            then(ui, true);
+        }
+        dialog::Unsaved::Cancel => then(ui, false),
+    });
+}
+
+/// Close each of `ids` in turn, asking about each one's unsaved work, and
+/// refresh once done. Cancel stops the lot: the user cancelled closing, not
+/// closing that one tab.
+pub(crate) fn close_each(
+    ui: &AppWindow,
+    cell: &Rc<RefCell<state::AppState>>,
+    mut ids: VecDeque<DocumentId>,
+) {
+    let Some(id) = ids.pop_front() else {
+        refresh(ui, &mut cell.borrow_mut(), state::PushText::Yes);
+        return;
+    };
+    let next = Rc::clone(cell);
+    close_with_prompt(ui, cell, id, move |ui, closed| {
+        if closed {
+            close_each(ui, &next, ids);
+        } else {
+            refresh(ui, &mut next.borrow_mut(), state::PushText::Yes);
+        }
+    });
+}
+
+/// Save each of `ids` in turn and refresh once done, stopping at the first
+/// that is not saved rather than asking again of someone who just
+/// cancelled.
+pub(crate) fn save_each(
+    ui: &AppWindow,
+    cell: &Rc<RefCell<state::AppState>>,
+    mut ids: VecDeque<DocumentId>,
+) {
+    let Some(id) = ids.pop_front() else {
+        refresh(ui, &mut cell.borrow_mut(), state::PushText::Yes);
+        return;
+    };
+    let next = Rc::clone(cell);
+    save_with_prompt(ui, cell, id, move |ui, result| {
+        if result == state::SaveResult::Saved {
+            save_each(ui, &next, ids);
+        } else {
+            refresh(ui, &mut next.borrow_mut(), state::PushText::Yes);
+        }
+    });
+}
+
+/// Settle every unsaved document in `ids`, then close the window.
+///
+/// Documents the user chose not to save are closed only once the window is
+/// going: closing each as it was answered would, after a later Cancel, leave
+/// the user in a window with tabs missing that they never asked to close.
+/// Closing them is what discards their recovery checkpoints, so Don't Save
+/// is not offered back as "recovered" work at the next launch.
+fn settle_then_quit(
+    ui: &AppWindow,
+    cell: &Rc<RefCell<state::AppState>>,
+    mut ids: VecDeque<DocumentId>,
+    mut discarded: Vec<DocumentId>,
+) {
+    let Some(id) = ids.pop_front() else {
+        {
+            let mut s = cell.borrow_mut();
+            for id in discarded {
+                s.close(id);
+            }
+        }
+        let _ = ui.hide();
+        return;
+    };
+    let name = cell.borrow().display_name(id);
+    let cell = Rc::clone(cell);
+    dialog::ask_about_unsaved(ui, &name, move |ui, answer| match answer {
+        dialog::Unsaved::Save => {
+            let next = Rc::clone(&cell);
+            save_with_prompt(ui, &cell, id, move |ui, result| {
+                if result == state::SaveResult::Saved {
+                    settle_then_quit(ui, &next, ids, discarded);
+                } else {
+                    // Quitting now would discard exactly what the user asked
+                    // to keep.
+                    refresh(ui, &mut next.borrow_mut(), state::PushText::Yes);
+                }
+            });
+        }
+        dialog::Unsaved::Discard => {
+            discarded.push(id);
+            settle_then_quit(ui, &cell, ids, discarded);
+        }
+        dialog::Unsaved::Cancel => refresh(ui, &mut cell.borrow_mut(), state::PushText::Yes),
+    });
 }
