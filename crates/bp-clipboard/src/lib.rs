@@ -45,6 +45,58 @@ pub fn keep_out_of_os_history(policy: &Policy) -> bool {
     policy.network == Network::Denied || policy.clipboard == Clipboard::Disabled
 }
 
+/// How long a private copy stays on the operating system's clipboard.
+///
+/// Long enough to paste it somewhere, short enough that it is not still
+/// sitting there when the user has moved on -- the window password managers
+/// use. Only for copies [`keep_out_of_os_history`] marks private: a
+/// Private or stricter profile says what is copied from it should not
+/// linger, and the clipboard is the longest-lived place it can. Standard
+/// copies stay until something replaces them, as every other program's do.
+/// The timer is the shell's; see [`PendingClear`] for what it checks first.
+pub const PRIVATE_CLEAR_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// A private copy waiting to be cleared off the operating system's clipboard.
+///
+/// Holds a fingerprint of the text, not the text: the point of the exercise
+/// is that the words stop lingering, and a copy kept here to compare against
+/// would be one more place they linger.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingClear {
+    fingerprint: u64,
+}
+
+impl PendingClear {
+    /// Remember that `text` was just put on the clipboard privately.
+    #[must_use]
+    pub fn new(text: &str) -> Self {
+        Self {
+            fingerprint: fingerprint(text),
+        }
+    }
+
+    /// Whether the clipboard, now holding `current`, should be cleared.
+    ///
+    /// Only if it still holds what was copied. Anything the user has copied
+    /// since -- from this editor or any other program -- is theirs, and
+    /// wiping it a minute later would be losing their work, not protecting
+    /// it. A clipboard that cannot be read, or holds no text, is left alone
+    /// for the same reason.
+    #[must_use]
+    pub fn should_clear(&self, current: Option<&str>) -> bool {
+        current.is_some_and(|text| fingerprint(text) == self.fingerprint)
+    }
+}
+
+/// A 64-bit hash of `text`, stable for the life of the process -- which is
+/// as long as a [`PendingClear`] lives.
+fn fingerprint(text: &str) -> u64 {
+    use std::hash::{Hash as _, Hasher as _};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    hasher.finish()
+}
+
 /// Crate identity used by workspace smoke tests and diagnostics.
 pub const CRATE_NAME: &str = "bp-clipboard";
 
@@ -564,6 +616,18 @@ impl History {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_private_copy_is_cleared_only_while_the_clipboard_still_holds_it() {
+        use super::PendingClear;
+        let pending = PendingClear::new("hunter2");
+        assert!(pending.should_clear(Some("hunter2")));
+        // Copied over since, here or anywhere: theirs, not ours to wipe.
+        assert!(!pending.should_clear(Some("something else")));
+        assert!(!pending.should_clear(Some("")));
+        // Unreadable, or holding an image: left alone.
+        assert!(!pending.should_clear(None));
+    }
+
     #[test]
     fn another_programs_copy_is_not_recorded_unless_asked_for() {
         let mut history = History::new();
