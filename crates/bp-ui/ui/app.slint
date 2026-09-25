@@ -23,6 +23,14 @@
 // global, which Rust fills from `bp-theme`. ADR-0009 requires themes to be
 // data, and a hex code here would be a theme a user could never override.
 
+
+// The one monospace font on every platform (ADR-0032). Slint resolves a
+// `font-family` literally -- no fontconfig aliasing, no generic `monospace`
+// -- so the "Consolas" this used to name drew a proportional font on Linux,
+// and the custom editor view, which advances its caret one fixed width per
+// column, drew the caret off the end of the text. Importing it here makes it
+// available to every component this file pulls in.
+import "../fonts/DejaVuSansMono.ttf";
 import { Palette as SystemPalette } from "std-widgets.slint";
 import { MenuLabel, MenuPopup } from "menu.slint";
 import { EditorSurface } from "editor_surface.slint";
@@ -609,7 +617,7 @@ export component AppWindow inherits Window {
                         if root.show-gutter: Text {
                             text: root.gutter;
                             color: Palette.ink-dim;
-                            font-family: "Consolas";
+                            font-family: "DejaVu Sans Mono";
                             font-size: root.font-size;
                             horizontal-alignment: right;
                             // Widened with the text, or the line numbers clip
@@ -625,7 +633,7 @@ export component AppWindow inherits Window {
                             page-height: flick.height - 20px;
                             color: Palette.ink;
                             selection-background-color: Palette.accent;
-                            font-family: "Consolas";
+                            font-family: "DejaVu Sans Mono";
                             font-size: root.font-size;
                             single-line: false;
                             wrap: root.wrap-text ? word-wrap : no-wrap;

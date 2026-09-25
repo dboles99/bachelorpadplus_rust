@@ -61,7 +61,7 @@ export component EditorSurface inherits Rectangle {
     // `preferred-width` is still zero.
     probe := Text {
         text: "MMMMMMMMMMMMMMMMMMMM";
-        font-family: "Consolas";
+        font-family: "DejaVu Sans Mono";
         font-size: root.font-size;
         opacity: 0;
     }
@@ -152,7 +152,7 @@ export component EditorSurface inherits Rectangle {
         height: root.line-height;
         text: row.text;
         color: Palette.ink;
-        font-family: "Consolas";
+        font-family: "DejaVu Sans Mono";
         font-size: root.font-size;
         vertical-alignment: center;
     }
@@ -165,7 +165,7 @@ export component EditorSurface inherits Rectangle {
             height: root.line-height;
             text: row.number;
             color: Palette.ink-dim;
-            font-family: "Consolas";
+            font-family: "DejaVu Sans Mono";
             font-size: root.font-size;
             horizontal-alignment: right;
             vertical-alignment: center;
