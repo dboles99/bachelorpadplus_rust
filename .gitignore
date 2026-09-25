@@ -37,6 +37,13 @@ artifacts/test-evidence/*.json
 !/PROJECT_MEMORY.md
 !/ROADMAP.md
 !/specs.md
+# Release documents that belong at the root, where users and packagers look
+# for them. Without these lines a CHANGELOG or SECURITY.md would be ignored
+# silently -- `git add` would do nothing and say nothing.
+!/CHANGELOG.md
+!/SECURITY.md
+!/CONTRIBUTING.md
+!/THIRD-PARTY-NOTICES.txt
 
 # Agent worktrees. A subagent working in isolation gets a git worktree here,
 # which is a repository inside this one -- `git add -A` sweeps it into a
