@@ -56,14 +56,15 @@ cargo run --release -- --editor-view   # with the custom editor view (ADR-0018)
 ./scripts/Measure-Startup.ps1  # startup and idle memory vs specs.md §22
 ```
 
-## Current state (2026-08-20)
+## Current state (2026-09-25)
 
-**24 crates, 1,649 tests, green on Windows and Linux.** The app opens, edits and
+**24 crates, 1,729 tests, green on Linux** (the sixth session's changes have
+not yet been through the Windows leg). The app opens, edits and
 saves atomically, and does rather more than that:
 
 | Area | What works |
 | --- | --- |
-| Editing | Tabs, four themes plus Follow System, zoom, indentation (tabs or soft tabs, 2/4/8), honest save state, atomic save, undo/cut/copy/paste, sort / deduplicate / reverse / trim lines, duplicate and move lines, go to line |
+| Editing | Tabs, four themes plus Follow System, zoom, indentation (tabs or soft tabs, 2/4/8), honest save state, atomic save, undo/cut/copy/paste (and Shift+Insert / Ctrl+Insert / Shift+Delete), Insert toggles overwrite (`OVR` in the status bar), Page Up/Down and a view that follows the caret, sort / deduplicate / reverse / trim lines, duplicate and move lines, go to line |
 | Storage | A rope buffer holds every document; whole-document operations are one undo step |
 | Safety | Unsaved-changes prompts, external-change detection, crash recovery journal — encrypted and recovered at unlock for encrypted documents ([ADR-0022](docs/decisions/ADR-0022.md)) |
 | Files | Open/Save/Save As/Save All/Save a Copy/Reload, recent files, tab context menu, command-line file opening. UTF-8, UTF-8 with BOM and **UTF-16 LE/BE** all load and save; a truncated or malformed UTF-16 file is refused by name rather than repaired with replacement characters |
@@ -88,15 +89,28 @@ environment (`BACHELORPAD_*`), a TOML file
 defaults. Broken config warns and falls back; it never stops the editor
 starting.
 
+Only settings roam. The recent list and the security history are kept in
+`%LOCALAPPDATA%\bachelorpad\state` (`$XDG_STATE_HOME/bachelorpad`), and the
+recovery journal in `%LOCALAPPDATA%\bachelorpad\data\recovery`
+(`$XDG_DATA_HOME/bachelorpad/recovery`). A build that kept them beside
+`config.toml` has them moved on first launch; a move that fails leaves them
+where they are, in use, and says so ([ADR-0029](docs/decisions/ADR-0029.md)).
+
 ### Known gaps
 
-- **Nobody has typed into the custom editor view.** `--editor-view` gives
-  Ln/Col, our own undo, and a view that draws only the lines on screen. Its
-  rules are covered by 147 tests in `bp-editor`; the widget has been shown to
-  render a frame with a real file open and exit cleanly, and nothing beyond
-  that. Whether the caret lands under the pointer is not a thing a test can
-  say. Duplicate Line and Move Line Up/Down are enabled only there, so they
-  inherit the answer. See [ADR-0018](docs/decisions/ADR-0018.md).
+- **The keys are tested in a window now, and a person still has not typed
+  into the custom editor view.** `bp-ui`'s window tests build the real
+  window on a headless software renderer and send it real key events: that
+  is how Page Up and Page Down were found to do nothing in the default view
+  (Slint pages by a `page-height` nobody set), and the arrows to move the
+  caret out of sight (nothing scrolled the view to follow it). Both are
+  fixed and pinned. `--editor-view` was driven end to end on a virtual X
+  display -- navigation, overwrite and save all land correctly -- and that
+  run showed **its caret drawn to the right of the text on Linux**: the
+  surface asks for `"Consolas"`, Slint resolves font names literally rather
+  than through fontconfig, and the proportional fallback breaks the
+  one-advance-per-column arithmetic. Windows has Consolas and is unaffected.
+  See [ADR-0018](docs/decisions/ADR-0018.md).
 - **Input-method composition does not work under `--editor-view`, and cannot
   on this Slint.** `FocusScope` rejects `UpdateComposition` and
   `CommitComposition` in both its handlers and exposes no callback for either;
@@ -124,8 +138,8 @@ starting.
   the file, search against the buffer, journal recovery, the notebook through
   the file layer, the audit log, redaction, signing, and the filename grammar
   against the platform's own rules. Between them they have found seven
-  defects that no unit test did. **Five are fixed.** The most serious is the
-  newest: `bp-naming` asked whether a *whole* sanitised title was a Windows
+  defects that no unit test did. **Six are fixed, and the seventh is a
+  decision rather than a defect.** The most serious was `bp-naming` asked whether a *whole* sanitised title was a Windows
   device name, while Win32 asks only about the stem before the first dot --
   so `con.txt`, `aux.log` and `NUL.dat` passed untouched, and on Windows
   saving to one of those writes **the device**, reports success, and the
@@ -145,16 +159,19 @@ starting.
   so `con.txt` stays an ordinary file on Linux and both CI legs execute both
   rule sets.
 
-  **Three tests remain `#[ignore]`d and each names a real defect**:
-  `bp-search` counts only the newline while `bp-buffer`'s rope also breaks on
-  a bare carriage return and four other separators, so find-in-files can
-  scroll to the wrong line in any file carrying one -- one line definition
-  has to win, and that is a decision rather than a patch; `bp-notebook`
-  cannot tell a cell that said nothing about its language from one that named
-  a language it cannot map, and runs the second through the kernel's
-  interpreter; and `bp-files` never applies `\\?\`, so a filename at
-  `SemanticName::to_filename`'s own documented maximum is unwritable in a
-  deep enough directory, blamed on a read-only file.
+  The sixth session fixed the two that were left. `bp-notebook` could not
+  tell a cell that said nothing about its language from one that named a
+  language it cannot map, and ran the second through the kernel's
+  interpreter; it now keeps such a cell `Raw`, with a warning, as ADR-0025
+  always said. And `bp-files` never applied `\\?\`, so a filename at
+  `SemanticName::to_filename`'s own maximum was unwritable in a deep enough
+  directory and blamed on a read-only file -- `std::fs` lengthens long paths
+  by itself, but `tempfile`'s rename calls `MoveFileExW` with the path as
+  given. **One test remains `#[ignore]`d**: `bp-search` counts only the
+  newline while `bp-buffer`'s rope also breaks on a bare carriage return and
+  four other separators, so find-in-files can scroll to the wrong line in any
+  file carrying one. One line definition has to win, and that is D6 -- a
+  decision, not a patch.
 - **Three crates and one module are built and unreachable, and this list is
   now counted rather than remembered.** `bp-research`, `bp-notebook` and
   `bp-storage` have zero reverse dependencies anywhere in the application:

@@ -90,6 +90,12 @@ so whoever finishes an item updates them as part of it.
 | — | The gate sees `fuzz/`, on both legs | `scripts/Invoke-LocalCI.ps1` |
 | — | `paths::file_name`, and the panic lints | `bp-platform`, `[workspace.lints]` |
 | — | Security ▸ Security History, and the five calls that fill it | ADR-0024, id 206 |
+| — | `bp-notebook` keeps a cell that names a foreign language `Raw` | ADR-0025, `ipynb.rs` `infer_kind` |
+| — | `bp-files` spells a long path `\\?\` for the rename `tempfile` does raw | `bp-files` `save.rs`, `SaveError::PathTooLong` |
+| — | Recent list, recovery journal and security history leave the roaming directory | ADR-0029, `bp_config::Locations` |
+| — | `Profile::is_data` says what it answers | `bp-formats` |
+| — | Page Up / Page Down, and a view that follows the caret, in the default view | `app.slint`, `bp-ui` window tests |
+| — | Insert toggles overwrite; Shift+Insert, Ctrl+Insert, Shift+Delete | `bp_editor::{overwritten, Editor::type_text}`, both views |
 
 Every library half now has its row.
 
@@ -109,18 +115,25 @@ batch by menu.
 
 ## Tier 0.5 — what the cross-crate tests found
 
-Eleven files of cross-crate tests have now found seven defects. Five are
-fixed -- the last of them was the one that destroyed documents, and it is in
-the Done table above. These are the rest, each pinned by an `#[ignore]`d test
-naming it. **Take the first one before anything else in this file.**
+Eleven files of cross-crate tests have found seven defects, and **six are
+fixed** -- the sixth session took the notebook fallback, the extended-length
+path and the roaming state. What is left is a decision and a latent trap
+that is now documented rather than set:
 
 | Item | Shape |
 | --- | --- |
-| **`bp-notebook` runs unnameable code through the kernel's interpreter** | `infer_kind` does `stated.or(notebook_language)`, conflating "said nothing" with "said something we cannot map". ADR-0025 promises the second becomes `Raw` with a warning, and that only holds for a notebook with no kernelspec. Splitting those two cases is the fix; the ADR already says what the behaviour should be |
-| **`bp-files` never applies `\\?\`** | A name at `SemanticName::to_filename`'s own 255-byte maximum is unwritable in a deep enough directory, and `SaveError` blames a read-only file for `os error 3`. `bp_platform::paths::to_extended_length` is the fix, and `bp-files` depends on `bp-platform` now -- the edge that used to be half the work is already there |
-| `bp-search` and `bp-buffer` disagree what a line is | **An ADR, not a patch — D6.** Either `bp-search` adopts ropey's break set or `bp-buffer` drops `unicode_lines`. One definition has to win, and `bp-ui` uses both today, in different views |
-| The recent-files list and the recovery directory both roam on Windows | `recent.toml` and `bp-ui`'s `recovery_dir` both hang off the config directory, which is `%APPDATA%` and roams. Both hold machine-specific absolute paths; `bp-platform` calls this `DirKind::State`. Needs one change owning `bp-config` **and** `bp-ui`, so it cannot be split between agents |
-| `Profile::is_data` is true for `Ini` and `Xml` | Latent. Harmless until somebody gates a menu on it, at which point every row fails |
+| `bp-search` and `bp-buffer` disagree what a line is | **An ADR, not a patch — D6.** Either `bp-search` adopts ropey's break set or `bp-buffer` drops `unicode_lines`. One definition has to win, and `bp-ui` uses both today, in different views. The one `#[ignore]`d test left in `tests/integration` pins it |
+
+## Tier 0.75 — what the window tests found
+
+`bp-ui` has tests that drive the real window now (`src/window_tests.rs`),
+on a headless software renderer with real key events. They found two
+defects in their first hour, both fixed. One thing found alongside them is
+not fixed:
+
+| Item | Shape |
+| --- | --- |
+| **`--editor-view` draws its caret right of the text on Linux** | `EditorSurface` measures one advance and multiplies it by the column, which holds only for a monospace font. It asks for `"Consolas"`; Slint resolves a family name literally (no fontconfig aliasing, no generic `monospace`), so on Linux it falls back to a proportional sans and the caret drifts further right with every character. Found by driving the app on Xvfb. Fix is a product choice: bundle a monospace font with `import`, or pick the family per platform in Rust. Windows is unaffected |
 
 ## Tier 1 — pure wiring (the capability exists and is tested)
 
@@ -143,7 +156,7 @@ above). What was learned doing them, for whoever wires the next row:
 
 All of it, in one pass. What is worth carrying forward:
 
-- **`Command::Indent` is not `Command::Insert("	")`.** What a soft tab
+- **`Command::Indent` is not `Command::Insert("\t")`.** What a soft tab
   inserts depends on the caret's visual column -- at column 3 with width 4 it
   is one space, not four -- so `command_for` cannot decide it and
   `Editor::apply` expands it instead. Any future key whose text depends on

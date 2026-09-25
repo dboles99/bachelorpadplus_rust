@@ -65,7 +65,7 @@ engine, `bp-notebook`, `bp-research` and `bp-storage` -- so opening a 2 GB
 file still loads 2 GB. `bp-audit` came off that list when Security ▸ Security
 History shipped: five capabilities write into it and one row reads it back.
 
-**Cross-crate tests have found seven defects, and five are fixed.** Until the
+**Cross-crate tests have found seven defects; six are fixed and one is a decision.** Until the
 fourth session every test in the repository tested one crate. Eleven files of
 cross-crate tests found that `bp-search` and `bp-buffer` disagree about what a
 line is, that `bp-formats` identified a pretty-printed JSON array as JSON
@@ -74,13 +74,14 @@ inside the shell where no library test could reach it, that YAML had no way
 in, that `bp-notebook` runs a cell whose language it could not map through the
 kernel's interpreter, that `bp-files` never applies the extended-length path
 prefix -- and, worst of the seven, that `bp-naming` would generate a filename
-Windows treats as a device. That last one is now fixed: the sanitiser tests
+Windows treats as a device. That last one was fixed in the fifth session: the sanitiser tests
 the stem before the first dot, the way Win32 does, so `con.txt` becomes
 `con File.txt` rather than a save that reports success while writing to the
 console -- and `bp-files` refuses such a name outright, which closes the
 route sanitising never covered, the name a user types into a Save dialog.
-Two defects and one decision remain, each pinned by an `#[ignore]`d test
-naming it. `DECISIONS.md` has the evidence.
+The sixth session fixed the notebook and extended-length-path defects.
+What remains is one decision, D6 -- which definition of a line wins -- pinned
+by an `#[ignore]`d test naming it. `DECISIONS.md` has the evidence.
 
 **Phase 19's harnesses are inside the gate now, which they were not.**
 `fuzz/` declares its own `[workspace]`, so every `--workspace` command in
