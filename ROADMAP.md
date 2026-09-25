@@ -37,7 +37,9 @@ Status as of **2026-08-20**. Three words, meaning three different things:
 ## Two numbering schemes, reconciled
 
 The phase numbers above are canonical — they are what `specs.md`, the ADRs and
-the application's own "not implemented yet (phase N)" menu rows refer to.
+the planned menus refer to. (A release no longer shows planned rows;
+`show_planned_menus = true` in `config.toml` brings the four planned menus
+back.)
 
 `project/tasks/` uses fourteen directories rather than twenty, because several
 roadmap phases share a task folder (all three security phases live under

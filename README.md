@@ -58,23 +58,24 @@ cargo run --release -- --editor-view   # with the custom editor view (ADR-0018)
 
 ## Current state (2026-09-25)
 
-**24 crates, 1,729 tests, green on Linux** (the sixth session's changes have
-not yet been through the Windows leg). The app opens, edits and
+**24 crates, over 2,000 tests, green on Linux** (the sixth and seventh
+sessions' changes have not yet been through the Windows leg). The app opens, edits and
 saves atomically, and does rather more than that:
 
 | Area | What works |
 | --- | --- |
-| Editing | Tabs, four themes plus Follow System, zoom, indentation (tabs or soft tabs, 2/4/8), honest save state, atomic save, undo/cut/copy/paste (and Shift+Insert / Ctrl+Insert / Shift+Delete), Insert toggles overwrite (`OVR` in the status bar), Page Up/Down and a view that follows the caret, sort / deduplicate / reverse / trim lines, duplicate and move lines, go to line |
+| Editing | Tabs, four themes plus Follow System, zoom, indentation (tabs or soft tabs, 2/4/8), honest save state, atomic save, undo/cut/copy/paste (and Shift+Insert / Ctrl+Insert / Shift+Delete), Insert toggles overwrite (`OVR` in the status bar), Page Up/Down and a view that follows the caret, sort / deduplicate / reverse / trim lines, duplicate and move lines (Ctrl+D, Alt+Up/Down), go to line (Ctrl+G), line and column in the status bar -- all in the default view, not only `--editor-view` |
 | Storage | A rope buffer holds every document; whole-document operations are one undo step |
-| Safety | Unsaved-changes prompts, external-change detection, crash recovery journal — encrypted and recovered at unlock for encrypted documents ([ADR-0022](docs/decisions/ADR-0022.md)) |
-| Files | Open/Save/Save As/Save All/Save a Copy/Reload, recent files, tab context menu, command-line file opening. UTF-8, UTF-8 with BOM and **UTF-16 LE/BE** all load and save; a truncated or malformed UTF-16 file is refused by name rather than repaired with replacement characters. A file that is not UTF-8 and has no byte-order mark opens as **Windows-1252** and saves back byte for byte; a character Windows-1252 cannot hold stops the save and offers UTF-8 rather than writing a `?` |
+| Safety | Unsaved-changes questions asked inside the window (Save / Don't Save / Cancel; no dependency on zenity or `MessageBoxW`), external-change detection, crash recovery journal written only when a document has changed — encrypted and recovered at unlock for encrypted documents ([ADR-0022](docs/decisions/ADR-0022.md)) |
+| Files | Open (several at once)/Save/Save As/Save All/Save a Copy/Save as New Revision/Reload, a Save As suggestion that never names a file already there, recent files, tab context menu, Ctrl+Tab, command-line file opening. UTF-8, UTF-8 with BOM and **UTF-16 LE/BE** all load and save; a truncated or malformed UTF-16 file is refused by name rather than repaired with replacement characters. A file that is not UTF-8 and has no byte-order mark opens as **Windows-1252** and saves back byte for byte; a character Windows-1252 cannot hold stops the save and offers UTF-8 rather than writing a `?` |
 | Search | Find and replace with case-sensitive, whole-word and regex toggles, changes shown before they are applied, recursive cross-file search |
 | Data | JSON / JSONL / TOML / **YAML** validate, format, minify, convert; RFC 4180 CSV/TSV shape report, conversion to JSON and JSON Lines, column types. YAML refuses deep nesting, alias bombs and duplicate keys in words that say what to do ([ADR-0023](docs/decisions/ADR-0023.md)) |
 | Semantic | Title, keywords, summary and outline extracted from the document; document statistics; date and time insertion |
 | Clipboard | History with kind detection, paste from history, format-aware paste transformations |
 | Metadata | A SQLite store with migrations — built and tested, not yet wired in ([ADR-0019](docs/decisions/ADR-0019.md)) |
 | Encryption | `.bpadx` documents — Security ▸ Encrypt Document, unlock on open, and saves stay encrypted. Argon2id, XChaCha20-Poly1305 or AES-256-GCM, chunked with position authenticated ([ADR-0021](docs/decisions/ADR-0021.md)) |
-| Security | Per-document profiles (Standard / Private / Confidential / Maximum) governing the recovery journal, clipboard history and metadata store ([ADR-0020](docs/decisions/ADR-0020.md)) |
+| Security | Per-document profiles (Standard / Private / Confidential / Maximum) governing the recovery journal, clipboard history and metadata store ([ADR-0020](docs/decisions/ADR-0020.md)), remembered per file between sessions under a digest of its path. What each axis does and does not do: [SECURITY_MODEL.md](docs/architecture/SECURITY_MODEL.md) |
+| Settings | Tools ▸ Settings... (Ctrl+,) and the View and Format menus save into your own `config.toml`, keeping what you wrote there by hand; only what you changed is written |
 | Security (phase 16) | Privacy Mode, a session override that can only tighten; Scan for Secrets, which reports where a credential is and never what it is; Redact Found Secrets, as an undoable edit with a consent step; Inspect Metadata; Hash Document; Verify Signature; Security History, which every row above it writes into (ADR-0024). Signing is greyed with the reason on the row — there is nowhere to keep a key yet |
 
 Startup, with the software renderer ([ADR-0017](docs/decisions/ADR-0017.md)):
@@ -87,7 +88,9 @@ Configuration precedence: command line (`--theme=`, `--renderer=`, `--log=`,
 environment (`BACHELORPAD_*`), a TOML file
 (`%APPDATA%\bachelorpad\config.toml`, or `$XDG_CONFIG_HOME` on Linux), then
 defaults. Broken config warns and falls back; it never stops the editor
-starting.
+starting. Choices made in the window are saved back into that same file,
+comments and all, and a one-off command-line override is never made
+permanent.
 
 Only settings roam. The recent list and the security history are kept in
 `%LOCALAPPDATA%\bachelorpad\state` (`$XDG_STATE_HOME/bachelorpad`), and the
@@ -98,19 +101,13 @@ where they are, in use, and says so ([ADR-0029](docs/decisions/ADR-0029.md)).
 
 ### Known gaps
 
-- **The keys are tested in a window now, and a person still has not typed
-  into the custom editor view.** `bp-ui`'s window tests build the real
-  window on a headless software renderer and send it real key events: that
-  is how Page Up and Page Down were found to do nothing in the default view
-  (Slint pages by a `page-height` nobody set), and the arrows to move the
-  caret out of sight (nothing scrolled the view to follow it). Both are
-  fixed and pinned. `--editor-view` was driven end to end on a virtual X
-  display -- navigation, overwrite and save all land correctly -- and that
-  run showed **its caret drawn to the right of the text on Linux**: the
-  surface asks for `"Consolas"`, Slint resolves font names literally rather
-  than through fontconfig, and the proportional fallback breaks the
-  one-advance-per-column arithmetic. Windows has Consolas and is unaffected.
-  See [ADR-0018](docs/decisions/ADR-0018.md).
+- **Tested in a window, and on Windows by nobody yet.** `bp-ui`'s window
+  tests build the real window on a headless software renderer and drive it
+  with real key events: navigation, overwrite, every in-app question, the
+  Settings sheet, Ctrl+S end to end. That is how Page Up doing nothing, a
+  question from a menu losing the keyboard, and Find selecting the wrong text
+  after accented letters were found. Every change has passed the Linux gate;
+  **the Windows leg has not been run** (release plan M0-12).
 - **Input-method composition does not work under `--editor-view`, and cannot
   on this Slint.** `FocusScope` rejects `UpdateComposition` and
   `CommitComposition` in both its handlers and exposes no callback for either;
@@ -127,10 +124,6 @@ where they are, in use, and says so ([ADR-0029](docs/decisions/ADR-0029.md)).
   On Slint 1.17.1 the winit backend has no file-drop plumbing and
   `DataTransfer` carries only plain text or an image, so there is no channel a
   dropped file's path could arrive through. Blocked on Slint, not on effort.
-- **Five features are enabled only under `--editor-view`**: duplicate and move
-  line, date and time insertion, and go to line. All need the caret
-  `TextInput` does not expose. [MENU_MAP.md](docs/product/MENU_MAP.md) marks
-  which rows those are.
 - **The crates are tested where they meet, and that is where the defects
   are.** Eleven files of cross-crate tests join load/rope/atomic save, the
   `.bpadx` envelope over a real file, the security profile against all three
