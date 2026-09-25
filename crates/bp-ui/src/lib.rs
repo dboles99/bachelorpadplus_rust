@@ -199,6 +199,7 @@ fn refresh(ui: &AppWindow, state: &mut state::AppState, push_text: state::PushTe
         any_dirty,
         has_path,
         state.recent.paths(),
+        &state.integration,
     )));
     ui.set_view_items(model(menus::view(
         state.theme,
@@ -526,6 +527,9 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
         ));
     }
     initial.note_sealed_recovery();
+    // Read once here and again after either integration row is used: the
+    // answer depends on files only those two rows change.
+    initial.integration = default_editor::Rows::read();
 
     initial.editor_view = options.editor_view;
     let state = Rc::new(RefCell::new(initial));

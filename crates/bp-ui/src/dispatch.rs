@@ -158,83 +158,77 @@ fn pick_verifying_key(state: &AppState) -> Option<PathBuf> {
         .pick_file()
 }
 
-/// Choose where to put the registry script Windows registration needs.
+/// Choose where to put the registry scripts Windows registration needs.
 ///
 /// The file name comes from `bp-platform`'s own artefact, so what the user
-/// saves is what the plan names. Where it goes is entirely their choice --
-/// ADR-0012's whole position is that the user reads this file and applies it
-/// themselves, and a location chosen for them is one step back towards an
-/// installer writing the same keys invisibly.
+/// saves is what the plan names; its remove twin goes beside it. Where they
+/// go is entirely the user's choice -- ADR-0032's position is that a
+/// portable build's user reads these files and applies them themselves.
 fn pick_registry_script(state: &AppState, plan: &RegistrationPlan) -> Option<PathBuf> {
     rfd::FileDialog::new()
-        .set_title("Save the registry script")
+        .set_title("Save the registry scripts")
         .set_directory(state.dialog_directory())
         .set_file_name(crate::default_editor::registry_script_name(plan))
         .add_filter("Registry script", &["reg"])
         .save_file()
 }
 
-/// Show what registration would do, and ask before doing any of it.
-///
-/// The body is built in `default_editor`, which puts the current
-/// associations above the plan: ADR-0012 is about the user keeping control,
-/// and a user cannot keep control of a change they were not shown the
-/// starting point of. The answer becomes the `Consent` value
-/// `bp_platform::editor::install` refuses to act without.
-fn confirm_registration(
-    ui: &AppWindow,
-    body: String,
-    then: impl FnOnce(&AppWindow, Consent) + 'static,
-) {
-    dialog::confirm(ui, "Set as default editor", body, "Register", |ui, go| {
-        then(
-            ui,
-            if go {
-                Consent::Granted
-            } else {
-                Consent::Withheld
-            },
-        );
-    });
-}
-
-/// Act on the answer to [`confirm_registration`], and say what happened.
+/// Act on the answer to the Set as Default dialog, and say what happened.
 fn register(
     ui: &AppWindow,
     state: &Rc<RefCell<AppState>>,
     offer: &crate::default_editor::Offer,
-    consent: Consent,
 ) -> String {
-    match (consent, offer.root.as_deref()) {
-        (Consent::Withheld, _) => InstallRefusal::ConsentWithheld.describe(),
+    use crate::default_editor::{Route, linux_outcome, run_all, run_command};
+    const TITLE: &str = "Set as default editor";
+    match &offer.route {
         // The only call in this application that writes into a directory
-        // the desktop environment reads. It takes the root `bp-platform`
-        // named and the consent the user just gave, and neither has a
-        // default.
-        (Consent::Granted, Some(root)) => {
-            let (status, body) = crate::default_editor::install_outcome(
-                bp_platform::editor::install(&offer.plan, root, consent),
-                &offer.plan.handoff,
-                root,
-            );
-            if let Some(body) = body {
-                dialog::inform(ui, "Set as default editor", &body);
+        // the desktop environment reads, then the commands the dialog
+        // listed, line for line. Run on this thread: they are short, and a
+        // default half-set while the user carries on typing is worse than
+        // a second's wait.
+        Route::Install { root, commands } => {
+            match bp_platform::editor::install(&offer.plan, root, Consent::Granted) {
+                Err(refusal) => refusal.describe(),
+                Ok(installed) => {
+                    let ran = run_all(commands, run_command);
+                    // Read again rather than assumed: what the desktop now
+                    // says is the evidence the commands did what they said.
+                    let after = crate::default_editor::report_now(&offer.plan.selection);
+                    let (status, body) = linux_outcome(
+                        &installed,
+                        root,
+                        &ran,
+                        offer.plan.selection.extensions().count(),
+                        &after,
+                    );
+                    dialog::inform(ui, TITLE, &body);
+                    status
+                }
             }
-            status
         }
-        // No install root means this platform has no supported install --
-        // Windows. The `.reg` script is what ADR-0012 leaves in its place: a
-        // file the user chose the location of and can read before running.
-        (Consent::Granted, None) => {
+        Route::OpenSettings { uri } => match bp_platform_windows::open_uri(uri) {
+            Ok(()) => {
+                "opened Default apps in Windows Settings — choose BachelorPad+ there".to_owned()
+            }
+            Err(error) => format!("could not open Windows Settings ({error}) — the page is {uri}"),
+        },
+        // ADR-0032: a portable build saves the `.reg` pair where the user
+        // chooses, to read before running.
+        Route::SaveFiles => {
             let chosen = pick_registry_script(&state.borrow(), &offer.plan);
             let Some(path) = chosen else {
-                return "nothing was written — no location was chosen for the registry script"
+                return "nothing was written — no location was chosen for the registry scripts"
                     .to_owned();
             };
-            match crate::default_editor::save_registry_script(&offer.plan, &path) {
+            match crate::default_editor::save_registry_scripts(&offer.plan, &path) {
                 Ok(status) => {
                     let note = crate::default_editor::handoff_note(&offer.plan.handoff);
-                    dialog::inform(ui, "Set as default editor", &format!("{status}\n\n{note}"));
+                    dialog::inform(
+                        ui,
+                        TITLE,
+                        &format!("{status}\n\nRun the first file, then:\n\n{note}"),
+                    );
                     status
                 }
                 Err(refusal) => refusal,
@@ -629,16 +623,62 @@ pub fn handle_menu_action(
             }
         }
 
+        // Show what registration would do, with what opens these types
+        // today above it, and ask before doing any of it (ADR-0012). The
+        // button says what confirming does, which differs by platform.
         action::SET_DEFAULT_EDITOR => {
             match crate::default_editor::offer() {
                 Err(reason) => state.borrow_mut().error = Some(reason),
                 Ok(offer) => {
                     let cell = Rc::clone(state);
                     let body = offer.body.clone();
-                    confirm_registration(ui, body, move |ui, consent| {
-                        let message = register(ui, &cell, &offer, consent);
-                        cell.borrow_mut().error = Some(message);
-                        refresh(ui, &mut cell.borrow_mut(), PushText::No);
+                    let button = offer.route.button();
+                    dialog::confirm(ui, "Set as default editor", body, button, move |ui, go| {
+                        let message = if go {
+                            register(ui, &cell, &offer)
+                        } else {
+                            InstallRefusal::ConsentWithheld.describe()
+                        };
+                        let mut s = cell.borrow_mut();
+                        s.integration = crate::default_editor::Rows::read();
+                        s.error = Some(message);
+                        refresh(ui, &mut s, PushText::No);
+                    });
+                    return None;
+                }
+            }
+            push = PushText::No;
+        }
+
+        // The inverse, on Linux: only the files Set as Default wrote, and
+        // only after the user has seen the list.
+        action::REMOVE_REGISTRATION => {
+            match crate::default_editor::removal() {
+                Err(reason) => state.borrow_mut().error = Some(reason),
+                Ok(removal) => {
+                    let cell = Rc::clone(state);
+                    let body = removal.body.clone();
+                    dialog::confirm(ui, "Remove registration", body, "Remove", move |ui, go| {
+                        let consent = if go {
+                            Consent::Granted
+                        } else {
+                            Consent::Withheld
+                        };
+                        let (message, body) = crate::default_editor::removal_outcome(
+                            bp_platform::editor::uninstall(
+                                &removal.plan,
+                                &removal.plan.root,
+                                consent,
+                            ),
+                            crate::default_editor::run_command,
+                        );
+                        if let Some(body) = body {
+                            dialog::inform(ui, "Remove registration", &body);
+                        }
+                        let mut s = cell.borrow_mut();
+                        s.integration = crate::default_editor::Rows::read();
+                        s.error = Some(message);
+                        refresh(ui, &mut s, PushText::No);
                     });
                     return None;
                 }

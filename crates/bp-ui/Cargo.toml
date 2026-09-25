@@ -32,6 +32,10 @@ bp-integrity = { path = "../bp-integrity" }
 # a directory the desktop environment reads -- and only with an explicit
 # `Consent` and an explicit root.
 bp-platform = { path = "../bp-platform" }
+# Registry reads and the Settings deep link for Set as Default on Windows
+# (ADR-0033: the one crate allowed Win32). Everything in it answers "no" on
+# other platforms, so the shell calls it without a `cfg`.
+bp-platform-windows = { path = "../bp-platform-windows" }
 bp-security = { path = "../bp-security" }
 # Security ▸ Scan for Secrets. Pure, no dependencies of its own, and it
 # deliberately reports where a credential is without ever carrying it.

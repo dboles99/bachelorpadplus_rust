@@ -145,7 +145,7 @@ pub mod action {
     pub const DATA_JSON_TO_YAML: i32 = 211;
 
     /// File ▸ Set as Default Editor (ADR-0012), opening a block of its own at
-    /// 220-229 for platform integration. 221-229 are free.
+    /// 220-229 for platform integration. 223-229 are free.
     ///
     /// Not one of the three ids left at 207-209, and not one of the eight at
     /// 212-219: those are the Security operations' block and the Data
@@ -160,6 +160,9 @@ pub mod action {
     /// File ▸ Save as New Revision (release plan M1-17), in the File
     /// block beside Set as Default Editor.
     pub const SAVE_REVISION: i32 = 221;
+    /// File ▸ Remove Registration (release plan M2-06), Linux only: the
+    /// inverse of Set as Default Editor, beside it.
+    pub const REMOVE_REGISTRATION: i32 = 222;
 
     /// The Tools menu (release plan M1-05): the application's own settings
     /// and the folders it keeps its files in. A block of its own at 230-239,
@@ -458,7 +461,12 @@ pub(crate) fn decode_transform(
     Some((entry_index, transform))
 }
 
-pub fn file(any_dirty: bool, has_path: bool, recent: &[std::path::PathBuf]) -> Vec<MenuItem> {
+pub fn file(
+    any_dirty: bool,
+    has_path: bool,
+    recent: &[std::path::PathBuf],
+    integration: &crate::default_editor::Rows,
+) -> Vec<MenuItem> {
     let mut items = vec![
         row("New", "Ctrl+N", action::NEW),
         row_end("Open...", "Ctrl+O", action::OPEN),
@@ -508,22 +516,45 @@ pub fn file(any_dirty: bool, has_path: bool, recent: &[std::path::PathBuf]) -> V
             ..row("Save a Copy...", "", action::SAVE_COPY)
         },
         row_end("Close Tab", "Ctrl+W", action::CLOSE_TAB),
-        // Live on both platforms, and it is not the same amount of work on
-        // each: on Linux it writes the artefacts, on Windows it saves a `.reg`
-        // the user applies. Neither sets a default -- ADR-0012 leaves that to
-        // the operating system's own UI -- so the row asks first and says so.
+        // Not the same amount of work on each platform: on Linux it writes
+        // the per-user files and runs the commands that make it the
+        // default; on Windows it opens Default apps, or saves the `.reg`
+        // pair a portable build needs first. Either way the row asks first
+        // and says what it will do.
         //
         // The preset is named in the hint rather than chosen out of sight.
         // specs.md section 19 wants all five offered, which wants a settings
         // screen; five more rows in the File menu would be a worse answer
         // than one row that says which preset it means.
-        row(
+        integration_row(
             "Set as Default Editor...",
             "Notepad Replacement",
             action::SET_DEFAULT_EDITOR,
+            integration.set_default,
         ),
     ]);
+    if let Some(remove) = integration.remove {
+        items.push(integration_row(
+            "Remove Registration...",
+            "",
+            action::REMOVE_REGISTRATION,
+            remove,
+        ));
+    }
     items
+}
+
+/// A platform-integration row: live, or greyed with the reason as its hint.
+fn integration_row(
+    label: &str,
+    hint: &str,
+    action: i32,
+    state: crate::default_editor::RowState,
+) -> MenuItem {
+    match state {
+        crate::default_editor::RowState::Live => row(label, hint, action),
+        crate::default_editor::RowState::Greyed(why) => row_enabled(label, why, action, false),
+    }
 }
 
 /// Trim a path for the menu's right-hand hint, keeping the tail.
@@ -1496,7 +1527,7 @@ mod tests {
         // the row is what keeps it from being made out of sight -- and the
         // ellipsis is the house convention for a row that asks first, which
         // this one does, because registration writes files.
-        let row = file(false, true, &[])
+        let row = file(false, true, &[], &crate::default_editor::Rows::default())
             .into_iter()
             .find(|i| i.action == action::SET_DEFAULT_EDITOR)
             .expect("a default-editor row");
@@ -1777,7 +1808,10 @@ mod tests {
     fn release_menus() -> Vec<(String, Vec<MenuItem>)> {
         let now = time::macros::datetime!(2026-09-25 20:05 UTC);
         let mut menus = vec![
-            ("File".to_owned(), file(true, true, &[])),
+            (
+                "File".to_owned(),
+                file(true, true, &[], &crate::default_editor::Rows::default()),
+            ),
             ("Edit".to_owned(), edit(&[])),
             (
                 "View".to_owned(),
@@ -2030,21 +2064,21 @@ mod tests {
 
     #[test]
     fn save_all_is_disabled_when_nothing_is_unsaved() {
-        let items = file(false, true, &[]);
+        let items = file(false, true, &[], &crate::default_editor::Rows::default());
         let save_all = items
             .iter()
             .find(|i| i.action == action::SAVE_ALL)
             .expect("Save All");
         assert!(!save_all.enabled);
 
-        let items = file(true, true, &[]);
+        let items = file(true, true, &[], &crate::default_editor::Rows::default());
         let save_all = items.iter().find(|i| i.action == action::SAVE_ALL).unwrap();
         assert!(save_all.enabled);
     }
 
     #[test]
     fn reload_needs_a_file_to_reload_from() {
-        let items = file(false, false, &[]);
+        let items = file(false, false, &[], &crate::default_editor::Rows::default());
         let reload = items
             .iter()
             .find(|i| i.action == action::RELOAD)
@@ -2308,7 +2342,12 @@ mod tests {
     #[test]
     fn every_working_row_has_an_action() {
         let mut all = Vec::new();
-        all.extend(file(true, true, &[]));
+        all.extend(file(
+            true,
+            true,
+            &[],
+            &crate::default_editor::Rows::default(),
+        ));
         // `true` so the caret-dependent rows are enabled here too -- the
         // stronger check, since a disabled row is exempt below regardless.
         all.extend(edit(&[]));
@@ -2342,7 +2381,12 @@ mod tests {
             std::path::PathBuf::from("/notes/a/Report_17AUG2026.txt"),
             std::path::PathBuf::from("/notes/b/Report_17AUG2026.txt"),
         ];
-        let items = file(false, true, &recent);
+        let items = file(
+            false,
+            true,
+            &recent,
+            &crate::default_editor::Rows::default(),
+        );
 
         let rows: Vec<&MenuItem> = items
             .iter()
@@ -2361,7 +2405,7 @@ mod tests {
 
     #[test]
     fn no_recent_files_means_no_recent_rows() {
-        let items = file(false, true, &[]);
+        let items = file(false, true, &[], &crate::default_editor::Rows::default());
         assert!(
             items
                 .iter()
@@ -2376,7 +2420,12 @@ mod tests {
         let recent: Vec<std::path::PathBuf> = (0..bp_config::MAX_RECENT + 5)
             .map(|i| std::path::PathBuf::from(format!("/f{i}.txt")))
             .collect();
-        let items = file(false, true, &recent);
+        let items = file(
+            false,
+            true,
+            &recent,
+            &crate::default_editor::Rows::default(),
+        );
 
         // The recent rows, picked out by their labels rather than by the id
         // range under test -- a filter written from `RECENT_BASE` would agree
@@ -2415,7 +2464,12 @@ mod tests {
 
         let clips = [bp_clipboard::Entry::new("copied")];
         let mut rust_side = Vec::new();
-        rust_side.extend(file(true, true, &[std::path::PathBuf::from("/a.txt")]));
+        rust_side.extend(file(
+            true,
+            true,
+            &[std::path::PathBuf::from("/a.txt")],
+            &crate::default_editor::Rows::default(),
+        ));
         rust_side.extend(view(
             ThemeId::Green,
             false,
