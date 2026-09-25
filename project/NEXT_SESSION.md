@@ -25,6 +25,14 @@ holder) and M1-18 (U5), plus the Windows gate run (M0-12). **Next without
 them: M2** (platform integration, per the plan), starting with whatever
 the Windows gate run turns up.
 
+**Later the same session: M2 done except what waits on the owner.** The
+plan's M2 "Progress" note lists each item. Waiting: the icon's approval
+(M2-01), decisions 15 (Argon2 ceiling, M2-09) and 17 (what may leave the
+machine, M2-11), and the Windows gate run, which now also covers M2-02/03/04
+-- none of that Windows code has run on Windows yet. **Next without the
+owner: M3** (packaging and the release pipeline), and the M2 follow-ups at
+the end of `WORK_QUEUE.md`.
+
 Two tools worth knowing about:
 
 - `scripts/smoke-linux.sh` drives the real binary on Xvfb in both views.
