@@ -12,7 +12,7 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use bp_buffer::{HUGE_FILE_BYTES, SizeClass};
-use bp_core::{Encoding, LineEnding};
+use bp_core::{Encoding, LineEnding, decode_windows_1252};
 use thiserror::Error;
 
 use crate::utf16::{self, Endian, Utf16Error};
@@ -55,6 +55,11 @@ pub enum LoadError {
         source: io::Error,
     },
 
+    /// Not text in any encoding this crate reads. Since the Windows-1252
+    /// fallback, that means a UTF-8 byte-order mark followed by invalid
+    /// UTF-8, or bytes that are not UTF-8 and contain a NUL -- a binary
+    /// file. `encoding` is what was tried, which is why the message still
+    /// reads "not valid UTF-8": 1252 was deliberately not attempted.
     #[error("{} is not valid {}", .path.display(), .encoding.label())]
     InvalidText { path: PathBuf, encoding: Encoding },
 
@@ -133,6 +138,11 @@ pub struct LoadedFile {
     /// Encoding as found on disk. Saving must write it back the same way --
     /// opening a BOM'd file and saving it without the BOM is data loss as far
     /// as some downstream tools are concerned.
+    ///
+    /// [`Encoding::Windows1252`] is an inference rather than a finding: the
+    /// bytes were not UTF-8, so they were read as the code page. The shell
+    /// should show it, so a user with a file in some other code page can
+    /// see why the accents are wrong.
     pub encoding: Encoding,
     pub line_ending: LineEnding,
     /// Size on disk, before BOM stripping or decoding.
@@ -167,6 +177,27 @@ impl LoadedFile {
 /// UTF-16 is recognised only by its byte-order mark. A UTF-16 file without
 /// one is indistinguishable from binary without statistical guessing, and a
 /// wrong guess is the mangling this crate refuses.
+///
+/// A file with no byte-order mark that is not valid UTF-8 is read as
+/// [`Encoding::Windows1252`] -- the legacy "ANSI" `.txt` that is most of what
+/// a Notepad user has, and on Linux the Latin-1 file, which reads the same
+/// way. Refusing those meant a Notepad replacement that could not open
+/// Notepad's files. The order is the safeguard (release-plan risk R13):
+/// UTF-8 is tried first and any valid UTF-8 is taken as UTF-8, because the
+/// odds of a real 1252 text with a non-ASCII byte also being valid UTF-8 are
+/// negligible, while reading a UTF-8 file as 1252 would turn every "é" into
+/// "Ã©". The fallback is not a guess that can lose data: the 1252 decoder is
+/// total and substitutes nothing, so a file opened this way and saved
+/// unchanged is byte-for-byte what it was, and [`LoadedFile::encoding`] says
+/// what was assumed so the status bar can show it.
+///
+/// Two cases still refuse with [`LoadError::InvalidText`]. A file whose
+/// UTF-8 byte-order mark is followed by invalid UTF-8 -- the mark is a
+/// declaration, and this is damaged UTF-8, not a code page. And a file that
+/// is not UTF-8 and contains a NUL byte: no text editor writes NUL into a
+/// 1252 file, while executables, images, archives and BOM-less UTF-16 are
+/// full of them, and "opening" a binary as a page of accented gibberish
+/// invites the user to save it back.
 ///
 /// A file larger than [`EDITABLE_LIMIT_BYTES`] is refused with
 /// [`LoadError::TooLarge`] without being read; see [`load_with_limit`].
@@ -257,27 +288,40 @@ fn read_capped(
 /// Turn bytes already read into a document.
 fn decode(path: &Path, bytes: Vec<u8>) -> Result<LoadedFile, LoadError> {
     let bytes_on_disk = bytes.len() as u64;
-    let encoding = Encoding::detect_bom(&bytes);
+    let marked = Encoding::detect_bom(&bytes);
     // `Encoding::Utf8` has an empty mark, so this covers all four cases.
-    let body = &bytes[encoding.bom().len()..];
+    let body = &bytes[marked.bom().len()..];
 
-    let text = match Endian::of(encoding) {
-        Some(endian) => utf16::decode(body, endian).map_err(|e| match e {
-            Utf16Error::OddByteCount { bytes } => LoadError::TruncatedUtf16 {
-                path: path.to_owned(),
-                encoding,
-                bytes,
-            },
-            Utf16Error::UnpairedSurrogate { at } => LoadError::UnpairedSurrogate {
-                path: path.to_owned(),
-                encoding,
-                at,
-            },
-        })?,
-        None => String::from_utf8(body.to_vec()).map_err(|_| LoadError::InvalidText {
-            path: path.to_owned(),
-            encoding,
-        })?,
+    let (text, encoding) = match Endian::of(marked) {
+        Some(endian) => {
+            let text = utf16::decode(body, endian).map_err(|e| match e {
+                Utf16Error::OddByteCount { bytes } => LoadError::TruncatedUtf16 {
+                    path: path.to_owned(),
+                    encoding: marked,
+                    bytes,
+                },
+                Utf16Error::UnpairedSurrogate { at } => LoadError::UnpairedSurrogate {
+                    path: path.to_owned(),
+                    encoding: marked,
+                    at,
+                },
+            })?;
+            (text, marked)
+        }
+        None => match std::str::from_utf8(body) {
+            Ok(text) => (text.to_owned(), marked),
+            // Only with no mark: a UTF-8 BOM in front of invalid UTF-8 is
+            // damaged UTF-8, and a NUL is binary. See `load`.
+            Err(_) if marked == Encoding::Utf8 && !body.contains(&0) => {
+                (decode_windows_1252(body), Encoding::Windows1252)
+            }
+            Err(_) => {
+                return Err(LoadError::InvalidText {
+                    path: path.to_owned(),
+                    encoding: marked,
+                });
+            }
+        },
     };
 
     let line_ending = LineEnding::detect(&text).unwrap_or_default();
@@ -434,15 +478,101 @@ mod tests {
         assert_eq!(f.line_ending, LineEnding::CrLf);
     }
 
+    /// This test used to be `rejects_invalid_utf8`, asserting refusal. The
+    /// refusal is what M1-10 removes: a file that is not UTF-8 and has no
+    /// mark is now read as Windows-1252, because that is what legacy
+    /// Windows text is and refusing it left Notepad's files unopenable.
+    /// The decode is total, so nothing is lost by reading instead of
+    /// refusing; what is still refused is below.
     #[test]
-    fn rejects_invalid_utf8() {
+    fn invalid_utf8_with_no_mark_is_read_as_windows_1252_rather_than_refused() {
         let dir = tempdir().unwrap();
         let path = write_bytes(dir.path(), "f.txt", b"ok \xC3\x28 bad");
 
-        assert!(matches!(
-            load(&path).unwrap_err(),
-            LoadError::InvalidText { .. }
-        ));
+        let f = load(&path).unwrap();
+
+        assert_eq!(f.encoding, Encoding::Windows1252);
+        assert_eq!(f.text, "ok Ã( bad");
+    }
+
+    #[test]
+    fn a_windows_1252_file_loads_with_its_encoding_and_the_right_text() {
+        let dir = tempdir().unwrap();
+        // What Notepad's "ANSI" wrote: an accent, the euro sign (0x80) and
+        // all four smart quotes (0x91-0x94), with Windows line endings.
+        let path = write_bytes(
+            dir.path(),
+            "notepad.txt",
+            b"Caf\xE9 \x805\r\n\x93quoted\x94 and \x91single\x92\r\n",
+        );
+
+        let f = load(&path).unwrap();
+
+        assert_eq!(f.text, "Café €5\r\n“quoted” and ‘single’\r\n");
+        assert_eq!(f.encoding, Encoding::Windows1252);
+        assert_eq!(f.encoding.label(), "Windows-1252");
+        assert_eq!(f.line_ending, LineEnding::CrLf);
+        assert_eq!(
+            f.bytes_on_disk, 32,
+            "measured before decoding, one byte a character"
+        );
+    }
+
+    #[test]
+    fn a_utf8_file_with_an_accent_is_read_as_utf8_never_as_windows_1252() {
+        let dir = tempdir().unwrap();
+        let path = write_bytes(dir.path(), "utf8.txt", "Café “€5”\n".as_bytes());
+
+        let f = load(&path).unwrap();
+
+        assert_eq!(
+            f.encoding,
+            Encoding::Utf8,
+            "UTF-8 is tried first; read as 1252 this would be \"CafÃ©\""
+        );
+        assert_eq!(f.text, "Café “€5”\n");
+    }
+
+    #[test]
+    fn a_binary_file_is_still_refused_rather_than_read_as_windows_1252() {
+        let dir = tempdir().unwrap();
+        // A PNG's signature and first chunk header, and "hé" as UTF-16 LE
+        // with no mark: neither is UTF-8, and both have NUL bytes, which is
+        // what gives them away.
+        let png = write_bytes(dir.path(), "image.png", b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR");
+        let utf16 = write_bytes(dir.path(), "unmarked.txt", b"h\0\xE9\0");
+
+        for path in [png, utf16] {
+            let err = load(&path).unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    LoadError::InvalidText {
+                        encoding: Encoding::Utf8,
+                        ..
+                    }
+                ),
+                "{} must be refused, got {err:?}",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_utf8_after_a_utf8_mark_is_refused_rather_than_read_as_windows_1252() {
+        let dir = tempdir().unwrap();
+        let path = write_bytes(dir.path(), "damaged.txt", b"\xEF\xBB\xBFok \xC3\x28");
+
+        assert!(
+            matches!(
+                load(&path).unwrap_err(),
+                LoadError::InvalidText {
+                    encoding: Encoding::Utf8Bom,
+                    ..
+                }
+            ),
+            "the mark declares UTF-8, so this is damaged UTF-8, not a code page"
+        );
     }
 
     #[test]

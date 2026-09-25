@@ -12,9 +12,28 @@
 
 use std::borrow::Cow;
 
-use bp_core::{Encoding, LineEnding};
+use bp_core::{Encoding, LineEnding, Unrepresentable, encode_windows_1252};
+use thiserror::Error;
 
 use crate::utf16::{self, Endian};
+
+/// Why [`try_encode`] could not produce bytes.
+///
+/// One variant today, and only because there is one encoding that cannot
+/// hold every `char`. An enum rather than [`Unrepresentable`] itself so that
+/// a second legacy code page, or a second way to fail, is an addition the
+/// shell's `match` is told about rather than a signature change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum EncodeError {
+    /// The document holds a character the encoding has no bytes for.
+    ///
+    /// The shell's cue to ask "save as UTF-8 instead?" -- not to write a
+    /// `?` in its place, which is how a user loses a character without
+    /// being told. The offset is into the text as passed, before any line
+    /// ending conversion, so it is a position in the editor's own buffer.
+    #[error("{0}; UTF-8 can hold it")]
+    Unrepresentable(#[from] Unrepresentable),
+}
 
 /// What [`encode`] does with the line breaks the text already has.
 ///
@@ -182,33 +201,81 @@ impl LineEndingSurvey {
     }
 }
 
-/// Turn document text into the bytes to write to disk.
+/// Turn document text into the bytes to write to disk, or say which
+/// character the encoding cannot hold.
 ///
 /// The exact inverse of [`load`](crate::load) under
 /// [`LineEndingPolicy::Preserve`]: for any text this crate can hold and any
-/// `encoding`, writing these bytes and loading them back returns the same
-/// text and the same encoding. Under
-/// [`LineEndingPolicy::ConvertTo`] it is an inverse only when
-/// [`LineEndingSurvey::breaks_rewritten_by`] is zero -- deliberately, and
-/// that asymmetry is pinned by test rather than left to be discovered.
+/// Unicode `encoding`, writing these bytes and loading them back returns the
+/// same text and the same encoding. Under [`LineEndingPolicy::ConvertTo`] it
+/// is an inverse only when [`LineEndingSurvey::breaks_rewritten_by`] is zero
+/// -- deliberately, and that asymmetry is pinned by test rather than left to
+/// be discovered.
 ///
-/// Infallible, and that is the point of the rewrite. The `Result` this
-/// replaces existed for one reason: UTF-16 was unimplemented, so saving a
-/// UTF-16 document had to fail. Both UTF-16 orders now encode, every `char`
-/// in a `String` has a UTF-16 form, and so there is nothing left to report.
-/// An error type with no reachable variant is a branch every caller must
-/// handle and no test can ever exercise.
+/// Fails only for [`Encoding::Windows1252`], the one encoding that cannot
+/// hold every `char`, and then with [`EncodeError::Unrepresentable`] naming
+/// the first character it cannot hold. Nothing is ever substituted.
 ///
 /// The byte-order mark is written whenever the encoding carries one, which is
-/// what makes reopening the file report the encoding it was opened with. One
-/// consequence worth knowing: a document whose *first character* is U+FEFF
-/// and whose encoding is plain [`Encoding::Utf8`] produces bytes that are
-/// indistinguishable from a UTF-8 BOM, so reloading reports `Utf8Bom` and one
-/// character shorter. The bytes are still exact; only the model shifts. That
-/// is a property of BOM sniffing, not of this function, and no encoder can
-/// avoid it.
+/// what makes reopening the file report the encoding it was opened with. Two
+/// consequences worth knowing, both properties of detecting an encoding from
+/// bytes rather than of this function, and in both the bytes are exact and
+/// only the model shifts:
+///
+/// - A document whose *first character* is U+FEFF and whose encoding is plain
+///   [`Encoding::Utf8`] produces bytes indistinguishable from a UTF-8 BOM, so
+///   reloading reports `Utf8Bom` and one character shorter.
+/// - Windows-1252 has no mark, and `load` reads anything that is valid UTF-8
+///   as UTF-8. So a 1252 document that is all ASCII reloads as the same text
+///   labelled UTF-8 -- harmless, the bytes are the same in both -- and one
+///   whose 1252 bytes happen to spell valid UTF-8 ("Ã©" is the bytes of "é")
+///   reloads as that UTF-8. What does hold for every file: one that `load`
+///   accepts, saved unchanged, is the bytes it was.
+pub fn try_encode(
+    text: &str,
+    encoding: Encoding,
+    line_endings: LineEndingPolicy,
+) -> Result<Vec<u8>, EncodeError> {
+    let body = with_line_endings(text, line_endings);
+    encode_body(&body, encoding).map_err(|in_body| {
+        // Report the position in the text the caller holds. Line breaks are
+        // ASCII, which every encoding holds, so a converted copy fails on the
+        // same character -- but at an offset shifted by whatever conversion
+        // did before it. Recomputing costs a second pass on the error path
+        // only; a save that succeeds never pays it.
+        let in_text = match body {
+            Cow::Borrowed(_) => None,
+            Cow::Owned(_) => encode_body(text, encoding).err(),
+        };
+        EncodeError::Unrepresentable(in_text.unwrap_or(in_body))
+    })
+}
+
+/// Turn document text into the bytes to write to disk.
+///
+/// [`try_encode`] for callers that cannot ask the user anything, and the API
+/// the shell's save path was built on, kept so that adding Windows-1252 did
+/// not change a signature under it. For every Unicode encoding the two are
+/// identical, and so is everything [`try_encode`] says about inverses.
+///
+/// For a [`Encoding::Windows1252`] document holding a character the code
+/// page cannot, this writes the document as plain UTF-8 instead. Of the
+/// options for a function that must return bytes, that is the one that
+/// loses nothing: every character survives, and reopening the file detects
+/// UTF-8 and reports it. Writing `?` for the character -- what the Windows
+/// API does -- loses it silently. A caller that can prompt should call
+/// [`try_encode`] and ask before switching.
 pub fn encode(text: &str, encoding: Encoding, line_endings: LineEndingPolicy) -> Vec<u8> {
-    let body = match line_endings {
+    let body = with_line_endings(text, line_endings);
+    match encode_body(&body, encoding) {
+        Ok(bytes) => bytes,
+        Err(_) => body.as_bytes().to_vec(),
+    }
+}
+
+/// Apply the line-ending policy, borrowing when there is nothing to change.
+fn with_line_endings(text: &str, line_endings: LineEndingPolicy) -> Cow<'_, str> {
+    match line_endings {
         LineEndingPolicy::Preserve => Cow::Borrowed(text),
         LineEndingPolicy::ConvertTo(target) => match convert(text, target) {
             Some(converted) => Cow::Owned(converted),
@@ -216,14 +283,18 @@ pub fn encode(text: &str, encoding: Encoding, line_endings: LineEndingPolicy) ->
             // whole document, which is the common case for every save.
             None => Cow::Borrowed(text),
         },
-    };
-
-    let mut out = encoding.bom().to_vec();
-    match Endian::of(encoding) {
-        Some(endian) => out.extend_from_slice(&utf16::encode(&body, endian)),
-        None => out.extend_from_slice(body.as_bytes()),
     }
-    out
+}
+
+/// The mark, then the text in `encoding`.
+fn encode_body(body: &str, encoding: Encoding) -> Result<Vec<u8>, Unrepresentable> {
+    let mut out = encoding.bom().to_vec();
+    match (encoding, Endian::of(encoding)) {
+        (_, Some(endian)) => out.extend_from_slice(&utf16::encode(body, endian)),
+        (Encoding::Windows1252, None) => out.extend_from_slice(&encode_windows_1252(body)?),
+        (_, None) => out.extend_from_slice(body.as_bytes()),
+    }
+    Ok(out)
 }
 
 /// Rewrite every line break to `target`, or [`None`] if there is nothing to
@@ -272,7 +343,10 @@ mod tests {
     use proptest::prelude::*;
     use tempfile::TempDir;
 
-    const ENCODINGS: [Encoding; 4] = [
+    /// The encodings that can hold any text. Windows-1252 is tested on its
+    /// own below, because it cannot, and because it has no mark to say it
+    /// was chosen.
+    const UNICODE_ENCODINGS: [Encoding; 4] = [
         Encoding::Utf8,
         Encoding::Utf8Bom,
         Encoding::Utf16Le,
@@ -315,6 +389,7 @@ mod tests {
         .prop_map(|parts| parts.concat())
     }
 
+    /// The Unicode encodings; see [`UNICODE_ENCODINGS`].
     fn encoding() -> impl Strategy<Value = Encoding> {
         prop_oneof![
             Just(Encoding::Utf8),
@@ -360,6 +435,33 @@ mod tests {
                 LineEnding::detect(&text).unwrap_or_default()
             );
             prop_assert_eq!(loaded.bytes_on_disk, bytes.len() as u64);
+            prop_assert_eq!(
+                try_encode(&text, encoding, LineEndingPolicy::Preserve),
+                Ok(bytes),
+                "for a Unicode encoding the two entry points must never differ"
+            );
+        }
+
+        /// **Any file that loads saves back as the bytes it was.** The
+        /// guarantee the Windows-1252 fallback rests on, stated over
+        /// arbitrary bytes rather than text: whatever `load` accepted, in
+        /// whatever encoding it settled on, `try_encode` under that encoding
+        /// reproduces it exactly. Random bytes are mostly not UTF-8, so most
+        /// cases that load are exercising the fallback.
+        #[test]
+        fn every_file_that_loads_saves_back_to_the_bytes_it_was(
+            bytes in proptest::collection::vec(any::<u8>(), 0..48),
+        ) {
+            let dir = tempfile::tempdir().expect("temp dir");
+            let path = dir.path().join("arbitrary.bin");
+            atomic_write(&path, &bytes, SaveOptions::default()).expect("atomic_write");
+
+            if let Ok(loaded) = load(&path) {
+                prop_assert_eq!(
+                    try_encode(&loaded.text, loaded.encoding, LineEndingPolicy::Preserve),
+                    Ok(bytes)
+                );
+            }
         }
 
         /// **The survey agrees with `bp_core`.** Two answers to "what line
@@ -483,7 +585,7 @@ mod tests {
 
     #[test]
     fn the_empty_document_is_just_the_byte_order_mark() {
-        for encoding in ENCODINGS {
+        for encoding in UNICODE_ENCODINGS {
             let bytes = encode("", encoding, LineEndingPolicy::Preserve);
             assert_eq!(bytes, encoding.bom(), "{}", encoding.label());
 
@@ -636,7 +738,7 @@ mod tests {
         // The character a naive UTF-16 cast truncates, and the one a
         // surrogate-pair bug splits.
         let text = "😀 é 中\n";
-        for encoding in ENCODINGS {
+        for encoding in UNICODE_ENCODINGS {
             let bytes = encode(text, encoding, LineEndingPolicy::Preserve);
             let (_dir, loaded) = round_trip(&bytes);
             assert_eq!(loaded.text, text, "{}", encoding.label());
@@ -662,6 +764,108 @@ mod tests {
         let (_dir, loaded) = round_trip(&bytes);
         assert_eq!(loaded.encoding, Encoding::Utf16Le);
         assert_eq!(loaded.text, text);
+    }
+
+    // --- Windows-1252 ------------------------------------------------------
+
+    /// The fixture M1-10 names: an accent, the euro sign, all four smart
+    /// quotes, CRLF -- opened and saved unchanged.
+    const NOTEPAD_ANSI: &[u8] = b"Caf\xE9 \x805\r\n\x93quoted\x94 and \x91single\x92\r\n";
+
+    #[test]
+    fn a_windows_1252_file_saves_back_to_exactly_the_bytes_it_was_opened_from() {
+        let (_dir, loaded) = round_trip(NOTEPAD_ANSI);
+        assert_eq!(loaded.encoding, Encoding::Windows1252);
+
+        for policy in [
+            LineEndingPolicy::Preserve,
+            LineEndingPolicy::ConvertTo(loaded.line_ending),
+        ] {
+            assert_eq!(
+                try_encode(&loaded.text, loaded.encoding, policy).as_deref(),
+                Ok(NOTEPAD_ANSI),
+                "{policy:?}"
+            );
+            assert_eq!(encode(&loaded.text, loaded.encoding, policy), NOTEPAD_ANSI);
+        }
+    }
+
+    #[test]
+    fn a_character_1252_cannot_hold_is_refused_with_its_position_not_replaced() {
+        let err = try_encode(
+            "naïve → x",
+            Encoding::Windows1252,
+            LineEndingPolicy::Preserve,
+        )
+        .unwrap_err();
+
+        let EncodeError::Unrepresentable(what) = err;
+        assert_eq!(what.character, '→');
+        assert_eq!(what.byte_offset, "naïve ".len());
+        assert_eq!(what.encoding, Encoding::Windows1252);
+        assert!(err.to_string().contains("UTF-8"), "{err}");
+    }
+
+    #[test]
+    fn the_refused_position_is_in_the_callers_text_not_the_converted_copy() {
+        // Converting to CRLF inserts a byte before the arrow; the shell
+        // needs the offset in the buffer it holds.
+        let text = "a\nb\nc → d";
+        let err = try_encode(
+            text,
+            Encoding::Windows1252,
+            LineEndingPolicy::ConvertTo(LineEnding::CrLf),
+        )
+        .unwrap_err();
+
+        let EncodeError::Unrepresentable(what) = err;
+        assert_eq!(what.byte_offset, text.find('→').unwrap());
+    }
+
+    #[test]
+    fn encode_without_a_prompt_writes_utf8_rather_than_lose_a_character() {
+        let text = "€5 → £4\r\n";
+
+        let bytes = encode(text, Encoding::Windows1252, LineEndingPolicy::Preserve);
+
+        assert_eq!(bytes, text.as_bytes(), "no `?` where the arrow was");
+        let (_dir, loaded) = round_trip(&bytes);
+        assert_eq!(loaded.text, text);
+        assert_eq!(
+            loaded.encoding,
+            Encoding::Utf8,
+            "and reopening says what was actually written"
+        );
+    }
+
+    #[test]
+    fn a_windows_1252_document_whose_bytes_are_valid_utf8_reads_back_as_utf8() {
+        // The documented limit of a code page with no mark (risk R13), pinned
+        // so it is known rather than found. All-ASCII is the common, harmless
+        // case: the same text, labelled UTF-8. "Ã©" is the rare harmful one:
+        // its 1252 bytes, C3 A9, are "é" in UTF-8. In both the bytes on disk
+        // are exactly what 1252 says they should be.
+        let (_dir, ascii) = round_trip(&encode(
+            "plain",
+            Encoding::Windows1252,
+            LineEndingPolicy::Preserve,
+        ));
+        assert_eq!(ascii.text, "plain");
+        assert_eq!(ascii.encoding, Encoding::Utf8);
+
+        let bytes = encode("Ã©", Encoding::Windows1252, LineEndingPolicy::Preserve);
+        assert_eq!(bytes, b"\xC3\xA9");
+        let (_dir, mojibake) = round_trip(&bytes);
+        assert_eq!(mojibake.text, "é");
+        assert_eq!(mojibake.encoding, Encoding::Utf8);
+    }
+
+    #[test]
+    fn the_empty_windows_1252_document_is_no_bytes_at_all() {
+        assert_eq!(
+            try_encode("", Encoding::Windows1252, LineEndingPolicy::Preserve),
+            Ok(Vec::new())
+        );
     }
 
     #[test]
