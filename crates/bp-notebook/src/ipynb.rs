@@ -294,7 +294,16 @@ pub fn export_ipynb(notebook: &Notebook) -> Value {
     root.insert("metadata".to_owned(), Value::Object(metadata));
     root.insert("nbformat".to_owned(), Value::from(NBFORMAT_MAJOR));
     root.insert("nbformat_minor".to_owned(), Value::from(NBFORMAT_MINOR));
-    Value::Object(root)
+
+    // Jupyter writes every object with its keys sorted, and so do we. The
+    // workspace builds `serde_json` with `preserve_order` so that Data >
+    // Format keeps a user's key order; left alone, that would make this
+    // export follow the order this function happens to insert in, and every
+    // notebook saved here would differ from Jupyter's copy of the same
+    // notebook on every line that has two keys.
+    let mut value = Value::Object(root);
+    value.sort_all_objects();
+    value
 }
 
 /// Read `.ipynb` JSON into a notebook and a list of what was lost.
@@ -324,7 +333,9 @@ pub fn import_ipynb(value: &Value) -> Result<Import, IpynbError> {
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-    metadata.remove(BACHELORPAD_KEY);
+    // `shift_remove`, not `remove`: with `preserve_order` the latter moves
+    // the last key into the gap, reordering the user's metadata.
+    metadata.shift_remove(BACHELORPAD_KEY);
 
     let notebook_language = metadata
         .get("language_info")
@@ -587,7 +598,7 @@ fn import_cell(
         .cloned()
         .unwrap_or_default();
     let ours = metadata
-        .remove(BACHELORPAD_KEY)
+        .shift_remove(BACHELORPAD_KEY)
         .and_then(|v| v.as_object().cloned());
 
     let claimed = ours
@@ -1027,6 +1038,34 @@ mod tests {
         assert_eq!(cell.kind(), CellKind::Raw);
         assert!(!cell.kind().is_executable(), "unknown code must not run");
         assert_eq!(cell.source(), "println(1)", "the text is never lost");
+    }
+
+    #[test]
+    fn export_writes_keys_sorted_as_jupyter_does() {
+        // With `preserve_order` on, insertion order would leak into the file
+        // and every save would diff against Jupyter's own on each line.
+        let mut notebook = Notebook::new();
+        notebook.push(CellKind::Python, "x = 1");
+        let text = raw_json_view(&notebook);
+        let key = |k: &str| text.find(&format!("\"{k}\"")).expect(k);
+        assert!(key("cells") < key("metadata"));
+        assert!(key("metadata") < key("nbformat"));
+        assert!(key("nbformat") < key("nbformat_minor"));
+        assert!(key("cell_type") < key("execution_count"));
+        assert!(key("execution_count") < key("id"));
+    }
+
+    #[test]
+    fn importing_leaves_the_users_metadata_in_its_own_order() {
+        // Removing our namespaced key must not move another key into its
+        // place, which is what a plain `remove` does on an ordered map.
+        let import = import_str(
+            r##"{ "nbformat": 4,
+                  "metadata": { "zeta": 1, "bachelorpad": { "notebook_format": 1 }, "alpha": 2, "mid": 3 },
+                  "cells": [] }"##,
+        );
+        let keys: Vec<&String> = import.notebook().metadata().keys().collect();
+        assert_eq!(keys, ["zeta", "alpha", "mid"]);
     }
 
     #[test]
