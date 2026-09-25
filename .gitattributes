@@ -17,6 +17,7 @@
 *.ico binary
 *.pdf binary
 *.zip binary
+*.ttf binary
 
 # The hostile-input corpus is bytes, not text, and several entries exist
 # precisely because of the bytes `text=auto eol=lf` would rewrite --

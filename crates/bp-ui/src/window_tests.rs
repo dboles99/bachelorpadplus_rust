@@ -232,3 +232,41 @@ fn typing_with_overwrite_off_inserts() {
     type_text(&ui, "ab");
     assert!(ui.get_doc_text().starts_with("abline 001"));
 }
+
+#[test]
+fn no_slint_source_names_a_font_the_platform_may_not_have() {
+    // Slint resolves a family name literally, so a font that exists on one
+    // OS and not another silently becomes a proportional fallback there --
+    // which is how "Consolas" broke the custom view's caret on Linux. The
+    // bundled DejaVu Sans Mono is the only monospace family allowed.
+    for (file, source) in [
+        ("app.slint", include_str!("../ui/app.slint")),
+        (
+            "editor_surface.slint",
+            include_str!("../ui/editor_surface.slint"),
+        ),
+        (
+            "results_panel.slint",
+            include_str!("../ui/results_panel.slint"),
+        ),
+        ("status_bar.slint", include_str!("../ui/status_bar.slint")),
+        ("find_bar.slint", include_str!("../ui/find_bar.slint")),
+        ("goto_bar.slint", include_str!("../ui/goto_bar.slint")),
+        ("menu.slint", include_str!("../ui/menu.slint")),
+        ("tab.slint", include_str!("../ui/tab.slint")),
+        (
+            "passphrase_bar.slint",
+            include_str!("../ui/passphrase_bar.slint"),
+        ),
+        ("types.slint", include_str!("../ui/types.slint")),
+    ] {
+        let code = source.lines().filter(|l| !l.trim_start().starts_with("//"));
+        for line in code.filter(|l| l.contains("font-family")) {
+            assert!(
+                line.contains("\"DejaVu Sans Mono\""),
+                "{file} asks for a font that is not bundled: {}",
+                line.trim()
+            );
+        }
+    }
+}
