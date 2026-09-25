@@ -519,6 +519,315 @@ fn the_registry_script_is_something_regedit_would_accept() {
     assert!(!script.contents.replace("\r\n", "").contains('\n'));
 }
 
+/// `bytes` decoded as the UTF-16LE-with-BOM file regedit reads, asserting
+/// the BOM on the way.
+fn decode_reg_file(bytes: &[u8]) -> String {
+    assert_eq!(
+        bytes.get(..2),
+        Some(&[0xFF, 0xFE][..]),
+        "a .reg file starts with the UTF-16LE byte-order mark"
+    );
+    let body = &bytes[2..];
+    assert_eq!(body.len() % 2, 0, "UTF-16 is two bytes a unit");
+    let units: Vec<u16> = body
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect();
+    String::from_utf16(&units).expect("the file is valid UTF-16")
+}
+
+/// The `[...]` key lines of a `.reg` text, and the lines under each.
+fn reg_sections(text: &str) -> Vec<(String, Vec<String>)> {
+    let mut sections: Vec<(String, Vec<String>)> = Vec::new();
+    for line in text.split("\r\n") {
+        if let Some(key) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            sections.push((key.to_owned(), Vec::new()));
+        } else if !line.is_empty()
+            && let Some((_, lines)) = sections.last_mut()
+        {
+            lines.push(line.to_owned());
+        }
+    }
+    sections
+}
+
+#[test]
+fn the_registry_file_is_utf16le_with_a_byte_order_mark_and_decodes_to_the_script() {
+    let values = windows::registry_values(&windows_app(), &everything());
+    let bytes = windows::registry_file(&values);
+    // FF FE, then "Wi" as little-endian code units.
+    assert_eq!(&bytes[..6], &[0xFF, 0xFE, b'W', 0x00, b'i', 0x00]);
+    assert_eq!(decode_reg_file(&bytes), windows::registry_script(&values));
+}
+
+#[test]
+fn a_non_ascii_executable_path_reaches_the_file_as_the_characters_it_is() {
+    // The failure the encoding exists to prevent: an ANSI .reg file turns
+    // `Zoë` into whatever byte 0xEB is in the reader's code page.
+    let app = AppInfo::bachelorpad(r"C:\Users\Zoë\東京\bachelorpad.exe");
+    let values = windows::registry_values(&app, &AssociationSelection::custom(["txt"]));
+    let bytes = windows::registry_file(&values);
+
+    // U+00EB and U+6771 as UTF-16LE code units.
+    assert!(bytes.windows(2).any(|w| w == [0xEB, 0x00]), "ë is missing");
+    assert!(bytes.windows(2).any(|w| w == [0x71, 0x67]), "東 is missing");
+    let text = decode_reg_file(&bytes);
+    assert!(
+        text.contains(r#""\"C:\\Users\\Zoë\\東京\\bachelorpad.exe\",0""#),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_saved_artefact_is_written_in_the_encoding_its_format_is_read_in() {
+    let windows = plan(Platform::Windows, &windows_app(), &everything());
+    for kind in [ArtefactKind::RegistryScript, ArtefactKind::UnregisterScript] {
+        let artefact = windows.artefact(kind).expect("both .reg files are planned");
+        let bytes = artefact.bytes();
+        assert_eq!(&bytes[..2], &[0xFF, 0xFE], "{kind:?}");
+        assert_eq!(decode_reg_file(&bytes), artefact.contents, "{kind:?}");
+    }
+    // The Linux formats are defined as UTF-8 and stay exactly that.
+    let linux = plan(Platform::Linux, &app(), &everything());
+    for artefact in &linux.artefacts {
+        assert_eq!(artefact.bytes(), artefact.contents.as_bytes());
+    }
+}
+
+#[test]
+fn the_capabilities_key_names_the_executable_as_the_application_icon() {
+    let values = windows::registry_values(&windows_app(), &everything());
+    let icon = values
+        .iter()
+        .find(|v| {
+            v.key == windows::CAPABILITIES_KEY
+                && v.name == ValueName::Named("ApplicationIcon".to_owned())
+        })
+        .expect("Capabilities carries an ApplicationIcon");
+    assert_eq!(
+        icon.data,
+        r#""C:\Program Files\BachelorPad+\bachelorpad.exe",0"#
+    );
+}
+
+#[test]
+fn the_registered_application_is_the_display_name_pointing_at_the_capabilities() {
+    // Microsoft: ApplicationName "must always match the name that is
+    // registered under RegisteredApplications", and the Windows 11 deep link
+    // looks the application up by that same name.
+    let app = windows_app();
+    let values = windows::registry_values(&app, &everything());
+    let registered = values
+        .iter()
+        .find(|v| v.key == windows::REGISTERED_APPLICATIONS_KEY)
+        .expect("one value under RegisteredApplications");
+    assert_eq!(
+        registered.name,
+        ValueName::Named(windows::registered_application_name(&app).to_owned())
+    );
+    assert_eq!(registered.data, windows::CAPABILITIES_PATH);
+    assert!(values.iter().any(|v| v.key == windows::CAPABILITIES_KEY
+        && v.name == ValueName::Named("ApplicationName".to_owned())
+        && v.data == windows::registered_application_name(&app)));
+}
+
+#[test]
+fn the_unregister_file_is_utf16le_with_a_byte_order_mark_and_decodes_to_its_script() {
+    let values = windows::registry_values(&windows_app(), &everything());
+    let bytes = windows::unregister_file(&values);
+    assert_eq!(&bytes[..6], &[0xFF, 0xFE, b'W', 0x00, b'i', 0x00]);
+    let text = decode_reg_file(&bytes);
+    assert_eq!(text, windows::unregister_script(&values));
+    assert!(text.starts_with("Windows Registry Editor Version 5.00\r\n"));
+    assert!(
+        !text.replace("\r\n", "").contains('\n'),
+        "every line ends CRLF"
+    );
+}
+
+#[test]
+fn unregistering_deletes_our_own_keys_whole_and_only_our_value_from_a_shared_key() {
+    let values = windows::registry_values(&windows_app(), &everything());
+    let text = windows::unregister_script(&values);
+    let sections = reg_sections(&text);
+
+    let deleted: Vec<&str> = sections
+        .iter()
+        .filter_map(|(key, _)| key.strip_prefix('-'))
+        .collect();
+    // One whole-key deletion per ProgID, plus the product's own key.
+    assert_eq!(deleted.len(), everything().file_types().count() + 1);
+    for key in &deleted {
+        let ours = key.starts_with(r"HKEY_CURRENT_USER\Software\Classes\BachelorPadPlus.")
+            || *key == r"HKEY_CURRENT_USER\Software\BachelorPad+";
+        assert!(ours, "deletes a key that is not ours outright: {key}");
+        assert_eq!(windows::key_objection(key), None, "{key}");
+    }
+    assert!(deleted.contains(&r"HKEY_CURRENT_USER\Software\Classes\BachelorPadPlus.txt"));
+
+    // Shared keys are only ever opened, never deleted, and inside each the
+    // one line removes the one value the register script added.
+    for (key, lines) in sections.iter().filter(|(key, _)| !key.starts_with('-')) {
+        assert!(
+            key.ends_with(r"\OpenWithProgids") || key.ends_with(r"\RegisteredApplications"),
+            "only shared keys are opened: {key}"
+        );
+        assert_eq!(windows::key_objection(key), None, "{key}");
+        assert_eq!(lines.len(), 1, "{key}: {lines:?}");
+        assert!(lines[0].ends_with("=-"), "{key}: {lines:?}");
+    }
+    let open_with = sections
+        .iter()
+        .find(|(key, _)| key == r"HKEY_CURRENT_USER\Software\Classes\.txt\OpenWithProgids")
+        .expect(".txt's Open With list is visited");
+    assert_eq!(open_with.1, vec![r#""BachelorPadPlus.txt"=-"#.to_owned()]);
+    let registered = sections
+        .iter()
+        .find(|(key, _)| key == r"HKEY_CURRENT_USER\Software\RegisteredApplications")
+        .expect("RegisteredApplications is visited");
+    assert_eq!(registered.1, vec![r#""BachelorPad+"=-"#.to_owned()]);
+
+    // No extension key, no UserChoice, and never Notepad.
+    assert!(!text.contains(r"[-HKEY_CURRENT_USER\Software\Classes\."));
+    assert!(!text.contains("UserChoice"));
+    assert!(!text.to_ascii_lowercase().contains("notepad"));
+}
+
+#[test]
+fn unregistering_undoes_every_value_the_register_script_adds() {
+    for &preset in AssociationPreset::ALL {
+        let values =
+            windows::registry_values(&windows_app(), &AssociationSelection::preset(preset));
+        let sections = reg_sections(&windows::unregister_script(&values));
+        for value in &values {
+            let long = value.key.replace(r"HKCU\", r"HKEY_CURRENT_USER\");
+            let under_deleted_key = sections.iter().any(|(key, _)| {
+                key.strip_prefix('-')
+                    .is_some_and(|root| long == root || long.starts_with(&format!(r"{root}\")))
+            });
+            let value_removed = sections.iter().any(|(key, lines)| {
+                *key == long
+                    && lines.iter().any(|line| match &value.name {
+                        ValueName::Default => line == "@=-",
+                        ValueName::Named(name) => *line == format!("\"{name}\"=-"),
+                    })
+            });
+            assert!(
+                under_deleted_key || value_removed,
+                "{}: {:?} under {} survives unregistering",
+                preset.label(),
+                value.name,
+                value.key
+            );
+        }
+    }
+}
+
+#[test]
+fn a_value_in_a_key_that_is_not_ours_is_removed_by_name_and_its_key_is_kept() {
+    // Never produced by `registry_values`; this is the fallback's promise:
+    // the worst a surprising input can do is remove the value it names.
+    let values = vec![RegistryValue {
+        key: r"HKCU\Software\Classes\.txt\OpenWithProgids".to_owned(),
+        name: ValueName::Named("SomebodyElse.txt".to_owned()),
+        data: String::new(),
+    }];
+    let text = windows::unregister_script(&values);
+    assert!(!text.contains("[-"), "{text}");
+    assert!(text.contains("\"SomebodyElse.txt\"=-"), "{text}");
+}
+
+#[test]
+fn a_line_break_in_a_value_cannot_start_a_new_key_in_either_script() {
+    let mut app = windows_app();
+    app.display_name = "x\r\n[-HKEY_LOCAL_MACHINE\\Software]\r\n".to_owned();
+    app.description = "y\n[HKEY_CURRENT_USER\\Software\\Classes\\txtfile]".to_owned();
+    let values = windows::registry_values(&app, &AssociationSelection::custom(["txt"]));
+    for text in [
+        windows::registry_script(&values),
+        windows::unregister_script(&values),
+    ] {
+        for (key, _) in reg_sections(&text) {
+            let key = key.trim_start_matches('-');
+            assert!(
+                values
+                    .iter()
+                    .any(|v| v.key.replace(r"HKCU\", r"HKEY_CURRENT_USER\") == key)
+                    || key == r"HKEY_CURRENT_USER\Software\BachelorPad+"
+                    || key.starts_with(r"HKEY_CURRENT_USER\Software\Classes\BachelorPadPlus."),
+                "a value's text became a key line: [{key}]\n{text}"
+            );
+        }
+    }
+}
+
+#[test]
+fn windows_11_gets_the_products_own_settings_page_and_windows_10_the_generic_one() {
+    let app = windows_app();
+    let own = "ms-settings:defaultapps?registeredAppUser=BachelorPad%2B";
+    assert_eq!(
+        windows::default_apps_uri(None, &app),
+        "ms-settings:defaultapps"
+    );
+    // Windows 10 22H2 and the last build before Windows 11.
+    assert_eq!(
+        windows::default_apps_uri(Some(19045), &app),
+        "ms-settings:defaultapps"
+    );
+    assert_eq!(
+        windows::default_apps_uri(Some(21999), &app),
+        "ms-settings:defaultapps"
+    );
+    // Windows 11 21H2, 23H2, 24H2.
+    assert_eq!(windows::default_apps_uri(Some(22000), &app), own);
+    assert_eq!(windows::default_apps_uri(Some(22631), &app), own);
+    assert_eq!(windows::default_apps_uri(Some(26100), &app), own);
+}
+
+#[test]
+fn the_deep_link_escapes_the_registered_name_as_a_uri_component() {
+    let mut app = windows_app();
+    app.display_name = "Bachelor Pad+ & Zoë".to_owned();
+    assert_eq!(
+        windows::default_apps_uri(Some(22631), &app),
+        "ms-settings:defaultapps?registeredAppUser=Bachelor%20Pad%2B%20%26%20Zo%C3%AB"
+    );
+}
+
+#[test]
+fn settings_is_offered_once_registered_and_the_file_until_then() {
+    use windows::{RegistrationRoute, registration_route};
+    assert_eq!(
+        registration_route(Some(r"Software\BachelorPad+\Capabilities")),
+        RegistrationRoute::OpenSettings
+    );
+    assert_eq!(
+        registration_route(Some(r"software\bachelorpad+\capabilities")),
+        RegistrationRoute::OpenSettings,
+        "the registry is case-insensitive"
+    );
+    assert_eq!(
+        registration_route(None),
+        RegistrationRoute::SaveRegistrationFile
+    );
+    assert_eq!(
+        registration_route(Some(r"Software\Elsewhere\Capabilities")),
+        RegistrationRoute::SaveRegistrationFile,
+        "a value Default apps cannot follow to our capabilities is not a registration"
+    );
+}
+
+#[test]
+fn the_users_recorded_choice_is_refused_wherever_it_lives() {
+    use windows::{KeyObjection, key_objection};
+    assert_eq!(
+        key_objection(
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.txt\UserChoice"
+        ),
+        Some(KeyObjection::SeizesTheAssociation)
+    );
+}
+
 // --- the plan --------------------------------------------------------------
 
 #[test]
@@ -527,11 +836,13 @@ fn each_platform_gets_the_artefacts_it_has_a_use_for() {
     assert!(linux.artefact(ArtefactKind::DesktopEntry).is_some());
     assert!(linux.artefact(ArtefactKind::MimePackage).is_some());
     assert!(linux.artefact(ArtefactKind::RegistryScript).is_none());
+    assert!(linux.artefact(ArtefactKind::UnregisterScript).is_none());
     assert!(linux.registry_values.is_empty());
     assert!(matches!(linux.handoff, Handoff::LinuxSetDefault { .. }));
 
     let windows = plan(Platform::Windows, &windows_app(), &everything());
     assert!(windows.artefact(ArtefactKind::RegistryScript).is_some());
+    assert!(windows.artefact(ArtefactKind::UnregisterScript).is_some());
     assert!(windows.artefact(ArtefactKind::DesktopEntry).is_none());
     assert!(!windows.registry_values.is_empty());
     assert_eq!(
@@ -656,6 +967,52 @@ fn the_windows_state_is_read_from_prog_ids_supplied_by_the_caller() {
         })
     );
     assert_eq!(report.state_of("json"), Some(&AssociationState::Unclaimed));
+}
+
+#[test]
+fn a_query_is_asked_once_per_type_and_its_answers_mean_what_the_map_s_do() {
+    // The Windows path: `bp-platform-windows` reads the registry, and this
+    // crate decides what the answers mean. A query that records what it was
+    // asked stands in for the registry.
+    struct Recording(std::cell::RefCell<Vec<String>>);
+    impl ProgIdQuery for Recording {
+        fn current_prog_id(&self, extension: &str) -> Option<String> {
+            self.0.borrow_mut().push(extension.to_owned());
+            match extension {
+                "txt" => Some("BachelorPadPlus.txt".to_owned()),
+                "md" => Some("txtfile".to_owned()),
+                _ => None,
+            }
+        }
+    }
+    let query = Recording(std::cell::RefCell::new(Vec::new()));
+    let selection = everything();
+    let report = state::report_from_query(&query, &selection);
+
+    assert_eq!(report.state_of("txt"), Some(&AssociationState::Ours));
+    assert_eq!(
+        report.state_of("md"),
+        Some(&AssociationState::Other {
+            handler: "txtfile".to_owned()
+        })
+    );
+    assert_eq!(report.state_of("json"), Some(&AssociationState::Unclaimed));
+    let asked: Vec<String> = selection
+        .file_types()
+        .map(|t| t.extension.to_owned())
+        .collect();
+    assert_eq!(*query.0.borrow(), asked, "each type asked once, in order");
+}
+
+#[test]
+fn a_map_answers_a_query_the_same_way_it_answers_the_map_report() {
+    let mut prog_ids = BTreeMap::new();
+    prog_ids.insert(".TXT".to_owned(), "BachelorPadPlus.txt".to_owned());
+    prog_ids.insert("md".to_owned(), "Other.md".to_owned());
+    assert_eq!(
+        state::report_from_query(&prog_ids, &everything()),
+        state::report_from_prog_ids(&prog_ids, &everything())
+    );
 }
 
 #[test]
@@ -930,6 +1287,32 @@ proptest! {
         for value in &plan.registry_values {
             prop_assert!(!value.key.to_ascii_lowercase().contains("notepad"));
             prop_assert!(!value.data.to_ascii_lowercase().contains("notepad"));
+        }
+    }
+
+    /// Whatever the application is called and wherever it lives, both `.reg`
+    /// files decode back to exactly their text, and the unregister script
+    /// never deletes a key the guard would not let the register script write.
+    #[test]
+    fn both_reg_files_round_trip_and_unregistering_stays_inside_the_guard(
+        display_name in awkward_text(),
+        executable in awkward_text(),
+        selection in any_selection(),
+    ) {
+        let mut app = windows_app();
+        app.display_name = display_name;
+        app.executable = executable;
+        let values = windows::registry_values(&app, &selection);
+        prop_assert_eq!(
+            decode_reg_file(&windows::registry_file(&values)),
+            windows::registry_script(&values)
+        );
+        let unregister = windows::unregister_script(&values);
+        prop_assert_eq!(decode_reg_file(&windows::unregister_file(&values)), unregister.clone());
+        for (key, _) in reg_sections(&unregister) {
+            if let Some(root) = key.strip_prefix('-') {
+                prop_assert_eq!(windows::key_objection(root), None, "{}", root);
+            }
         }
     }
 

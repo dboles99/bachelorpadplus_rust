@@ -14,7 +14,7 @@
 //!
 //! | | needs consent | available |
 //! |---|---|---|
-//! | [`state`], [`association_report_in`] -- what opens `.txt` today | no | Linux; Windows reports "cannot tell" |
+//! | [`state`], [`association_report_in`] -- what opens `.txt` today | no | Linux; Windows through a [`ProgIdQuery`] the shell supplies |
 //! | [`plan`], [`linux_plan`], [`unregistration_plan`] -- what a change would consist of | no | both / Linux |
 //! | [`install`] -- putting the artefacts where the desktop reads them | **yes** | Linux, outside Flatpak |
 //! | [`uninstall`] -- removing exactly what [`install`] wrote | **yes** | Linux, outside Flatpak |
@@ -35,16 +35,18 @@
 //! shows the command is the user's own choice, which is what ADR-0012 asks
 //! for; a library that spawned it on its own would be deciding for them.
 //!
-//! ## Windows: generated, never applied
+//! ## Windows: generated here, applied by the installer or the user
 //!
 //! [`plan`] on Windows produces the complete `HKCU\Software\Classes` shape and
-//! renders it as a `.reg` script, and [`install`] refuses. Not out of caution
-//! -- writing a registry key needs either the `winreg` dependency or a Win32
-//! call, and this crate has neither a third-party dependency nor `unsafe`. The
-//! artefact is in the plan, so a shell can offer it through a Save dialog: a
-//! file the user chose where to put and can read before running is a
-//! defensible answer to a registration this crate cannot perform, and arguably
-//! a better one than an installer that writes the same keys invisibly.
+//! renders it as a pair of `.reg` scripts -- one to register, one to take
+//! exactly that away again -- and [`install`] refuses. By decision rather
+//! than by limitation (ADR-0032): the per-user installer writes these values
+//! and removes them, the application never writes the registry, and a
+//! portable build offers the pair through a Save dialog. A file the user
+//! chose where to put and can read before running is a defensible answer,
+//! and arguably a better one than an installer that writes the same keys
+//! invisibly. [`windows::registration_route`] tells the shell which of
+//! "Open Windows Settings" and "Save registration file…" to lead with.
 //!
 //! Every generated key is checked against [`windows::key_objection`], which is
 //! ADR-0012 written as a predicate rather than as a paragraph.
@@ -70,8 +72,8 @@ pub use linux::{
     DesktopEnv, FLATPAK_REASON, LinuxPlan, Uninstalled, Unregistration, association_report_in,
     linux_plan, set_as_default_availability, uninstall, unregistration_plan,
 };
-pub use state::{AssociationEntry, AssociationReport, AssociationState};
-pub use windows::{KeyObjection, RegistryValue, ValueName};
+pub use state::{AssociationEntry, AssociationReport, AssociationState, ProgIdQuery};
+pub use windows::{KeyObjection, RegistrationRoute, RegistryValue, ValueName};
 
 /// What the product is, from the point of view of a registration.
 ///
@@ -203,8 +205,12 @@ pub enum ArtefactKind {
     DesktopEntry,
     /// A `shared-mime-info` package defining the product's own types.
     MimePackage,
-    /// A `.reg` script. Generated, never applied -- see the module docs.
+    /// A `.reg` script that registers. Generated, never applied by the
+    /// application -- see the module docs. UTF-16LE on disk.
     RegistryScript,
+    /// The `.reg` script that removes exactly what [`Self::RegistryScript`]
+    /// adds, and nothing belonging to anybody else. UTF-16LE on disk.
+    UnregisterScript,
 }
 
 /// A file a registration would consist of.
@@ -217,10 +223,33 @@ pub enum ArtefactKind {
 pub struct Artefact {
     /// Where it goes, relative to the install root.
     pub relative_path: String,
-    /// The whole file.
+    /// The whole file, as text: what a dialog shows and a test reads. What
+    /// goes to disk is [`Self::bytes`], which is not always this text's UTF-8.
     pub contents: String,
     /// What it is.
     pub kind: ArtefactKind,
+}
+
+impl Artefact {
+    /// The file as it must be written to disk.
+    ///
+    /// UTF-8 for the Linux artefacts, whose formats are defined as UTF-8.
+    /// UTF-16LE with a byte-order mark for the `.reg` scripts, which is what
+    /// `regedit` exports and the only encoding it reads a non-ASCII path from
+    /// without going through the ANSI code page (see
+    /// [`windows::utf16le_with_bom`]). Anything that saves an artefact should
+    /// write these bytes, never [`Self::contents`] directly.
+    #[must_use]
+    pub fn bytes(&self) -> Vec<u8> {
+        match self.kind {
+            ArtefactKind::DesktopEntry | ArtefactKind::MimePackage => {
+                self.contents.as_bytes().to_vec()
+            }
+            ArtefactKind::RegistryScript | ArtefactKind::UnregisterScript => {
+                windows::utf16le_with_bom(&self.contents)
+            }
+        }
+    }
 }
 
 /// A command that must run before the registration takes effect, named rather
@@ -456,8 +485,16 @@ pub fn plan(
                 contents: windows::registry_script(&registry_values),
                 kind: ArtefactKind::RegistryScript,
             });
+            artefacts.push(Artefact {
+                relative_path: format!("{}-file-types-remove.reg", app.app_id),
+                contents: windows::unregister_script(&registry_values),
+                kind: ArtefactKind::UnregisterScript,
+            });
+            // The generic page, because `plan` is pure and the build number
+            // is a fact about the machine. The shell that knows the build
+            // asks `windows::default_apps_uri` for the Windows 11 deep link.
             Handoff::WindowsDefaultApps {
-                uri: "ms-settings:defaultapps",
+                uri: windows::DEFAULT_APPS_URI,
             }
         }
     };
@@ -613,7 +650,7 @@ pub fn install(
                 message: error.to_string(),
             })?;
         }
-        fs::write(&target, &artefact.contents).map_err(|error| InstallRefusal::Failed {
+        fs::write(&target, artefact.bytes()).map_err(|error| InstallRefusal::Failed {
             path: target.clone(),
             message: error.to_string(),
         })?;
@@ -659,10 +696,11 @@ pub fn install_root(platform: Platform, env: &EnvSnapshot) -> Option<PathBuf> {
 /// [`AssociationState::Unclaimed`], not a failure.
 ///
 /// On Windows it returns [`AssociationState::Unknown`] for everything, with
-/// the capability register's own reason attached. This crate cannot read
-/// `HKCU\...\UserChoice` without a dependency, and reporting "unclaimed"
-/// instead would tell the user their machine is unconfigured when it is
-/// merely unreadable from here.
+/// the capability register's own reason attached. This crate reads no
+/// registry; the Windows answer comes from [`state::report_from_query`] given
+/// the [`ProgIdQuery`] `bp-platform-windows` implements, which only the shell
+/// can hand over. Reporting "unclaimed" here instead would tell the user their
+/// machine is unconfigured when it is merely unreadable from here.
 #[must_use]
 pub fn association_report(
     platform: Platform,
