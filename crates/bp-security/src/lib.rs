@@ -152,13 +152,13 @@ impl Policy {
             && self.zeroise >= other.zeroise
     }
 
-    /// Whether this policy needs cryptography that does not exist yet.
+    /// Whether this policy needs the document to be encrypted to be honoured.
     ///
-    /// `bp-crypto` arrives in phase 15. Until it does, a profile asking for
-    /// an encrypted journal cannot be honoured -- and ADR-0020 requires that
-    /// to fail loudly rather than degrade to plaintext. A security control
-    /// that quietly weakens itself is worse than an absent one, because the
-    /// user has been told it is on.
+    /// An encrypted journal is sealed with the document's own passphrase
+    /// (ADR-0022), so a document without one cannot have it -- and ADR-0020
+    /// requires that to fail loudly rather than degrade to plaintext. A
+    /// security control that quietly weakens itself is worse than an absent
+    /// one, because the user has been told it is on.
     #[must_use]
     pub const fn needs_encryption(&self) -> bool {
         matches!(self.recovery, Recovery::Encrypted)
@@ -232,8 +232,8 @@ impl Profile {
             },
             // The step that stops content leaving the machine. Recovery is
             // still kept, because losing unsaved work is its own harm -- but
-            // it has to be encrypted, and until bp-crypto exists that means
-            // the journal is refused rather than silently written in clear.
+            // it has to be encrypted, so a document without a passphrase
+            // keeps no journal rather than one written in clear.
             Self::Private => Policy {
                 recovery: Recovery::Encrypted,
                 clipboard: Clipboard::InMemory,

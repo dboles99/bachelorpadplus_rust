@@ -27,8 +27,8 @@ Ctrl+X/C/V      Cut / Copy / Paste
 Ctrl+A          Select all
 Ctrl+= / Ctrl+- Zoom in / out
 Ctrl+0          Reset zoom
-Ctrl+D          Duplicate line
-Alt+Up / Down   Move line up / down";
+Ctrl+D          Duplicate line (--editor-view)
+Alt+Up / Down   Move line up / down (--editor-view)";
 
 /// Static information, shown in a native dialog rather than built as a
 /// bespoke window.
