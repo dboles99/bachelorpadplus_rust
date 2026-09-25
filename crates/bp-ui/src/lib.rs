@@ -437,6 +437,7 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
             "{elsewhere} unsaved document(s) are open in another BachelorPad+ window"
         ));
     }
+    initial.note_sealed_recovery();
 
     initial.editor_view = options.editor_view;
     let state = Rc::new(RefCell::new(initial));
