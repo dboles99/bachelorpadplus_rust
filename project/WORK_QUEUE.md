@@ -108,6 +108,9 @@ so whoever finishes an item updates them as part of it.
 | M0-06 | One command-line parser | `bp_config::cli` |
 | M0-08/09 | Stale readouts fixed; recent list honours the profile | `menus.rs`, `state.rs` |
 | M0-13 | The gate runs natively on a Linux host | `scripts/Invoke-LocalCI.ps1` |
+| M0-07 | Clipboard history records the editor's copies only; private copies kept out of OS history | `bp_clipboard::{Origin, keep_out_of_os_history}`, `copied-from-editor` |
+| M0-10 | Log file and crash report | `apps/bachelorpad/src/logging.rs`, `bp_config::locations::log_dir` |
+| M0-09/11 | Atomic recent-list write; `forbid(unsafe_code)` everywhere but `bp-ui`'s generated code | `bp-config`, `bp-security`, the binary |
 
 Every library half now has its row.
 
