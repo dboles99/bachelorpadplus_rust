@@ -229,7 +229,10 @@ Goal: the default view is a complete Notepad; nothing blocks; the release surfac
   - Alt+Up and Alt+Down never reached their bindings.
   - The caret report would have panicked inside `refresh`.
 - **M1-05 done.** Notebook, Organize, Research and Run are behind `show_planned_menus`. There is no planned row or "not implemented" trailer in any release menu, and no menu ends on a divider. Tools is live: Settings, Open Log Folder, Open Config Folder. Also fixed: `dispatch` handed the focus back to the editor after every menu action, so a question opened from a menu lost the keyboard.
-- **M1-07 part one.** Find in Files runs on `worker::Background` (a generation number, a stop flag, results over a channel) and closing the panel stops it. **Still to move:** saves, checkpoint writes and hashing, with the generation check (`a_save_that_finishes_after_more_typing_keeps_the_document_dirty`). M1-08 waits on that.
+- **M1-07 done, by decision on part of it.**
+  - Find in Files runs on `worker::Background` (a generation number, a stop flag, results over a channel), and closing the panel stops it.
+  - Recovery checkpoints are sealed and written on a worker, using `bp_history`'s ticketed API (ticket, prepare, commit). A save or close between the snapshot and the write cancels the ticket, so a stale snapshot never lands after it; a test saves between the two steps to prove it.
+  - **Saves and hashing stay on the UI thread, by decision.** Each is a one-off action the user asked for and waits on, bounded by the 32 MiB editable limit (about 0.1 s in release). Close and quit continue only once a save's outcome is known. So `a_save_that_finishes_after_more_typing_keeps_the_document_dirty` has nothing to test; the periodic, unasked-for stall was the checkpoint.
 - **M1-11 done.** Open takes several files; Ctrl+O now knows an encrypted file (it used to open one as a plain tab); Ctrl+Tab and Ctrl+Shift+Tab.
 - **M1-13 done.**
   - The release profile uses thin LTO, one codegen unit, stripped symbols and unwind; the toolchain is pinned to 1.94.1; Windows builds with `+crt-static`; Slint and arboard features are trimmed.
@@ -244,9 +247,18 @@ Goal: the default view is a complete Notepad; nothing blocks; the release surfac
 - **M1-21 done.** Follow System says when the desktop does not report light or dark.
 - The flaky `bp-platform` proptest was a test bug: its strategy generated reserved names such as `aux`. Fixed.
 
-**Left in M1:**
-- Blocked on the owner: M1-06 (U3), M1-09 (D6), M1-14 (the copyright holder), M1-18 (U5).
-- Unblocked: M1-07 part two and M1-08, M1-12 (Ctrl+S end-to-end and the smoke script), M1-20 (zeroise on close, and the security model note), M1-22 (records sweep).
+- **M1-08 done.** `Document::edits` counts every modification, and a dirty document whose checkpoint is current is skipped. Before, every dirty document was rewritten every five seconds, which meant an Argon2 run each time for an encrypted one. The record is dropped on save, close, a profile change and Privacy Mode.
+- **M1-12 done.**
+  - Ctrl+S is tested end to end in a window (and "Changed on disk", where Enter is Cancel).
+  - `scripts/smoke-linux.sh` drives the real binary on Xvfb in both views: typing, Ctrl+S to disk, and a WM close answered through the in-app sheet (Cancel, then Don't Save). It passed eight runs in a row.
+  - It found that `--editor-view` lost every key typed before the first click (the window forwarded focus to the hidden `TextInput`). That is fixed, and the script's XFAIL turned to XPASS.
+  - The earlier belief that the default view could not be driven on Xvfb was wrong: it needed X focus, not an input method.
+  - Not a gate stage yet (it needs Xvfb, python-xlib and libxkbcommon-x11); `LOCAL_CI.md` says how to run it.
+- **M1-20 done, within its limits.** A save wipes its plaintext copies. `SECURITY_MODEL.md` now says which part of the product honours each of the seven axes and where each stops. `embeddings` and `temporary_files` are honestly unread, and the atomic save's temporary file is an accepted deviation. `zeroise` is partial: the rope, the undo history and Slint's `TextInput` copy cannot be wiped from safe code.
+- **M1-22 done.** Records sweep S15–S28: ROADMAP, DECISIONS.md, the ADR-0018 and ADR-0027 amendments, WORK_QUEUE and NEXT_SESSION. DECISIONS_NEEDED.md is the single list of open decisions.
+- **`--line N` is applied** at startup, in either view.
+
+**Left in M1: only the owner's four decisions.** M1-06 (U3, the large-file viewer, which also carries `--readonly` and `--large-file`), M1-09 (D6), M1-14 (the copyright holder) and M1-18 (U5). M1's exit criteria also need the Windows gate green (M0-12) and a 1 GB file opening in the viewer (M1-06).
 
 ### M2 — Platform integration. Target: 2–3 weeks. Splits by OS.
 
