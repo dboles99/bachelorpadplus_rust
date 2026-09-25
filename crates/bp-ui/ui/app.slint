@@ -163,6 +163,11 @@ export component AppWindow inherits Window {
     out property <length> editor-scroll-x: flick.viewport-x;
     out property <length> editor-scroll-y: flick.viewport-y;
 
+    /// What the status bar's path and notice segments show. For the window
+    /// tests: the path must survive every notice.
+    out property <string> status-path: status-bar.shown-path;
+    out property <string> status-notice: status-bar.shown-notice;
+
     /// Menu actions below 100. Ids from 100 up never reach Rust.
     callback menu-action(int);
 
@@ -929,7 +934,7 @@ export component AppWindow inherits Window {
 
             Rectangle { height: 1px; background: Palette.edge; }
 
-            StatusBar {
+            status-bar := StatusBar {
                 save-state: root.save-state;
                 is-dirty: root.is-dirty;
                 format-label: root.format-label;
