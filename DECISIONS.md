@@ -35,6 +35,10 @@ Adding a decision means adding both.
 | BP-ADR-0027 | 2026-08-19 | Large-file thresholds are measured; the line index is sparse; memory mapping is declined with reasons | Accepted | [ADR-0027](docs/decisions/ADR-0027.md) |
 | BP-ADR-0028 | 2026-08-19 | Redaction merges overlapping and adjacent spans, resolves every offset against the original, and states what verification cannot prove | Accepted | [ADR-0028](docs/decisions/ADR-0028.md) |
 | BP-ADR-0029 | 2026-09-25 | The recent list, recovery journal and security history leave the roaming directory, and an old location is adopted -- or kept -- rather than abandoned | Accepted | [ADR-0029](docs/decisions/ADR-0029.md) |
+| BP-ADR-0030 | 2026-09-25 | RC1 scope: notebook execution, semantic organisation, personality modes and highlighting deferred; mmap declined for good; Sign ships with a sealed seed | Accepted | [ADR-0030](docs/decisions/ADR-0030.md) |
+| BP-ADR-0031 | 2026-09-25 | Slint is used under its Royalty-free Licence 2.0, with `AboutSlint` in the About window | Accepted | [ADR-0031](docs/decisions/ADR-0031.md) |
+| BP-ADR-0032 | 2026-09-25 | App id `io.github.dboles99.BachelorPad`; the installer owns Windows registration; DejaVu Sans Mono is bundled | Accepted | [ADR-0032](docs/decisions/ADR-0032.md) |
+| BP-ADR-0033 | 2026-09-25 | `bp-platform-windows` is the one crate allowed `windows-sys` and confined `unsafe` | Accepted | [ADR-0033](docs/decisions/ADR-0033.md) |
 
 ## Decisions needed before the work they block
 
