@@ -459,8 +459,11 @@ Three sessions of evidence, worth reading before dispatching any:
 
 - `./scripts/Invoke-LocalCI.ps1` is the gate: on Windows add `-Linux` for the
   WSL leg; on a Linux host `pwsh -NoProfile -File scripts/Invoke-LocalCI.ps1`
-  runs every stage natively (M0-13). There is no hosted CI (ADR-0016) and
-  Actions is disabled at the repository level.
+  runs every stage natively (M0-13). There is no hosted CI (ADR-0016):
+  `.github/workflows/ci.yml` runs only on `workflow_dispatch`. ADR-0016 also
+  records Actions as disabled at the repository level on 2026-08-17; that
+  setting lives on GitHub, not in the repository, and has not been
+  re-verified since.
 - `./scripts/Install-GitHooks.ps1` once per clone; the hooks run the gate.
 - Every commit in this repository has passed the gate. Keep it that way.
 - `docs/decisions/` is the register; add an ADR when a decision has
