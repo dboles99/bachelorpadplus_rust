@@ -380,24 +380,61 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
             .map(|(_, c)| c.name.as_str())
             .take(5)
             .collect();
+        // Yes/No/Cancel with standard labels rather than custom ones: on
+        // Windows, without comctl32 v6, rfd falls back to `MessageBoxW`, which
+        // cannot show custom labels; and on Linux, zenity reports a closed
+        // Yes/No dialog as No. With a Cancel button, closing it is Cancel.
+        let count = pending.len();
         let answer = rfd::MessageDialog::new()
             .set_level(rfd::MessageLevel::Warning)
             .set_title("Unsaved work recovered")
             .set_description(format!(
-                "BachelorPad+ closed with {} unsaved document(s):\n\n{}\n\nRestore them?",
-                pending.len(),
+                "BachelorPad+ closed with {count} unsaved document(s):\n\n{}\n\n\
+                 Yes: restore them now.\n\
+                 No: discard them for good.\n\
+                 Cancel: keep them and ask again next time.",
                 names.join("\n")
             ))
-            .set_buttons(rfd::MessageButtons::YesNo)
+            .set_buttons(rfd::MessageButtons::YesNoCancel)
             .show();
 
-        if answer == rfd::MessageDialogResult::Yes {
-            initial.restore(pending);
-        } else {
-            // Declining is a decision; honour it rather than asking again
-            // every launch.
-            let _ = initial.journal.discard_all();
+        // Each journal writes into its own instance folder and holds a lock
+        // on it while it lives, so what `pending` lists is work from windows
+        // that have ended. `pending` also claims it, so of two windows
+        // opened at once only one asks.
+        match state::recovery_choice(&answer) {
+            // Restored documents are journalled again under this session's
+            // ids first, and only then are the ended sessions' copies
+            // removed, so there is no moment with no copy on disk.
+            state::RecoveryChoice::Restore => {
+                initial.restore(pending);
+                initial.checkpoint_all();
+                let _ = initial.journal.discard_recovered();
+            }
+            // An explicit No is a decision; honour it rather than asking
+            // again every launch.
+            state::RecoveryChoice::Discard => {
+                let _ = initial.journal.discard_all();
+            }
+            // Beside whatever startup already had to say, never over it:
+            // `start_up` composed those notices a moment ago.
+            state::RecoveryChoice::Keep => {
+                initial.journal.keep_for_later();
+                initial.add_notice(format!(
+                    "{count} unsaved document(s) from last time were kept, not restored; \
+                     you will be asked again at the next launch"
+                ));
+            }
         }
+    }
+    // Work another window is still journalling is neither offered nor
+    // touched here -- it is that window's. Said, so nobody wonders where it
+    // went.
+    let elsewhere = initial.journal.held_elsewhere();
+    if elsewhere > 0 {
+        initial.add_notice(format!(
+            "{elsewhere} unsaved document(s) are open in another BachelorPad+ window"
+        ));
     }
 
     initial.editor_view = options.editor_view;

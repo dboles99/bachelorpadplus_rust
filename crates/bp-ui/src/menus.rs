@@ -218,7 +218,11 @@ pub mod action {
     pub const DATA_CSV_TO_JSON: i32 = 76;
     pub const DATA_CSV_TO_JSONL: i32 = 77;
     pub const DATA_COLUMN_TYPES: i32 = 78;
-    // 79 is free.
+    /// JSON only. Its own id since `bp-data` built `serde_json` with
+    /// `preserve_order`: Format now keeps the author's key order, so the row
+    /// that used to share Format's id -- and only sorted because Format did
+    /// -- would have silently stopped sorting. The Data block is full now.
+    pub const DATA_SORT_KEYS: i32 = 79;
 
     /// Recently-opened files occupy `RECENT_BASE .. RECENT_BASE + MAX_RECENT`.
     /// The range is sized to the list so a longer list cannot silently run
@@ -885,7 +889,7 @@ pub fn data(format: Format) -> Vec<MenuItem> {
             row_end("Validate", "", action::DATA_VALIDATE),
             row("Format", "", action::DATA_FORMAT),
             row("Minify", "", action::DATA_MINIFY),
-            row_end("Sort Keys", "", action::DATA_FORMAT),
+            row_end("Sort Keys", "", action::DATA_SORT_KEYS),
             row("Convert to JSON Lines", "", action::DATA_TO_JSONL),
             // No warning on this one, and the asymmetry is the point:
             // every JSON value has a YAML spelling, so this is the
@@ -920,9 +924,16 @@ pub fn data(format: Format) -> Vec<MenuItem> {
             row_end("Validate", "", action::DATA_VALIDATE),
             row("Convert to JSON", "", action::DATA_TO_JSON),
         ],
+        // The same warning YAML's rows carry, for the same reason: the `toml`
+        // crate parses into data, so a round trip drops every comment -- and,
+        // built without `preserve_order`, sorts the keys as well.
         Format::Toml => vec![
             row_end("Validate", "", action::DATA_VALIDATE),
-            row("Format", "", action::DATA_FORMAT),
+            row(
+                "Format",
+                "comments not kept, keys sorted",
+                action::DATA_FORMAT,
+            ),
         ],
         Format::Csv | Format::Tsv => vec![
             row("Report Shape", "", action::DATA_REPORT),
@@ -1371,7 +1382,7 @@ mod tests {
             ("note actions", action::NOTE_TITLE..action::NOTE_OUTLINE + 1),
             (
                 "data operations",
-                action::DATA_VALIDATE..action::DATA_COLUMN_TYPES + 1,
+                action::DATA_VALIDATE..action::DATA_SORT_KEYS + 1,
             ),
             (
                 "YAML conversions",
@@ -2343,17 +2354,31 @@ mod tests {
         // `bp_clipboard::apply` always returns `None` for these two -- the
         // shell is supposed to route them to `bp-data` instead, and the
         // menu row is the proof that routing actually happens.
-        let clips = [bp_clipboard::Entry::new(r#"{"b":1,"a":2}"#)];
+        //
+        // The fixture is spaced on purpose. Minify used to sort keys as a
+        // side effect, so compact-but-unsorted JSON counted as changed; now
+        // that `bp-data` keeps the author's order, compact JSON is already
+        // minified and rightly gets no row (the test below).
+        let clips = [bp_clipboard::Entry::new(r#"{"b": 1, "a": 2}"#)];
         let items = edit(&clips, false);
 
         assert!(
             items.iter().any(|i| i.label.contains("Pretty-Print JSON")),
-            "unsorted, compact JSON should offer to be pretty-printed"
+            "one-line JSON should offer to be pretty-printed"
         );
         assert!(
             items.iter().any(|i| i.label.contains("Minify JSON")),
-            "unsorted JSON minifies to a different (sorted) string"
+            "spaced JSON minifies to a different string"
         );
+    }
+
+    #[test]
+    fn already_minified_json_is_not_offered_minify() {
+        // A row that would change nothing is not offered -- and with key
+        // order kept, compact JSON in any order is already minified.
+        let clips = [bp_clipboard::Entry::new(r#"{"b":1,"a":2}"#)];
+        let items = edit(&clips, false);
+        assert!(items.iter().all(|i| !i.label.contains("Minify JSON")));
     }
 
     #[test]
