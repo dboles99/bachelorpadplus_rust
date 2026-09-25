@@ -477,7 +477,7 @@ pub fn plan(
         }
         Platform::Windows => {
             registry_values = windows::registry_values(app, selection);
-            // Named after the directory, not the application id: the id is a
+            // Both named after the directory, not the application id: the id is a
             // Linux identity (ADR-0032), and the file a Windows user saves
             // should keep the name it has always had.
             artefacts.push(Artefact {
@@ -486,7 +486,7 @@ pub fn plan(
                 kind: ArtefactKind::RegistryScript,
             });
             artefacts.push(Artefact {
-                relative_path: format!("{}-file-types-remove.reg", app.app_id),
+                relative_path: format!("{}-file-types-remove.reg", crate::APP_DIR),
                 contents: windows::unregister_script(&registry_values),
                 kind: ArtefactKind::UnregisterScript,
             });
