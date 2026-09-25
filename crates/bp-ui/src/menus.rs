@@ -331,6 +331,39 @@ fn arrives(phase: &str) -> MenuItem {
     planned(&format!("— not implemented yet ({phase})"))
 }
 
+/// The next row after `from` in direction `delta` that is enabled, wrapping
+/// at either end (`MenuNav.next` in `ui/menu.slint`, release plan M2-14).
+///
+/// `from` below zero means "nothing highlighted yet", so a step down lands
+/// on the first live row and a step up on the last. `from` itself when no
+/// row is live, and -1 for an empty menu -- a menu of readouts has nothing
+/// for Enter to choose, and the highlight must not pretend otherwise.
+pub(crate) fn next_live_row(enabled: &[bool], from: i32, delta: i32) -> i32 {
+    let n = enabled.len();
+    if n == 0 {
+        return -1;
+    }
+    let forward = delta >= 0;
+    let start = match usize::try_from(from) {
+        Ok(at) if at < n => at,
+        // Nothing highlighted: start just outside the end being moved from.
+        _ if forward => n - 1,
+        _ => 0,
+    };
+    let mut at = start;
+    for _ in 0..n {
+        at = if forward {
+            (at + 1) % n
+        } else {
+            (at + n - 1) % n
+        };
+        if enabled[at] {
+            return i32::try_from(at).unwrap_or(-1);
+        }
+    }
+    from
+}
+
 /// One past the last plain-paste clipboard id `CLIP_BASE` can produce.
 ///
 /// Bounded the same way `RECENT_BASE`'s window is bounded by `MAX_RECENT`:
@@ -1826,6 +1859,30 @@ mod tests {
         };
         assert!(!label(true).contains("does not say"), "{}", label(true));
         assert!(label(false).contains("does not say"), "{}", label(false));
+    }
+
+    #[test]
+    fn keyboard_movement_skips_greyed_rows_and_wraps() {
+        let rows = [false, true, false, true, false];
+        assert_eq!(
+            next_live_row(&rows, -1, 1),
+            1,
+            "first live row from nothing"
+        );
+        assert_eq!(
+            next_live_row(&rows, -1, -1),
+            3,
+            "last live row from nothing"
+        );
+        assert_eq!(next_live_row(&rows, 1, 1), 3);
+        assert_eq!(next_live_row(&rows, 3, 1), 1, "wraps past the bottom");
+        assert_eq!(next_live_row(&rows, 1, -1), 3, "wraps past the top");
+    }
+
+    #[test]
+    fn a_menu_with_nothing_live_highlights_nothing() {
+        assert_eq!(next_live_row(&[false, false], -1, 1), -1);
+        assert_eq!(next_live_row(&[], 0, 1), -1);
     }
 
     #[test]

@@ -32,7 +32,10 @@ Ctrl+G          Go to line
 Ctrl+D          Duplicate line
 Alt+Up / Down   Move line up / down
 Insert          Overwrite on / off
-Ctrl+,          Settings";
+Ctrl+,          Settings
+F10             Open the menu bar (arrows, Enter, Esc)
+Alt+F E V I O   File, Edit, View, Insert, Format
+Alt+D N S T H   Data, Note, Security, Tools, Help";
 
 /// Run `operation` at the caret, in either view.
 ///

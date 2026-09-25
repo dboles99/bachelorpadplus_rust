@@ -32,7 +32,7 @@
 // available to every component this file pulls in.
 import "../fonts/DejaVuSansMono.ttf";
 import { Palette as SystemPalette } from "std-widgets.slint";
-import { MenuLabel, MenuPopup } from "menu.slint";
+import { MenuLabel, MenuNav, MenuPopup } from "menu.slint";
 import { AboutSheet } from "about.slint";
 import { DialogSheet } from "dialog.slint";
 import { EditorSurface } from "editor_surface.slint";
@@ -46,8 +46,8 @@ import { EditorRow, MenuItem, Palette, SearchHit, SelectionBox, SettingRow, TabI
 import { SettingsSheet } from "settings.slint";
 
 // Re-exported because `slint-build` generates Rust types only for what the
-// compiled entry file exports. `bp-ui` names all seven.
-export { EditorRow, MenuItem, Palette, SearchHit, SelectionBox, SettingRow, TabInfo }
+// compiled entry file exports. `bp-ui` names all eight.
+export { EditorRow, MenuItem, MenuNav, Palette, SearchHit, SelectionBox, SettingRow, TabInfo }
 
 export component AppWindow inherits Window {
     title: "BachelorPad+";
@@ -353,6 +353,70 @@ export component AppWindow inherits Window {
     // owns its text, selection and undo stack and Rust cannot reach them.
     // Under the custom surface the opposite is true -- we own all three -- so
     // every row goes to Rust instead.
+    /// Open menu `index` (File is 0, Help 13, in bar order) with the
+    /// keyboard in it. One path for a click, F10, an Alt+letter and
+    /// Left/Right from the next menu, so they cannot behave differently
+    /// (release plan M2-14).
+    function open-menu(index: int) {
+        if (index == 0) {
+            file-menu.show();
+        } else if (index == 1) {
+            edit-menu.show();
+        } else if (index == 2) {
+            view-menu.show();
+        } else if (index == 3) {
+            insert-menu.show();
+        } else if (index == 4) {
+            format-menu.show();
+        } else if (index == 5) {
+            data-menu.show();
+        } else if (index == 6) {
+            note-menu.show();
+        } else if (index == 7) {
+            notebook-menu.show();
+        } else if (index == 8) {
+            organize-menu.show();
+        } else if (index == 9) {
+            research-menu.show();
+        } else if (index == 10) {
+            run-menu.show();
+        } else if (index == 11) {
+            security-menu.show();
+        } else if (index == 12) {
+            tools-menu.show();
+        } else if (index == 13) {
+            help-menu.show();
+        }
+    }
+
+    /// The menu `delta` places from `index` along the bar, wrapping, and
+    /// skipping the planned menus (7 to 10) while they are off the bar.
+    function menu-beside(index: int, delta: int) -> int {
+        let next = Math.mod(index + delta + 14, 14);
+        if (!root.show-planned-menus && next >= 7 && next <= 10) {
+            return delta > 0 ? 11 : 6;
+        }
+        return next;
+    }
+
+    /// The menu an Alt+letter mnemonic opens, or -1. Asked by both editor
+    /// views' own key handlers as well as the window's bindings: an editor
+    /// with the keyboard takes Alt chords before the window's bindings see
+    /// them, the same way it took Alt+Up.
+    function mnemonic(text: string) -> int {
+        if (text == "f" || text == "F") { return 0; }
+        if (text == "e" || text == "E") { return 1; }
+        if (text == "v" || text == "V") { return 2; }
+        if (text == "i" || text == "I") { return 3; }
+        if (text == "o" || text == "O") { return 4; }
+        if (text == "d" || text == "D") { return 5; }
+        if (text == "n" || text == "N") { return 6; }
+        if (text == "s" || text == "S") { return 11; }
+        if (text == "t" || text == "T") { return 12; }
+        if (text == "h" || text == "H") { return 13; }
+        return -1;
+    }
+
     function dispatch(action: int) {
         if (root.use-editor-view) {
             root.menu-action(action);
@@ -498,6 +562,76 @@ export component AppWindow inherits Window {
                 root.cycle-tab(false);
             }
         }
+        // The menu bar from the keyboard (release plan M2-14): F10 opens
+        // File, and Alt with a menu's letter opens that menu -- the letters
+        // Windows Notepad users already have in their fingers where the
+        // menus overlap (File, Edit, Format as O, View, Help).
+        KeyBinding {
+            keys: @keys(F10);
+            activated => {
+                root.open-menu(0);
+            }
+        }
+        KeyBinding {
+            keys: @keys(Alt + "f");
+            activated => {
+                root.open-menu(0);
+            }
+        }
+        KeyBinding {
+            keys: @keys(Alt + "e");
+            activated => {
+                root.open-menu(1);
+            }
+        }
+        KeyBinding {
+            keys: @keys(Alt + "v");
+            activated => {
+                root.open-menu(2);
+            }
+        }
+        KeyBinding {
+            keys: @keys(Alt + "i");
+            activated => {
+                root.open-menu(3);
+            }
+        }
+        KeyBinding {
+            keys: @keys(Alt + "o");
+            activated => {
+                root.open-menu(4);
+            }
+        }
+        KeyBinding {
+            keys: @keys(Alt + "d");
+            activated => {
+                root.open-menu(5);
+            }
+        }
+        KeyBinding {
+            keys: @keys(Alt + "n");
+            activated => {
+                root.open-menu(6);
+            }
+        }
+        KeyBinding {
+            keys: @keys(Alt + "s");
+            activated => {
+                root.open-menu(11);
+            }
+        }
+        KeyBinding {
+            keys: @keys(Alt + "t");
+            activated => {
+                root.open-menu(12);
+            }
+        }
+        KeyBinding {
+            keys: @keys(Alt + "h");
+            activated => {
+                root.open-menu(13);
+            }
+        }
         // Settings (bp-ui/src/menus.rs id 230), on the key most desktop
         // editors use for it.
         KeyBinding {
@@ -531,6 +665,8 @@ export component AppWindow inherits Window {
             Rectangle {
                 height: 28px;
                 background: Palette.panel;
+                accessible-role: navigation;
+                accessible-label: "Menu bar";
                 HorizontalLayout {
                     padding-left: 4px;
                     alignment: start;
@@ -538,89 +674,89 @@ export component AppWindow inherits Window {
                     file-label := MenuLabel {
                         label: "File";
                         clicked => {
-                            file-menu.show();
+                            root.open-menu(0);
                         }
                     }
                     edit-label := MenuLabel {
                         label: "Edit";
                         clicked => {
-                            edit-menu.show();
+                            root.open-menu(1);
                         }
                     }
                     view-label := MenuLabel {
                         label: "View";
                         clicked => {
-                            view-menu.show();
+                            root.open-menu(2);
                         }
                     }
                     insert-label := MenuLabel {
                         label: "Insert";
                         clicked => {
-                            insert-menu.show();
+                            root.open-menu(3);
                         }
                     }
                     format-label2 := MenuLabel {
                         label: "Format";
                         clicked => {
-                            format-menu.show();
+                            root.open-menu(4);
                         }
                     }
                     data-label := MenuLabel {
                         label: "Data";
                         clicked => {
-                            data-menu.show();
+                            root.open-menu(5);
                         }
                     }
                     note-label := MenuLabel {
                         label: "Note";
                         clicked => {
-                            note-menu.show();
+                            root.open-menu(6);
                         }
                     }
                     notebook-label := MenuLabel {
                         label: "Notebook";
                         shown: root.show-planned-menus;
                         clicked => {
-                            notebook-menu.show();
+                            root.open-menu(7);
                         }
                     }
                     organize-label := MenuLabel {
                         label: "Organize";
                         shown: root.show-planned-menus;
                         clicked => {
-                            organize-menu.show();
+                            root.open-menu(8);
                         }
                     }
                     research-label := MenuLabel {
                         label: "Research";
                         shown: root.show-planned-menus;
                         clicked => {
-                            research-menu.show();
+                            root.open-menu(9);
                         }
                     }
                     run-label := MenuLabel {
                         label: "Run";
                         shown: root.show-planned-menus;
                         clicked => {
-                            run-menu.show();
+                            root.open-menu(10);
                         }
                     }
                     security-label := MenuLabel {
                         label: "Security";
                         clicked => {
-                            security-menu.show();
+                            root.open-menu(11);
                         }
                     }
                     tools-label := MenuLabel {
                         label: "Tools";
                         clicked => {
-                            tools-menu.show();
+                            root.open-menu(12);
                         }
                     }
                     help-label := MenuLabel {
                         label: "Help";
                         clicked => {
-                            help-menu.show();
+                            root.open-menu(13);
                         }
                     }
                 }
@@ -632,6 +768,8 @@ export component AppWindow inherits Window {
             Rectangle {
                 height: 32px;
                 background: Palette.shell;
+                accessible-role: tab-list;
+                accessible-label: "Open documents";
                 HorizontalLayout {
                     padding-left: 6px;
                     spacing: 2px;
@@ -679,6 +817,8 @@ export component AppWindow inherits Window {
                 // `forward-focus`, which is the same constraint the find bar
                 // is collapsed rather than conditional for.
                 surface := EditorSurface {
+                    accessible-role: text-input;
+                    accessible-label: "Document";
                     visible: root.use-editor-view;
                     rows: root.editor-rows;
                     selection: root.editor-selection;
@@ -688,6 +828,10 @@ export component AppWindow inherits Window {
                     font-size: root.font-size;
 
                     key(text, control, shift, alt) => {
+                        if (alt && !control && root.mnemonic(text) >= 0) {
+                            root.open-menu(root.mnemonic(text));
+                            return true;
+                        }
                         return root.editor-key(text, control, shift, alt);
                     }
                     pressed(row, column, extend) => {
@@ -737,6 +881,7 @@ export component AppWindow inherits Window {
                         }
 
                         editor := TextInput {
+                            accessible-label: "Document";
                             text <=> root.doc-text;
                             // How far Page Up and Page Down move. Unset, it is
                             // zero, and `TextInput` refuses a page of zero --
@@ -808,6 +953,10 @@ export component AppWindow inherits Window {
                                 // and left the line where it was. Caught here,
                                 // before the widget acts on the key.
                                 if (event.modifiers.alt && !event.modifiers.control && !event.modifiers.shift) {
+                                    if (root.mnemonic(event.text) >= 0) {
+                                        root.open-menu(root.mnemonic(event.text));
+                                        return accept;
+                                    }
                                     if (event.text == Key.UpArrow) {
                                         root.dispatch(96);
                                         return accept;
@@ -973,6 +1122,12 @@ export component AppWindow inherits Window {
         chosen(a) => {
             root.dispatch(a);
         }
+        neighbour(delta) => {
+            root.open-menu(root.menu-beside(0, delta));
+        }
+        dismissed => {
+            root.focus-editor();
+        }
     }
     edit-menu := MenuPopup {
         x: edit-label.x + 4px;
@@ -981,6 +1136,12 @@ export component AppWindow inherits Window {
         items: root.edit-items;
         chosen(a) => {
             root.dispatch(a);
+        }
+        neighbour(delta) => {
+            root.open-menu(root.menu-beside(1, delta));
+        }
+        dismissed => {
+            root.focus-editor();
         }
     }
     view-menu := MenuPopup {
@@ -991,6 +1152,12 @@ export component AppWindow inherits Window {
         chosen(a) => {
             root.dispatch(a);
         }
+        neighbour(delta) => {
+            root.open-menu(root.menu-beside(2, delta));
+        }
+        dismissed => {
+            root.focus-editor();
+        }
     }
     insert-menu := MenuPopup {
         x: insert-label.x + 4px;
@@ -999,6 +1166,12 @@ export component AppWindow inherits Window {
         items: root.insert-items;
         chosen(a) => {
             root.dispatch(a);
+        }
+        neighbour(delta) => {
+            root.open-menu(root.menu-beside(3, delta));
+        }
+        dismissed => {
+            root.focus-editor();
         }
     }
     format-menu := MenuPopup {
@@ -1009,6 +1182,12 @@ export component AppWindow inherits Window {
         chosen(a) => {
             root.dispatch(a);
         }
+        neighbour(delta) => {
+            root.open-menu(root.menu-beside(4, delta));
+        }
+        dismissed => {
+            root.focus-editor();
+        }
     }
     data-menu := MenuPopup {
         x: data-label.x + 4px;
@@ -1017,6 +1196,12 @@ export component AppWindow inherits Window {
         items: root.data-items;
         chosen(a) => {
             root.dispatch(a);
+        }
+        neighbour(delta) => {
+            root.open-menu(root.menu-beside(5, delta));
+        }
+        dismissed => {
+            root.focus-editor();
         }
     }
     note-menu := MenuPopup {
@@ -1027,6 +1212,12 @@ export component AppWindow inherits Window {
         chosen(a) => {
             root.dispatch(a);
         }
+        neighbour(delta) => {
+            root.open-menu(root.menu-beside(6, delta));
+        }
+        dismissed => {
+            root.focus-editor();
+        }
     }
     notebook-menu := MenuPopup {
         x: notebook-label.x + 4px;
@@ -1035,6 +1226,12 @@ export component AppWindow inherits Window {
         items: root.notebook-items;
         chosen(a) => {
             root.dispatch(a);
+        }
+        neighbour(delta) => {
+            root.open-menu(root.menu-beside(7, delta));
+        }
+        dismissed => {
+            root.focus-editor();
         }
     }
     organize-menu := MenuPopup {
@@ -1045,6 +1242,12 @@ export component AppWindow inherits Window {
         chosen(a) => {
             root.dispatch(a);
         }
+        neighbour(delta) => {
+            root.open-menu(root.menu-beside(8, delta));
+        }
+        dismissed => {
+            root.focus-editor();
+        }
     }
     research-menu := MenuPopup {
         x: research-label.x + 4px;
@@ -1053,6 +1256,12 @@ export component AppWindow inherits Window {
         items: root.research-items;
         chosen(a) => {
             root.dispatch(a);
+        }
+        neighbour(delta) => {
+            root.open-menu(root.menu-beside(9, delta));
+        }
+        dismissed => {
+            root.focus-editor();
         }
     }
     run-menu := MenuPopup {
@@ -1063,6 +1272,12 @@ export component AppWindow inherits Window {
         chosen(a) => {
             root.dispatch(a);
         }
+        neighbour(delta) => {
+            root.open-menu(root.menu-beside(10, delta));
+        }
+        dismissed => {
+            root.focus-editor();
+        }
     }
     security-menu := MenuPopup {
         x: security-label.x + 4px;
@@ -1072,6 +1287,12 @@ export component AppWindow inherits Window {
         chosen(a) => {
             root.dispatch(a);
         }
+        neighbour(delta) => {
+            root.open-menu(root.menu-beside(11, delta));
+        }
+        dismissed => {
+            root.focus-editor();
+        }
     }
     tools-menu := MenuPopup {
         x: tools-label.x + 4px;
@@ -1080,6 +1301,12 @@ export component AppWindow inherits Window {
         items: root.tools-items;
         chosen(a) => {
             root.dispatch(a);
+        }
+        neighbour(delta) => {
+            root.open-menu(root.menu-beside(12, delta));
+        }
+        dismissed => {
+            root.focus-editor();
         }
     }
     // The tab strip's context menu. `x` is set from the tab that was clicked
@@ -1105,6 +1332,12 @@ export component AppWindow inherits Window {
         items: root.help-items;
         chosen(a) => {
             root.dispatch(a);
+        }
+        neighbour(delta) => {
+            root.open-menu(root.menu-beside(13, delta));
+        }
+        dismissed => {
+            root.focus-editor();
         }
     }
 
