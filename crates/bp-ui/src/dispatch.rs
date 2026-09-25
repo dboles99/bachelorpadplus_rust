@@ -31,6 +31,33 @@ Ctrl+0          Reset zoom
 Ctrl+D          Duplicate line (--editor-view)
 Alt+Up / Down   Move line up / down (--editor-view)";
 
+/// Show `dir` in the desktop's file manager.
+///
+/// Made first if it is missing: a user sent to the configuration folder
+/// before ever saving a setting would otherwise be told it does not exist,
+/// which is true and no help. Launched and not waited for -- the file
+/// manager is the user's, and its exit status says nothing about us -- but
+/// reaped on a thread of its own, so it leaves no zombie behind on Unix.
+fn reveal(dir: &std::path::Path) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("could not make {}: {e}", dir.display()))?;
+    let opener = if cfg!(windows) {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    let mut child = std::process::Command::new(opener)
+        .arg(dir)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("could not open {} with {opener}: {e}", dir.display()))?;
+    std::thread::spawn(move || child.wait());
+    Ok(())
+}
+
 /// Open a file, starting in a sensible directory.
 pub(crate) fn pick_file(state: &crate::state::AppState) -> Option<PathBuf> {
     rfd::FileDialog::new()
@@ -639,6 +666,43 @@ pub fn handle_menu_action(
         action::ENCODING_UTF8 => state.borrow_mut().set_encoding(Encoding::Utf8),
         action::ENCODING_UTF8_BOM => state.borrow_mut().set_encoding(Encoding::Utf8Bom),
         action::ENCODING_WINDOWS_1252 => state.borrow_mut().set_encoding(Encoding::Windows1252),
+
+        action::SETTINGS => {
+            let rows = {
+                let mut s = state.borrow_mut();
+                let sheet = crate::settings_sheet::Sheet::open(&s);
+                let rows = sheet.rows();
+                s.settings_sheet = Some(sheet);
+                rows
+            };
+            ui.set_setting_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
+            ui.set_settings_open(true);
+            ui.invoke_focus_settings();
+            return None;
+        }
+        action::OPEN_LOG_FOLDER => {
+            let dir = state.borrow().log_dir.clone();
+            let outcome = match dir {
+                Some(dir) => reveal(&dir),
+                None => Err("this system names no folder for logs".to_owned()),
+            };
+            state.borrow_mut().error = outcome.err();
+            push = PushText::No;
+        }
+        action::OPEN_CONFIG_FOLDER => {
+            let file = state
+                .borrow()
+                .settings
+                .as_ref()
+                .map(|s| s.path.clone())
+                .or_else(bp_config::config_path);
+            let outcome = match file.as_deref().and_then(std::path::Path::parent) {
+                Some(dir) => reveal(dir),
+                None => Err("this system names no folder for configuration".to_owned()),
+            };
+            state.borrow_mut().error = outcome.err();
+            push = PushText::No;
+        }
 
         action::SHORTCUTS => dialog::inform(ui, "Keyboard shortcuts", SHORTCUTS),
         action::ABOUT => dialog::inform(

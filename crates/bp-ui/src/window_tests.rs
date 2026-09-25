@@ -698,3 +698,117 @@ fn picking_the_system_theme_is_saved_as_following_it() {
     let written = std::fs::read_to_string(&path).unwrap();
     assert!(written.contains("theme = \"System\""), "{written}");
 }
+
+// --- the Settings sheet and the menu bar (release plan M1-03, M1-05) -----
+
+/// The window wired as `run_with` wires it for menus and the Settings
+/// sheet, over `state`.
+fn wired(
+    state: crate::state::AppState,
+) -> (AppWindow, Rc<std::cell::RefCell<crate::state::AppState>>) {
+    let ui = window();
+    answer_through_dialog(&ui);
+    let cell = Rc::new(std::cell::RefCell::new(state));
+    let menu_cell = Rc::clone(&cell);
+    let weak = ui.as_weak();
+    ui.on_menu_action(move |id| {
+        if let Some(ui) = weak.upgrade() {
+            let _ = crate::dispatch::handle_menu_action(&ui, &menu_cell, id);
+        }
+    });
+    crate::bind_settings(&ui, &cell);
+    crate::refresh(&ui, &mut cell.borrow_mut(), crate::state::PushText::Yes);
+    ui.invoke_focus_editor();
+    (ui, cell)
+}
+
+fn setting(ui: &AppWindow, label: &str) -> String {
+    use slint::Model as _;
+    let rows = ui.get_setting_rows();
+    (0..rows.row_count())
+        .filter_map(|i| rows.row_data(i))
+        .find(|r| r.label.as_str() == label)
+        .map(|r| r.value.to_string())
+        .unwrap_or_else(|| panic!("no setting {label:?}"))
+}
+
+#[test]
+fn ctrl_comma_opens_settings_and_it_holds_the_keyboard() {
+    let (ui, _cell) = wired(crate::state::AppState::new());
+    let before = ui.get_doc_text();
+
+    chord(&ui, Key::Control, ",");
+    assert!(ui.get_settings_open(), "Ctrl+, did not open Settings");
+    type_text(&ui, "typed");
+
+    assert_eq!(ui.get_doc_text(), before, "typing got past the sheet");
+}
+
+#[test]
+fn the_arrows_choose_and_change_a_setting_and_escape_changes_nothing() {
+    let (ui, cell) = wired(crate::state::AppState::new());
+    chord(&ui, Key::Control, ",");
+    assert_eq!(ui.get_settings_selected(), 0);
+
+    // Down twice reaches Word wrap; Right turns it on -- in the sheet only.
+    press(&ui, Key::DownArrow);
+    press(&ui, Key::DownArrow);
+    assert_eq!(ui.get_settings_selected(), 2);
+    assert_eq!(setting(&ui, "Word wrap"), "Off");
+    press(&ui, Key::RightArrow);
+    assert_eq!(setting(&ui, "Word wrap"), "On");
+    assert!(!cell.borrow().wrap_text, "a step reached the live state");
+
+    press(&ui, Key::Escape);
+    assert!(!ui.get_settings_open());
+    assert!(!cell.borrow().wrap_text, "Escape kept the change");
+    assert!(cell.borrow().settings_sheet.is_none());
+}
+
+#[test]
+fn enter_saves_what_changed_into_config_and_nothing_else() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "# mine\n").unwrap();
+    let loaded = bp_config::load_from(
+        Some(&path),
+        &bp_config::Env::default(),
+        &["--font-size".to_owned(), "20".to_owned()],
+    );
+    let mut state = crate::state::AppState::new();
+    state.configure(&loaded.config, loaded.path.clone());
+    let (ui, cell) = wired(state);
+
+    chord(&ui, Key::Control, ",");
+    press(&ui, Key::DownArrow);
+    press(&ui, Key::DownArrow);
+    press(&ui, Key::Space);
+    press(&ui, Key::Return);
+
+    assert!(!ui.get_settings_open());
+    assert!(cell.borrow().wrap_text);
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.starts_with("# mine"), "{written}");
+    assert!(written.contains("word_wrap = true"), "{written}");
+    for untouched in ["font_size", "theme", "tab_width", "default_profile"] {
+        assert!(
+            !written.contains(untouched),
+            "{untouched} was written without being changed: {written}"
+        );
+    }
+}
+
+#[test]
+fn the_planned_menus_are_off_the_bar_unless_asked_for() {
+    let (ui, _) = wired(crate::state::AppState::new());
+    assert!(!ui.get_show_planned_menus());
+
+    let config = bp_config::Config {
+        show_planned_menus: true,
+        ..bp_config::Config::default()
+    };
+    let mut state = crate::state::AppState::new();
+    state.configure(&config, None);
+    let (ui, _) = wired(state);
+    assert!(ui.get_show_planned_menus());
+}

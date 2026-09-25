@@ -21,7 +21,7 @@
 import { ScrollView } from "std-widgets.slint";
 import { Palette } from "types.slint";
 
-component SheetButton inherits Rectangle {
+export component SheetButton inherits Rectangle {
     in property <string> label;
     /// Where Enter and Space land. Drawn in the accent, so a keyboard user
     /// can see which answer they are about to give before giving it.

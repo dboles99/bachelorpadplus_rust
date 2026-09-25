@@ -9,9 +9,14 @@ import { MenuItem, Palette } from "types.slint";
 export component MenuLabel inherits Rectangle {
     in property <string> label;
     in property <bool> open;
+    /// False takes the label off the bar. Zero wide rather than inside an
+    /// `if`, because each menu popup is placed from its label's `x`, and an
+    /// element inside an `if` cannot be named from outside it.
+    in property <bool> shown: true;
     callback clicked();
     height: 26px;
-    width: txt.preferred-width + 22px;
+    width: root.shown ? txt.preferred-width + 22px : 0px;
+    visible: root.shown;
     background: root.open || ta.has-hover ? Palette.edge : transparent;
 
     txt := Text {
