@@ -269,12 +269,6 @@ pub(crate) fn pick_file(state: &state::AppState) -> Option<PathBuf> {
     dispatch::pick_file(state)
 }
 
-/// Choose a save location, starting in a sensible directory with the
-/// ADR-0003 filename suggested.
-pub(crate) fn pick_save_path(state: &state::AppState, id: DocumentId) -> Option<PathBuf> {
-    dispatch::pick_save_path(state, id)
-}
-
 /// Whatever the OS clipboard holds, if it holds text.
 /// Read the OS clipboard, if it holds text.
 ///
@@ -488,13 +482,18 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
         });
     }
 
-    wire!(on_save_as_document, |s| {
-        if let Some(id) = s.workspace.active_id()
-            && let Some(path) = pick_save_path(&s, id)
-        {
-            s.save_document(id, Some(path));
-        }
-    });
+    {
+        let cell = Rc::clone(&state);
+        let weak = ui.as_weak();
+        ui.on_save_as_document(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let id = cell.borrow().workspace.active_id();
+            match id {
+                Some(id) => save_as(&ui, &cell, id),
+                None => refresh(&ui, &mut cell.borrow_mut(), state::PushText::Yes),
+            }
+        });
+    }
 
     wire!(on_cycle_theme, |s| {
         s.theme = s.theme.next();
@@ -1334,8 +1333,7 @@ fn save_with_prompt(
 ) {
     let changed = cell.borrow().would_overwrite_external_change(id);
     if !changed {
-        let result = save_or_pick(&mut cell.borrow_mut(), id);
-        then(ui, result);
+        save_or_pick(ui, cell, id, then);
         return;
     }
 
@@ -1357,29 +1355,107 @@ fn save_with_prompt(
             cancel: 1,
         },
         move |ui, chosen| {
-            let result = if chosen == 0 {
-                save_or_pick(&mut cell.borrow_mut(), id)
+            if chosen == 0 {
+                save_or_pick(ui, &cell, id, then);
             } else {
                 // Not a failure -- a refusal. Nothing was written either
                 // way, so the caller must not treat it as saved.
-                state::SaveResult::NeedsPath
-            };
-            then(ui, result);
+                then(ui, state::SaveResult::NeedsPath);
+            }
         },
     );
 }
 
 /// Save to the document's own path, or ask for one if it has none.
-fn save_or_pick(state: &mut state::AppState, id: DocumentId) -> state::SaveResult {
-    match state.save_document(id, None) {
-        state::SaveResult::NeedsPath => match dispatch::pick_save_path(state, id) {
-            Some(path) => state.save_document(id, Some(path)),
-            // The user dismissed the dialog. Nothing was written, and the
-            // caller must not treat that as saved.
-            None => state::SaveResult::NeedsPath,
+fn save_or_pick(
+    ui: &AppWindow,
+    cell: &Rc<RefCell<state::AppState>>,
+    id: DocumentId,
+    then: impl FnOnce(&AppWindow, state::SaveResult) + 'static,
+) {
+    let (result, path) = {
+        let mut s = cell.borrow_mut();
+        match s.save_document(id, None) {
+            state::SaveResult::NeedsPath => match dispatch::pick_save_path(&s, id) {
+                Some(path) => (s.save_document(id, Some(path.clone())), Some(path)),
+                // The user dismissed the dialog. Nothing was written, and
+                // the caller must not treat that as saved.
+                None => (state::SaveResult::NeedsPath, None),
+            },
+            other => (other, None),
+        }
+    };
+    offer_utf8(ui, cell, id, result, path, then);
+}
+
+/// Save As: ask where, save there, and refresh.
+pub(crate) fn save_as(ui: &AppWindow, cell: &Rc<RefCell<state::AppState>>, id: DocumentId) {
+    let chosen = dispatch::pick_save_path(&cell.borrow(), id);
+    let Some(path) = chosen else {
+        refresh(ui, &mut cell.borrow_mut(), state::PushText::Yes);
+        return;
+    };
+    let result = cell.borrow_mut().save_document(id, Some(path.clone()));
+    offer_utf8(ui, cell, id, result, Some(path), refresh_after(cell));
+}
+
+/// If a save failed only because the document's encoding cannot hold one of
+/// its characters, offer to save it as UTF-8 instead; otherwise pass the
+/// outcome straight on.
+///
+/// `path` is where the failed save was going (`None` for the document's own
+/// path), so the retry goes to the same place rather than asking again.
+/// Declining puts the selection on the character in the way when the
+/// document is the one on screen, so the user can see what to change.
+fn offer_utf8(
+    ui: &AppWindow,
+    cell: &Rc<RefCell<state::AppState>>,
+    id: DocumentId,
+    result: state::SaveResult,
+    path: Option<PathBuf>,
+    then: impl FnOnce(&AppWindow, state::SaveResult) + 'static,
+) {
+    let state::SaveResult::Unrepresentable(what) = result else {
+        then(ui, result);
+        return;
+    };
+    let name = cell.borrow().display_name(id);
+    let encoding = what.encoding.label();
+    let cell = Rc::clone(cell);
+    dialog::ask(
+        ui,
+        dialog::Dialog {
+            title: format!("Can't save as {encoding}"),
+            body: format!(
+                "{name} contains \"{}\" (U+{:04X}), which {encoding} has no \
+                 form for.\n\n\
+                 Saving as UTF-8 keeps every character. A program that reads \
+                 only {encoding} may show some of them wrongly.",
+                what.character,
+                u32::from(what.character),
+            ),
+            buttons: vec!["Save as UTF-8".to_owned(), "Cancel".to_owned()],
+            default: 0,
+            cancel: 1,
         },
-        other => other,
-    }
+        move |ui, chosen| {
+            if chosen == 0 {
+                let result = {
+                    let mut s = cell.borrow_mut();
+                    s.set_encoding_of(id, bp_core::Encoding::Utf8);
+                    s.save_document(id, path)
+                };
+                then(ui, result);
+                return;
+            }
+            let on_screen = cell.borrow().workspace.active_id() == Some(id);
+            if on_screen {
+                let at = what.byte_offset..what.byte_offset + what.character.len_utf8();
+                dispatch::select(ui, &mut cell.borrow_mut(), &at);
+            }
+            then(ui, result);
+        },
+    );
 }
 
 /// Close a tab, asking first if it holds unsaved work. `then` gets whether

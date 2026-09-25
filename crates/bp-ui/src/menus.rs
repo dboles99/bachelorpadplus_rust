@@ -73,12 +73,16 @@ pub mod action {
     pub const ENCODING_UTF8_BOM: i32 = 43;
 
     /// Indentation, in the Format block: it is a property of the text, like
-    /// the line ending and the encoding beside it. 48 and 49 are free.
+    /// the line ending and the encoding beside it.
     pub const INDENT_TABS: i32 = 44;
     pub const INDENT_SPACES: i32 = 45;
     pub const TAB_WIDTH_2: i32 = 46;
     pub const TAB_WIDTH_4: i32 = 47;
     pub const TAB_WIDTH_8: i32 = 48;
+    /// The third encoding row (release plan M1-10), at the Format block's
+    /// last free id rather than beside the other two at 42-43, which have no
+    /// neighbour free. The Format block is now full.
+    pub const ENCODING_WINDOWS_1252: i32 = 49;
 
     pub const SHORTCUTS: i32 = 50;
     pub const ABOUT: i32 = 51;
@@ -622,12 +626,21 @@ pub fn format(encoding: Encoding, line_ending: LineEnding, indent: Indent) -> Ve
             )
         },
         toggle("UTF-8", encoding == Encoding::Utf8, action::ENCODING_UTF8),
+        toggle(
+            "UTF-8 with BOM",
+            encoding == Encoding::Utf8Bom,
+            action::ENCODING_UTF8_BOM,
+        ),
+        // What Notepad called "ANSI" on a Western-European Windows. Offered
+        // so a file opened in it can be saved back the way it came, and so a
+        // UTF-8 document can be written for a program that reads nothing
+        // else -- refused, with the reason, if its text does not fit.
         MenuItem {
             separator_after: true,
             ..toggle(
-                "UTF-8 with BOM",
-                encoding == Encoding::Utf8Bom,
-                action::ENCODING_UTF8_BOM,
+                "Windows-1252",
+                encoding == Encoding::Windows1252,
+                action::ENCODING_WINDOWS_1252,
             )
         },
         toggle("Indent with Tabs", !indent.spaces, action::INDENT_TABS),
@@ -2006,6 +2019,21 @@ mod tests {
             .find(|i| i.action == action::TOGGLE_GUTTER)
             .unwrap();
         assert!(!gutter.label.starts_with('✓'));
+    }
+
+    #[test]
+    fn a_windows_1252_document_ticks_its_own_row_and_no_utf8_one() {
+        // Before the row existed, a document opened as Windows-1252 showed
+        // neither encoding ticked, which reads as "no encoding at all".
+        let items = format(Encoding::Windows1252, LineEnding::CrLf, Indent::default());
+        let ticked: Vec<&str> = items
+            .iter()
+            .filter(|i| i.label.starts_with('✓'))
+            .map(|i| i.label.as_str())
+            .filter(|l| l.contains("UTF") || l.contains("1252"))
+            .collect();
+        assert_eq!(ticked.len(), 1, "{ticked:?}");
+        assert!(ticked[0].contains("Windows-1252"));
     }
 
     #[test]
