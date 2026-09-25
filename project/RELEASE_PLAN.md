@@ -220,7 +220,33 @@ Goal: the default view is a complete Notepad; nothing blocks; the release surfac
 - **M1-10 done.** Library: the cp1252 table and the load fallback. Shell: a Format ▸ Windows-1252 row that refuses text it cannot hold, naming the character and line, and a save that writes nothing and offers "Save as UTF-8" rather than a `?`. Not yet run on Windows.
 - **M1-15 done**, using the name's date, then birth time, then last write. When both timestamps exist the earlier wins, because a Windows copy resets the birth time.
 - **M1-21 half done.** Fenced code is out of the outline. Indented code (four columns) is too, which misses a heading indented inside a list item. The X11 "unknown" row is not done.
-- **M1-03 persistence done; the Settings dialog is not.** View and Format choices are saved into the user's own `config.toml` with comments kept, and only what changed is written, so a `--font-size` is never made permanent. The new settings (`clipboard_record_other_programs`, `editable_limit_mib`, `default_profile`, `editor_view`) take effect from the file. Next: `Tools ▸ Settings…` on the sheet pattern, then M1-05 behind `show_planned_menus`.
+- **M1-03 done.** View and Format choices are saved into the user's own `config.toml` with comments kept, and only what changed is written, so a `--font-size` is never made permanent. The new settings take effect from the file. `Tools ▸ Settings…` (Ctrl+,) is a sheet that edits a draft; Save writes only what the draft changed.
+
+**Progress (2026-09-25, session 7, continued).** Also landed, each through window tests that were seen to fail first where a bug was involved:
+- **M1-02 done.** About is a sheet hosting `AboutSlint` (ADR-0031), on a backing in Slint's own palette. It shows the version, the commit and whether it had local changes (`build.rs`), the renderer as actually chosen, both licences, and Notices.
+- **M1-04 done.** The default view reads `TextInput`'s caret (bytes) into the editor (characters) via `Buffer::{byte_to_char, char_to_byte}`, so it has Ln/Col, Go to Line, Insert Date/Time, Duplicate Line and Move Line Up/Down. Three bugs were fixed on the way:
+  - Find's selection drifted after accented text in the default view.
+  - Alt+Up and Alt+Down never reached their bindings.
+  - The caret report would have panicked inside `refresh`.
+- **M1-05 done.** Notebook, Organize, Research and Run are behind `show_planned_menus`. There is no planned row or "not implemented" trailer in any release menu, and no menu ends on a divider. Tools is live: Settings, Open Log Folder, Open Config Folder. Also fixed: `dispatch` handed the focus back to the editor after every menu action, so a question opened from a menu lost the keyboard.
+- **M1-07 part one.** Find in Files runs on `worker::Background` (a generation number, a stop flag, results over a channel) and closing the panel stops it. **Still to move:** saves, checkpoint writes and hashing, with the generation check (`a_save_that_finishes_after_more_typing_keeps_the_document_dirty`). M1-08 waits on that.
+- **M1-11 done.** Open takes several files; Ctrl+O now knows an encrypted file (it used to open one as a plain tab); Ctrl+Tab and Ctrl+Shift+Tab.
+- **M1-13 done.**
+  - The release profile uses thin LTO, one codegen unit, stripped symbols and unwind; the toolchain is pinned to 1.94.1; Windows builds with `+crt-static`; Slint and arboard features are trimmed.
+  - The binary is 26.2 MB, down from 38.3 MB (`artifacts/benchmarks/2026-09-25-release-size.md`).
+  - Not done:
+    - `--remap-path-prefix` needs the release script (M3), because cargo cannot expand environment variables in config.
+    - The gate does not build release yet.
+    - A stripped binary's crash report shows no frames unless the symbols sit beside it.
+- **M1-16 done.** The path and any notice share the status line; a notice never replaces the path.
+- **M1-17 done.** Save As suggests a free name, and File ▸ Save as New Revision exists.
+- **M1-19 done (store half).** `bp_history::ProfileStore` keeps each file's profile under the state directory, keyed by a digest of the canonical path, and the shell restores it on open, unlock and recovery and carries it on Save As. The `.bpadx` header half is not done.
+- **M1-21 done.** Follow System says when the desktop does not report light or dark.
+- The flaky `bp-platform` proptest was a test bug: its strategy generated reserved names such as `aux`. Fixed.
+
+**Left in M1:**
+- Blocked on the owner: M1-06 (U3), M1-09 (D6), M1-14 (the copyright holder), M1-18 (U5).
+- Unblocked: M1-07 part two and M1-08, M1-12 (Ctrl+S end-to-end and the smoke script), M1-20 (zeroise on close, and the security model note), M1-22 (records sweep).
 
 ### M2 — Platform integration. Target: 2–3 weeks. Splits by OS.
 
