@@ -1131,3 +1131,20 @@ fn ctrl_s_over_a_file_changed_on_disk_asks_and_escape_writes_nothing() {
     );
     assert!(ui.get_is_dirty());
 }
+
+#[test]
+fn line_on_the_command_line_puts_the_caret_there_in_the_default_view() {
+    let (ui, _cell) = wired_with(&numbered(100));
+    crate::start_at_line(&ui, &_cell, std::num::NonZeroUsize::new(42).unwrap());
+    type_text(&ui, "#");
+    assert_eq!(line_of(&ui, '#'), 42);
+}
+
+#[test]
+fn a_line_past_the_end_lands_on_the_last_and_says_so() {
+    let (ui, cell) = wired_with(&numbered(10));
+    crate::start_at_line(&ui, &cell, std::num::NonZeroUsize::new(500).unwrap());
+    let notice = cell.borrow().error.clone().unwrap_or_default();
+    assert!(notice.contains("--line 500"), "{notice}");
+    assert!(ui.get_status_notice().contains("--line 500"));
+}

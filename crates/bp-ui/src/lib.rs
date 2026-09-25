@@ -346,6 +346,8 @@ pub struct RunOptions {
     pub startup_notice: Option<String>,
     /// Files named on the command line, opened at startup (specs.md §19).
     pub files: Vec<PathBuf>,
+    /// `--line N`: where the caret starts in the file opened last.
+    pub line: Option<std::num::NonZeroUsize>,
     /// Print `BPSPIKE_READY_MS=<f64>` once the first frame has been rendered,
     /// then quit. Drives `scripts/Measure-UiSpike.ps1`.
     ///
@@ -1044,6 +1046,9 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
     // went nowhere -- found by `scripts/smoke-linux.sh`, invisible to the
     // window tests, which focus the editor themselves.
     ui.invoke_focus_editor();
+    if let Some(line) = options.line {
+        start_at_line(&ui, &state, line);
+    }
     if !pending.is_empty() {
         offer_recovery(&ui, &state, pending);
     }
@@ -1381,6 +1386,26 @@ fn bind_settings(ui: &AppWindow, state: &Rc<RefCell<state::AppState>>) {
             cell.borrow_mut().settings_sheet = None;
         });
     }
+}
+
+/// `--line N`: put the caret at the start of line `N` of the document open
+/// on screen. Past the end lands on the last line and says so, the same as
+/// Go to Line -- a line number from a compiler error that has since moved
+/// should still land somewhere near.
+fn start_at_line(
+    ui: &AppWindow,
+    cell: &Rc<RefCell<state::AppState>>,
+    line: std::num::NonZeroUsize,
+) {
+    let landed = cell.borrow_mut().go_to_line(&line.to_string());
+    let Some(range) = landed else { return };
+    let said = std::mem::take(&mut cell.borrow_mut().goto_status);
+    if !said.is_empty() {
+        cell.borrow_mut()
+            .add_notice(format!("--line {line}: {said}"));
+    }
+    refresh(ui, &mut cell.borrow_mut(), state::PushText::No);
+    dispatch::select(ui, &mut cell.borrow_mut(), &range);
 }
 
 /// Offer to recover what a previous session left unsaved.

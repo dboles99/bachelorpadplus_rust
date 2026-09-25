@@ -172,9 +172,10 @@ export component AppWindow inherits Window {
     callback menu-action(int);
 
     // --- custom editor surface -----------------------------------------
-    // Opt-in until it reaches parity with the widget it replaces: word wrap
-    // and input-method composition both still belong to `TextInput`. The
-    // rope is the storage either way; only the drawing differs.
+    // Opt-in until it reaches parity with the widget it replaces:
+    // input-method composition still belongs to `TextInput` (word wrap no
+    // longer does -- ADR-0018's amendment). The rope is the storage either
+    // way; only the drawing differs.
     in property <bool> use-editor-view;
     in property <[EditorRow]> editor-rows;
     in property <[SelectionBox]> editor-selection;

@@ -508,10 +508,9 @@ fn shorten(text: &str, max: usize) -> String {
     format!("…{tail}")
 }
 
-/// `editor_view` gates the caret-dependent line operations: `TextInput`
-/// never exposes where the caret is, so those rows stay present but greyed
-/// rather than vanishing, per this module's convention for a feature that
-/// exists but is not usable right now.
+/// The Edit menu. Every row is live in both editor views: the caret rows
+/// read `TextInput`'s caret since release plan M1-04, and were greyed
+/// without `--editor-view` before that.
 pub fn edit(clips: &[bp_clipboard::Entry]) -> Vec<MenuItem> {
     let mut items = vec![
         row("Undo", "Ctrl+Z", action::UNDO),
