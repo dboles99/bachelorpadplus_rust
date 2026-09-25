@@ -12,15 +12,20 @@
 //! can be tested on Linux even though nothing here can read a Windows
 //! registry.
 //!
-//! ## The honest gap
+//! ## Windows: asked through a trait
 //!
-//! On Windows this crate cannot read the current association at all, because
-//! it lives in `HKCU\Software\Classes\<ext>\UserChoice` and reading the
-//! registry needs a dependency this crate does not take. That is reported as
-//! [`AssociationState::Unknown`] with the reason attached, never as
-//! [`AssociationState::Unclaimed`] -- a UI that renders "not registered" when
-//! it means "could not look" invites the user to fix something that is not
-//! broken.
+//! On Windows the current association lives in the registry
+//! (`...\Explorer\FileExts\.<ext>\UserChoice`), and this crate reads no
+//! registry: it has no dependency and forbids `unsafe`. So the question is
+//! a trait, [`ProgIdQuery`], which `bp-platform-windows` implements over
+//! `RegGetValueW` and the shell passes to [`report_from_query`]. This crate
+//! keeps the logic -- ours, somebody else's, nobody's -- and the logic is
+//! tested on Linux with a query made of a map.
+//!
+//! Without a query the answer is [`AssociationState::Unknown`] with the reason
+//! attached, never [`AssociationState::Unclaimed`] -- a UI that renders "not
+//! registered" when it means "could not look" invites the user to fix
+//! something that is not broken.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -248,10 +253,65 @@ pub fn report_from_prog_ids(
     }
 }
 
+/// Which ProgID opens a file extension on Windows, asked of whatever can read
+/// the registry.
+///
+/// A trait here and an implementation in `bp-platform-windows`, because this
+/// crate stays dependency-free and `forbid(unsafe_code)` (ADR-0033) while the
+/// answer needs a Win32 call. The direction matters: the Windows crate
+/// depends on this one, never the reverse.
+pub trait ProgIdQuery {
+    /// The ProgID that opens `extension` (no leading dot, lowercase) for the
+    /// current user, or `None` if nothing is recorded for it.
+    ///
+    /// `None` means *nothing is set*, and is reported as
+    /// [`AssociationState::Unclaimed`]. An implementation that cannot look
+    /// at all is not a `ProgIdQuery`: it should not be passed, and the
+    /// caller reports "cannot tell" instead.
+    fn current_prog_id(&self, extension: &str) -> Option<String>;
+}
+
+/// A map of extension to ProgID answers the question by lookup, so a test --
+/// or a caller holding values it read some other way -- needs no type of its
+/// own. Keys are matched as [`report_from_prog_ids`] matches them.
+impl ProgIdQuery for BTreeMap<String, String> {
+    fn current_prog_id(&self, extension: &str) -> Option<String> {
+        self.iter()
+            .find(|(key, _)| {
+                key.trim()
+                    .trim_start_matches('.')
+                    .eq_ignore_ascii_case(extension)
+            })
+            .map(|(_, id)| id.clone())
+    }
+}
+
+/// The report a [`ProgIdQuery`] implies, asking it once per selected type.
+///
+/// How Windows answers "what opens `.txt` now": the shell hands in
+/// `bp-platform-windows`' registry reader, and this function decides what
+/// each answer means -- the same way [`report_from_prog_ids`] does, which is
+/// what a test on Linux checks.
+#[must_use]
+pub fn report_from_query(
+    query: &dyn ProgIdQuery,
+    selection: &AssociationSelection,
+) -> AssociationReport {
+    let prog_ids: BTreeMap<String, String> = selection
+        .file_types()
+        .filter_map(|file_type| {
+            query
+                .current_prog_id(file_type.extension)
+                .map(|id| (file_type.extension.to_owned(), id))
+        })
+        .collect();
+    report_from_prog_ids(&prog_ids, selection)
+}
+
 /// A report that says, for every selected type, that the state could not be
 /// read.
 ///
-/// The honest answer on Windows as this crate stands. A function rather than
+/// The honest answer on Windows when no [`ProgIdQuery`] was supplied. A function rather than
 /// an ad-hoc construction at the call site so that the shape of "we do not
 /// know" is identical everywhere and a UI can special-case it once.
 #[must_use]

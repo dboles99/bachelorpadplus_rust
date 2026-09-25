@@ -204,10 +204,9 @@ impl Capability {
                 reason: "Windows associates by file extension, not by MIME type.",
             },
             (Self::WindowsFileTypeRegistration, Platform::Windows) => NotImplemented {
-                reason: "The registry values are generated and can be written to a `.reg` file, \
-                         but nothing here applies them: writing to the registry needs either the \
-                         `winreg` dependency or a Win32 call, and this crate has neither a \
-                         third-party dependency nor `unsafe`.",
+                reason: "The registry values are generated and can be saved as a `.reg` file for \
+                         you to run. Applying them is the per-user installer's job, which is not \
+                         built yet; the application itself never writes the registry (ADR-0032).",
             },
             (Self::WindowsFileTypeRegistration, Platform::Linux) => Unsupported {
                 reason: "There is no registry on Linux.",
@@ -221,9 +220,10 @@ impl Capability {
             // --- reading and changing the association ----------------------
             (Self::AssociationQuery, Platform::Linux) => Available,
             (Self::AssociationQuery, Platform::Windows) => NotImplemented {
-                reason: "The current handler lives in HKCU\\Software\\Classes\\<ext>\\UserChoice, \
-                         and reading the registry needs a dependency this crate does not take. \
-                         The report is produced from values a caller supplies instead.",
+                reason: "The current handler is recorded in the registry, under \
+                         Explorer\\FileExts\\<ext>\\UserChoice. `bp-platform-windows` reads it and \
+                         `state::report_from_query` turns it into a report, but this dialog does \
+                         not ask it yet.",
             },
             (Self::AssociationInstall, Platform::Linux) => Conditional {
                 reason: "Available unless the product runs as a Flatpak, whose sandbox manages \
@@ -231,8 +231,9 @@ impl Capability {
                          the environment which.",
             },
             (Self::AssociationInstall, Platform::Windows) => NotImplemented {
-                reason: "Same obstacle as the registration itself: the values are generated, \
-                         applying them is not.",
+                reason: "The application never writes the registry (ADR-0032): the per-user \
+                         installer applies the registration, and a portable copy saves it as a \
+                         `.reg` file for you to read and run.",
             },
 
             // --- secrets: blocked on a human -------------------------------
@@ -258,8 +259,9 @@ impl Capability {
             (Self::FilePermissionNarrowing, Platform::Windows) => Unsupported {
                 reason: "`std::fs::Permissions` on Windows exposes one bit, the read-only \
                          attribute, which controls writing rather than reading. Narrowing the \
-                         access control list properly is a Win32 call, and this crate forbids \
-                         `unsafe`. A file's permissions are whatever its directory passed down.",
+                         access control list properly is a Win32 call, which \
+                         `bp-platform-windows` does not make yet. A file's permissions are \
+                         whatever its directory passed down.",
             },
             (Self::ExtendedLengthPaths, Platform::Windows) => Conditional {
                 reason: "Beyond 259 characters a path needs either the `\\\\?\\` prefix -- which \
@@ -278,8 +280,8 @@ impl Capability {
             // --- clipboard --------------------------------------------------
             (Self::NativeClipboardHistory, Platform::Windows) => NotImplemented {
                 reason: "Windows keeps a clipboard history the product could read; doing so is a \
-                         Win32 call and no adapter exists yet. The product's own history in \
-                         `bp-clipboard` works on both platforms in the meantime.",
+                         Win32 call that `bp-platform-windows` does not make yet. The product's \
+                         own history in `bp-clipboard` works on both platforms in the meantime.",
             },
             (Self::NativeClipboardHistory, Platform::Linux) => Unsupported {
                 reason: "There is no clipboard history in X11 or Wayland to read; what a user \
