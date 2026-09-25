@@ -67,6 +67,19 @@ pub(crate) fn overwrite_end(text: slint::SharedString, at: i32, typed: slint::Sh
     clamp_i32(bp_editor::overwrite_end(&text, at, &typed))
 }
 
+/// The selection a `TextInput` reports, as the text it covers.
+///
+/// Slint gives the selection as two UTF-8 byte offsets in either order.
+/// `None` for an empty selection or offsets that do not fall on character
+/// boundaries of `text` -- they come from the toolkit, and a copy is not
+/// worth a panic.
+pub(crate) fn selected_text(text: &str, anchor: i32, cursor: i32) -> Option<&str> {
+    let a = usize::try_from(anchor).ok()?;
+    let c = usize::try_from(cursor).ok()?;
+    let (start, end) = (a.min(c), a.max(c));
+    text.get(start..end).filter(|s| !s.is_empty())
+}
+
 /// What a double- or triple-click selects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ClickSelection {
@@ -229,7 +242,8 @@ pub(crate) fn apply_editor_command(state: &mut AppState, command: &bp_editor::Co
                 .and_then(|editor| Some(editor.buffer().slice(editor.selection()?)));
             // Copying nothing must not wipe what the user copied earlier.
             if let Some(text) = selected.filter(|text| !text.is_empty()) {
-                crate::set_os_clipboard(&text);
+                crate::set_os_clipboard(&text, state.keep_clipboard_private());
+                state.record_copy(&text);
             }
             true
         }
@@ -239,7 +253,11 @@ pub(crate) fn apply_editor_command(state: &mut AppState, command: &bp_editor::Co
                 .active_editor()
                 .and_then(|editor| Some(editor.buffer().slice(editor.selection()?)));
             if let Some(text) = selected.filter(|text| !text.is_empty()) {
-                crate::set_os_clipboard(&text);
+                crate::set_os_clipboard(&text, state.keep_clipboard_private());
+                // Recorded here rather than left to the poll: once it is cut
+                // the text is no longer in the document, so the poll would
+                // take it for another program's copy.
+                state.record_copy(&text);
                 if let Some(editor) = state.active_editor_mut() {
                     editor.delete_selection();
                 }
@@ -348,6 +366,28 @@ mod tests {
             "{}",
             state.cursor_label()
         );
+    }
+
+    #[test]
+    fn a_selection_is_read_in_either_direction_and_never_panics() {
+        assert_eq!(selected_text("hello world", 0, 5), Some("hello"));
+        assert_eq!(
+            selected_text("hello world", 5, 0),
+            Some("hello"),
+            "anchor after cursor"
+        );
+        assert_eq!(
+            selected_text("hello", 2, 2),
+            None,
+            "an empty selection copies nothing"
+        );
+        assert_eq!(
+            selected_text("é", 0, 1),
+            None,
+            "not on a character boundary"
+        );
+        assert_eq!(selected_text("abc", 1, 99), None);
+        assert_eq!(selected_text("abc", -1, 2), None);
     }
 
     #[test]

@@ -16,7 +16,34 @@
 
 #![forbid(unsafe_code)]
 
-use bp_security::Clipboard;
+use bp_security::{Clipboard, Network, Policy};
+
+/// Where a clipboard change came from, as far as the editor can tell.
+///
+/// The history is filled by polling the OS clipboard, and a poll sees text,
+/// not who put it there. The editor can say one thing reliably: whether the
+/// text is in the document the user is working in. That is what this
+/// records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    /// The text is in the active document: copied out of it, almost always.
+    OpenDocument,
+    /// Anything else -- a browser, a terminal, a password manager.
+    Elsewhere,
+}
+
+/// Whether text copied out of a document under `policy` must stay out of the
+/// operating system's own clipboard history and cloud clipboard sync.
+///
+/// Windows keeps a Win+V history and can sync it to every device the user
+/// signs into; KDE's Klipper keeps one too. Cloud sync is text leaving the
+/// machine, which is what `Network::Denied` forbids, and any OS history is a
+/// record `Clipboard::Disabled` forbids. So Private, Confidential and
+/// Maximum all ask for the exclusion, and Standard does not.
+#[must_use]
+pub fn keep_out_of_os_history(policy: &Policy) -> bool {
+    policy.network == Network::Denied || policy.clipboard == Clipboard::Disabled
+}
 
 /// Crate identity used by workspace smoke tests and diagnostics.
 pub const CRATE_NAME: &str = "bp-clipboard";
@@ -450,6 +477,27 @@ impl History {
         true
     }
 
+    /// Record a clipboard change the poll observed, if its origin allows it.
+    ///
+    /// **Other applications' copies are not recorded unless the user asked
+    /// for that** (`record_elsewhere`, off by default). The poll used to add
+    /// everything any program put on the clipboard -- a password copied from
+    /// a password manager went straight into this history and into the Edit
+    /// menu's previews. Text from the open document is the history's point;
+    /// text from elsewhere is someone else's.
+    pub fn observe(
+        &mut self,
+        text: &str,
+        policy: Clipboard,
+        origin: Origin,
+        record_elsewhere: bool,
+    ) -> bool {
+        if origin == Origin::Elsewhere && !record_elsewhere {
+            return false;
+        }
+        self.push(text, policy)
+    }
+
     /// Drop the oldest unpinned entries down to capacity.
     ///
     /// Pinned entries survive: pinning is a promise, and a history that
@@ -516,6 +564,44 @@ impl History {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn another_programs_copy_is_not_recorded_unless_asked_for() {
+        let mut history = History::new();
+        assert!(!history.observe("hunter2", Clipboard::InMemory, Origin::Elsewhere, false));
+        assert!(
+            history.is_empty(),
+            "a password manager's copy reached the history"
+        );
+        assert!(history.observe("hunter2", Clipboard::InMemory, Origin::Elsewhere, true));
+    }
+
+    #[test]
+    fn text_from_the_open_document_is_recorded_as_before() {
+        let mut history = History::new();
+        assert!(history.observe("a line", Clipboard::InMemory, Origin::OpenDocument, false));
+        // And the profile still decides whether there is a history at all.
+        let mut forbidden = History::new();
+        assert!(!forbidden.observe("a line", Clipboard::Disabled, Origin::OpenDocument, true));
+    }
+
+    #[test]
+    fn every_profile_that_denies_the_network_keeps_copies_out_of_os_history() {
+        use bp_security::{Privacy, Profile, Security};
+        for profile in Profile::all() {
+            let policy = Security::Named(*profile).policy_under(Privacy::Off);
+            assert_eq!(
+                keep_out_of_os_history(&policy),
+                *profile != Profile::Standard,
+                "{profile:?}"
+            );
+        }
+        let clamped = Security::default().policy_under(Privacy::On);
+        assert!(
+            keep_out_of_os_history(&clamped),
+            "Privacy Mode must exclude too"
+        );
+    }
+
     use super::*;
 
     #[test]

@@ -1508,6 +1508,20 @@ impl AppState {
     /// never have to choose a policy for themselves -- picking one at a call
     /// site is how a permissive default gets applied to a document that asked
     /// for something stricter.
+    /// Record text the user copied or cut in this window, if the active
+    /// document's profile allows a history at all.
+    pub(crate) fn record_copy(&mut self, text: &str) -> bool {
+        let policy = self.policy().clipboard;
+        self.clips
+            .observe(text, policy, bp_clipboard::Origin::OpenDocument, false)
+    }
+
+    /// Whether a copy out of the active document should be kept out of the
+    /// OS clipboard history and cloud sync.
+    pub(crate) fn keep_clipboard_private(&self) -> bool {
+        bp_clipboard::keep_out_of_os_history(&self.policy())
+    }
+
     pub(crate) fn policy(&self) -> bp_security::Policy {
         // Through `policy_under`, always. Reading a document's own policy
         // directly is how a caller ends up outside Privacy Mode's reach.
@@ -2741,6 +2755,13 @@ fn locations() -> bp_config::Locations {
         left_behind: Vec::new(),
     }
 }
+
+/// Whether the clipboard history records what *other* programs copy.
+///
+/// Off, and a constant until Settings exists to make it a choice (release
+/// plan M1-03). Recording everything was the old behaviour, and it put
+/// whatever a password manager copied into the Edit menu's previews.
+pub(crate) const RECORD_OTHER_PROGRAMS: bool = false;
 
 /// What an answer to the startup "Unsaved work recovered" prompt means.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

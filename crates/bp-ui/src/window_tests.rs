@@ -270,3 +270,62 @@ fn no_slint_source_names_a_font_the_platform_may_not_have() {
         }
     }
 }
+
+/// Copies and cuts reported to Rust, as (selected text, was it a cut).
+fn record_copies(ui: &AppWindow) -> Rc<std::cell::RefCell<Vec<(String, bool)>>> {
+    let seen = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let log = Rc::clone(&seen);
+    ui.on_copied_from_editor(move |text, anchor, cursor, cut| {
+        let selected = crate::editor_view::selected_text(&text, anchor, cursor)
+            .unwrap_or_default()
+            .to_owned();
+        log.borrow_mut().push((selected, cut));
+        false
+    });
+    seen
+}
+
+fn select_first_four(ui: &AppWindow) {
+    chord(ui, Key::Control, Key::Home);
+    ui.window().dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Shift.into(),
+    });
+    for _ in 0..4 {
+        press(ui, Key::RightArrow);
+    }
+    ui.window().dispatch_event(WindowEvent::KeyReleased {
+        text: Key::Shift.into(),
+    });
+}
+
+#[test]
+fn ctrl_c_in_the_default_view_reports_the_selection_to_rust() {
+    // Without this the history learned of a copy only by polling, which
+    // cannot tell this window's copy from a password manager's.
+    let ui = window();
+    let seen = record_copies(&ui);
+    select_first_four(&ui);
+
+    chord(&ui, Key::Control, "c");
+
+    assert_eq!(seen.borrow().as_slice(), [("line".to_owned(), false)]);
+    assert!(
+        ui.get_doc_text().starts_with("line 001"),
+        "a copy changed the text"
+    );
+}
+
+#[test]
+fn ctrl_x_reports_a_cut_and_the_widget_still_cuts() {
+    let ui = window();
+    let seen = record_copies(&ui);
+    select_first_four(&ui);
+
+    chord(&ui, Key::Control, "x");
+
+    assert_eq!(seen.borrow().as_slice(), [("line".to_owned(), true)]);
+    assert!(
+        ui.get_doc_text().starts_with(" 001"),
+        "the cut did not happen"
+    );
+}

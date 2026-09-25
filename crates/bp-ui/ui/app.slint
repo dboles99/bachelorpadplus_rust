@@ -131,6 +131,13 @@ export component AppWindow inherits Window {
     /// selects by UTF-8 offset and Slint has no way to measure a character.
     pure callback overwrite-end(string, int, string) -> int;
 
+    /// The `TextInput` view copied or cut its selection (text, then the two
+    /// selection offsets, then whether it was a cut). Rust records it in the
+    /// clipboard history, and for a copy out of a private document puts it
+    /// on the OS clipboard itself -- returning true, so the widget does not
+    /// copy it a second time without the privacy marking.
+    callback copied-from-editor(string, int, int, bool) -> bool;
+
     /// How far the `TextInput` view is scrolled, both negative or zero. Read
     /// by the window tests, which is the only way to assert that the view
     /// follows the caret -- the failure they pin looked like dead keys.
@@ -286,9 +293,12 @@ export component AppWindow inherits Window {
         } else if (action == 101) {
             editor.redo();
         } else if (action == 102) {
+            root.copied-from-editor(editor.text, editor.anchor-position-byte-offset, editor.cursor-position_byte-offset, true);
             editor.cut();
         } else if (action == 103) {
-            editor.copy();
+            if (!root.copied-from-editor(editor.text, editor.anchor-position-byte-offset, editor.cursor-position_byte-offset, false)) {
+                editor.copy();
+            }
         } else if (action == 104) {
             editor.paste();
         } else if (action == 105) {
@@ -689,15 +699,27 @@ export component AppWindow inherits Window {
                             // upgrade removes it, this fails to compile rather
                             // than misbehaving.
                             key-pressed(event) => {
+                                // Copy and cut, by every key that means them,
+                                // are reported to Rust first: see
+                                // `copied-from-editor`.
+                                let chord = event.modifiers.control && !event.modifiers.alt;
+                                if ((chord && (event.text == "c" || event.text == "C" || event.text == Key.Insert))) {
+                                    if (!root.copied-from-editor(self.text, self.anchor-position-byte-offset, self.cursor-position_byte-offset, false)) {
+                                        self.copy();
+                                    }
+                                    return accept;
+                                }
+                                if ((chord && (event.text == "x" || event.text == "X"))
+                                        || (event.text == Key.Delete && event.modifiers.shift && !event.modifiers.control)) {
+                                    root.copied-from-editor(self.text, self.anchor-position-byte-offset, self.cursor-position_byte-offset, true);
+                                    self.cut();
+                                    return accept;
+                                }
                                 if (event.text == Key.Insert) {
-                                    // The CUA clipboard keys first, as in
+                                    // The CUA paste key, as in
                                     // `bp_editor::keys::command_for`.
                                     if (event.modifiers.shift && !event.modifiers.control) {
                                         self.paste();
-                                        return accept;
-                                    }
-                                    if (event.modifiers.control && !event.modifiers.alt) {
-                                        self.copy();
                                         return accept;
                                     }
                                     if (!event.modifiers.alt) {
@@ -705,10 +727,6 @@ export component AppWindow inherits Window {
                                         return accept;
                                     }
                                     return reject;
-                                }
-                                if (event.text == Key.Delete && event.modifiers.shift && !event.modifiers.control) {
-                                    self.cut();
-                                    return accept;
                                 }
                                 // Typing, or AltGr typing -- never a chord.
                                 if (root.overwrite
