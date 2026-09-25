@@ -157,6 +157,9 @@ pub mod action {
     /// Above 100, so outside Slint's `UNDO..=SELECT_ALL` window, on the same
     /// argument as the two blocks above.
     pub const SET_DEFAULT_EDITOR: i32 = 220;
+    /// File ▸ Save as New Revision (release plan M1-17), in the File
+    /// block beside Set as Default Editor.
+    pub const SAVE_REVISION: i32 = 221;
 
     /// The Tools menu (release plan M1-05): the application's own settings
     /// and the folders it keeps its files in. A block of its own at 230-239,
@@ -455,6 +458,8 @@ pub fn file(any_dirty: bool, has_path: bool, recent: &[std::path::PathBuf]) -> V
     items.extend([
         row("Save", "Ctrl+S", action::SAVE),
         row("Save As...", "Ctrl+Shift+S", action::SAVE_AS),
+        // Needs a file to be a revision of.
+        row_enabled("Save as New Revision", "", action::SAVE_REVISION, has_path),
         MenuItem {
             enabled: any_dirty,
             ..row_end("Save All", "", action::SAVE_ALL)

@@ -350,6 +350,21 @@ pub fn handle_menu_action(
                 return None;
             }
         }
+        action::SAVE_REVISION => {
+            let target = state.borrow().workspace.active_id();
+            let path = target.and_then(|id| state.borrow().next_revision_path(id));
+            match (target, path) {
+                (Some(id), Some(path)) => {
+                    crate::save_to(ui, state, id, path);
+                    return None;
+                }
+                _ => {
+                    state.borrow_mut().error =
+                        Some("a new revision needs a saved file to be a revision of".to_owned());
+                    push = PushText::No;
+                }
+            }
+        }
         action::SAVE_ALL => {
             let dirty: VecDeque<DocumentId> =
                 state.borrow().workspace.dirty().map(Document::id).collect();
