@@ -158,12 +158,13 @@ that is now documented rather than set:
 
 `bp-ui` has tests that drive the real window now (`src/window_tests.rs`),
 on a headless software renderer with real key events. They found two
-defects in their first hour, both fixed. One thing found alongside them is
+defects in their first hour, both fixed. Found alongside them, or since, and
 not fixed:
 
 | Item | Shape |
 | --- | --- |
 | **`--editor-view` draws its caret right of the text on Linux** | `EditorSurface` measures one advance and multiplies it by the column, which holds only for a monospace font. It asks for `"Consolas"`; Slint resolves a family name literally (no fontconfig aliasing, no generic `monospace`), so on Linux it falls back to a proportional sans and the caret drifts further right with every character. Found by driving the app on Xvfb. Fix is a product choice: bundle a monospace font with `import`, or pick the family per platform in Rust. Windows is unaffected |
+| **`--editor-view` loses every key typed before the first click** | Launch `bachelorpad --editor-view file.txt`, type, press Ctrl+S: nothing is typed and nothing is saved. Click in the text and the same keys work; the default view takes keys at once. `app.slint` has `forward-focus: editor` -- the `TextInput`, hidden in this view -- and nothing calls `focus-editor` on launch. The window tests call it themselves, so they cannot see this. The keys are dropped, not stored invisibly (checked). Found by `scripts/smoke-linux.sh`, which reports it as `XFAIL`; delete its `KNOWN_DEFECTS` entry with the fix. The cause is in `.slint`, so every platform is probably affected; seen on X11 |
 
 ## Tier 1 — pure wiring (the capability exists and is tested)
 
