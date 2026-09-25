@@ -2,15 +2,21 @@
 
 The intended contents of each menu, and how much of each is real.
 
-The application shows planned rows greyed rather than hiding them, so the menu
-bar already doubles as a roadmap — a greyed row reads as "not yet", while a
-label that swallows a click reads as broken. This file is the same information
-in one place, for deciding what to build next.
+**A release shows only real rows** (release plan M1-05, 2026-09-25). The
+application used to show planned rows greyed, so the menu bar doubled as a
+roadmap. On a release candidate a menu of promises reads as a broken product,
+so the planned rows and every "not implemented yet" trailer are gone.
+Notebook, Organize, Research and Run come off the bar unless
+`show_planned_menus = true` is set in `config.toml`. A greyed row that
+remains is a **readout** (what a profile does, that the clipboard history is
+empty) or a real row that cannot act right now, with the reason on it. This
+file keeps the planned rows, as the roadmap the menus no longer are.
 
-**Live** means reachable and doing something. **Caret** means live only under
-`--editor-view`, because it needs the caret Slint's `TextInput` does not
-expose. **Built** means the library work exists and is tested but has no row
-yet — those are the cheapest items in `project/WORK_QUEUE.md`.
+**Live** means reachable and doing something, in both editor views: the
+caret rows that once needed `--editor-view` read `TextInput`'s caret since
+M1-04. **Planned** means not built, and not shown. **Built** means the
+library work exists and is tested but has no row yet — those are the
+cheapest items in `project/WORK_QUEUE.md`.
 
 ## File
 
@@ -30,7 +36,8 @@ yet — those are the cheapest items in `project/WORK_QUEUE.md`.
 | Clipboard History | **live** |
 | Paste transformations | **live** — offered per entry kind, and only where the result would differ |
 | Sort / Deduplicate / Reverse / Trim lines | **live** |
-| Duplicate Line, Move Line Up / Down | **caret** |
+| Duplicate Line, Move Line Up / Down | **live** (Ctrl+D, Alt+Up / Alt+Down) |
+| Go to Line | **live** (Ctrl+G) |
 | Multi-cursor, column selection | planned — phase 2, needs the caret |
 
 ## View
@@ -47,7 +54,7 @@ yet — those are the cheapest items in `project/WORK_QUEUE.md`.
 
 | Row | State |
 | --- | --- |
-| Date, Time, Date and Time, ISO 8601, Filename date | **caret** — each row's hint is the stamp rendered from the clock, so the row shows what it will insert |
+| Date, Time, Date and Time, ISO 8601, Filename date | **live** — each row's hint is the stamp rendered from the clock, so the row shows what it will insert |
 | Markdown constructs, citation, code block, table, notebook cell | planned |
 
 ## Format
@@ -148,13 +155,16 @@ more.
 | Row | State |
 | --- | --- |
 | Document inspector | planned — `bp_semantic::statistics` is most of it |
-| Security inspector, file analysis, conversions, benchmarks, settings | planned |
+| Settings... (Ctrl+,) | **live** — a sheet over the window editing a draft; Save writes only what changed into the user's own `config.toml`, comments kept |
+| Open Log Folder, Open Config Folder | **live** |
+| Security inspector, file analysis, conversions, benchmarks | planned |
 
 ## Help
 
 | Row | State |
 | --- | --- |
-| Keyboard Shortcuts, About | **live** |
+| Keyboard Shortcuts | **live** |
+| About | **live** — the version, the build's commit, what draws the window, both licences, Notices, and Slint's `AboutSlint` attribution (ADR-0031) |
 | Help, diagnostics | planned |
 
 ## Find bar
@@ -172,7 +182,7 @@ Not a menu of its own. Edit ▸ Go to Line and Ctrl+G open a bar beside the find
 bar, built the same way and for the same reason: a modal dialog is a heavy
 answer to "which line?". `Editor::go_to_line` reports whether the line existed,
 so an out-of-range number moves the caret to the end *and* says "there are only
-42 lines". **caret** — `TextInput`'s caret cannot be moved from Rust.
+42 lines". **live** in both views.
 
 ## Tab strip context menu
 
