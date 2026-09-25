@@ -7,6 +7,15 @@ run this session**, see below. One is `#[ignore]`d on purpose because it
 names a decision rather than a defect (D6); the two defects that shared its
 company are fixed.
 
+**Start from [`project/RELEASE_PLAN.md`](RELEASE_PLAN.md).** A five-agent
+audit at the end of the sixth session measured the product against the spec
+and against what a release candidate needs on each OS, and the plan built
+from it replaces the "what to do next" of this file: milestones M0 to M5,
+22 decisions for the owner in the order they block work, and the first ten
+items to take. Its M0-01 is a data-loss bug on Linux -- rfd dialogs shell
+out to `zenity`, and without it the startup recovery prompt discards
+recovered work -- so take that first.
+
 ---
 
 ## What the sixth session did
