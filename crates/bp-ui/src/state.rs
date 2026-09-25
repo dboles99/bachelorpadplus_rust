@@ -134,6 +134,10 @@ pub struct AppState {
     /// recording everything put whatever a password manager copied into the
     /// Edit menu's previews.
     pub(crate) record_other_programs: bool,
+    /// Whether File ▸ Set as Default Editor and Remove Registration can act
+    /// on this machine. Read by the shell at startup and after either is
+    /// used; the default is what a machine nobody has asked looks like.
+    pub(crate) integration: crate::default_editor::Rows,
     /// Past this many bytes a file opens nowhere editable
     /// (`editable_limit_mib`, 32 MiB unless configured).
     pub(crate) editable_limit: u64,
@@ -427,6 +431,7 @@ impl AppState {
             indent: bp_editor::Indent::default(),
             font_size: bp_config::DEFAULT_FONT_SIZE,
             record_other_programs: false,
+            integration: crate::default_editor::Rows::default(),
             editable_limit: bp_files::EDITABLE_LIMIT_BYTES,
             default_profile: bp_security::Profile::Standard,
             settings: None,

@@ -1025,6 +1025,7 @@ dependencies = [
  "bp-integrity",
  "bp-naming",
  "bp-platform",
+ "bp-platform-windows",
  "bp-redaction",
  "bp-search",
  "bp-secrets",
