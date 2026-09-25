@@ -1209,12 +1209,15 @@ impl AppState {
         // every save quietly rewrite the minority convention in a mixed
         // document, with nothing on screen to say it had happened. Format ▸
         // LF / CRLF is where a conversion is asked for, and it asks first.
-        let bytes = match try_encode(
-            &self.text_of(id),
-            doc.encoding(),
-            LineEndingPolicy::Preserve,
-        ) {
-            Ok(bytes) => bytes,
+        //
+        // Both copies -- the text and its encoded bytes -- are wiped when
+        // dropped (release plan M1-20). For an encrypted document they are
+        // the plaintext the seal exists to protect, and they are the two
+        // copies this code owns outright; see SECURITY_MODEL.md for the
+        // copies it cannot reach.
+        let text = zeroize::Zeroizing::new(self.text_of(id));
+        let bytes = match try_encode(&text, doc.encoding(), LineEndingPolicy::Preserve) {
+            Ok(bytes) => zeroize::Zeroizing::new(bytes),
             Err(EncodeError::Unrepresentable(what)) => {
                 self.error = Some(format!("not saved: {what}"));
                 return SaveResult::Unrepresentable(what);
@@ -1229,7 +1232,7 @@ impl AppState {
             None => bytes,
             Some(passphrase) => {
                 match bp_crypto::seal(&bytes, passphrase, bp_crypto::SealOptions::default()) {
-                    Ok(sealed) => sealed,
+                    Ok(sealed) => zeroize::Zeroizing::new(sealed),
                     Err(e) => {
                         // Refused rather than falling back to plaintext. A
                         // save that silently wrote the document in clear
