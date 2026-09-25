@@ -126,6 +126,9 @@ pub struct AppState {
     /// so an edit made by another program can be noticed.
     stamps: HashMap<DocumentId, FileStamp>,
     pub(crate) recent: Recent,
+    /// Where `recent` is kept. `None` keeps the list in memory only, which
+    /// is what an environment naming no state directory gets.
+    recent_file: Option<PathBuf>,
     /// Standing warning about the file on disk. Distinct from `error`, which
     /// reports something that just failed; this persists until resolved.
     pub(crate) disk_warning: Option<String>,
@@ -141,9 +144,9 @@ pub struct AppState {
     pub(crate) journal: bp_history::Journal,
     /// Where the security history is appended and read back.
     ///
-    /// A field rather than a call to `audit::audit_path()` at each use, so a
-    /// test gets its own file. It is not configurable from outside: the
-    /// production value is set once, here, and nothing changes it.
+    /// A field rather than a lookup at each use, so a test gets its own
+    /// file. It is not configurable from outside: the production value is
+    /// set once, from [`locations`], and nothing changes it.
     pub(crate) audit_path: PathBuf,
     /// The tab the context menu was opened on.
     ///
@@ -180,6 +183,14 @@ pub struct AppState {
 
 impl AppState {
     pub(crate) fn new() -> Self {
+        let locations = locations();
+        let mut state = Self::at(&locations);
+        state.error = describe_left_behind(&locations.left_behind);
+        state
+    }
+
+    /// A fresh state whose files live at `locations`.
+    fn at(locations: &bp_config::Locations) -> Self {
         let mut workspace = Workspace::new();
         let id = workspace.open_new(now());
         let mut editors = HashMap::new();
@@ -206,14 +217,29 @@ impl AppState {
             indent: bp_editor::Indent::default(),
             font_size: bp_config::DEFAULT_FONT_SIZE,
             stamps: HashMap::new(),
-            recent: bp_config::load_recent(),
+            recent: locations
+                .recent
+                .as_deref()
+                .map(bp_config::load_recent)
+                .unwrap_or_default(),
+            recent_file: locations.recent.clone(),
             disk_warning: None,
             matches: Vec::new(),
             match_index: 0,
             find_status: String::new(),
             goto_status: String::new(),
-            journal: bp_history::Journal::new(recovery_dir()),
-            audit_path: crate::audit::audit_path(),
+            // Relative fallbacks for an environment naming no directory at
+            // all, which is what these were before they had a home.
+            journal: bp_history::Journal::new(
+                locations
+                    .recovery
+                    .clone()
+                    .unwrap_or_else(|| PathBuf::from(bp_config::locations::RECOVERY_DIR)),
+            ),
+            audit_path: locations
+                .security_history
+                .clone()
+                .unwrap_or_else(|| PathBuf::from(bp_config::locations::SECURITY_HISTORY_FILE)),
             passphrases: HashMap::new(),
             privacy: bp_security::Privacy::default(),
             ask: None,
@@ -349,7 +375,9 @@ impl AppState {
         }
         self.disk_warning = None;
         self.recent.push(path);
-        bp_config::save_recent(&self.recent);
+        if let Some(file) = &self.recent_file {
+            bp_config::save_recent(file, &self.recent);
+        }
     }
 
     /// How the active document's file compares with what we last saw.
@@ -2554,15 +2582,76 @@ pub(crate) fn documents_dir() -> Option<PathBuf> {
     }
 }
 
-/// Where recovery checkpoints live: beside the config file, in `recovery/`.
+/// Where this process keeps its recent list, recovery journal and security
+/// history.
 ///
-/// The `.gitignore` already excludes `/recovery`, and this is deliberately a
-/// path the user can be told — it holds copies of their unsaved work.
-pub(crate) fn recovery_dir() -> PathBuf {
-    bp_config::config_path().map_or_else(
-        || PathBuf::from("recovery"),
-        |p| p.with_file_name("recovery"),
-    )
+/// `bp-config` owns where each belongs and moving it there from where older
+/// builds put it; this only chooses, once, between the machine's answer and
+/// a test's.
+#[cfg(not(test))]
+fn locations() -> bp_config::Locations {
+    bp_config::Locations::for_host()
+}
+
+/// The same, redirected and made unique under test.
+///
+/// The one `cfg(test)` in this crate, and every part of it was learned the
+/// hard way. `AppState::new()` is how nearly every test starts, and each of
+/// these three is written by ordinary operations -- opening a file pushes the
+/// recent list, a dirty document checkpoints, and changing a security profile
+/// appends to the history -- so **every** test writes to whatever this
+/// returns:
+///
+/// * pointed at the real directories, `cargo test` wrote a live security
+///   history into the user's `%APPDATA%`, created an empty recovery
+///   directory there on every run, and replaced the developer's own recent
+///   list with the paths of test fixtures;
+/// * pointed at one shared temp location, parallel tests each read the
+///   history, each computed the same next sequence number, and the log then
+///   refused to open as out of order -- so every one of them failed, on a
+///   file none of them was really testing.
+///
+/// A counter rather than a random name, so a failing run names a directory
+/// that can be looked at, and the process id so two runs at once cannot
+/// collide. Nothing is created here; the directory appears only if a test
+/// writes into it. [`bp_config::Locations::for_host`] is never called under
+/// test, because it may rename things.
+#[cfg(test)]
+fn locations() -> bp_config::Locations {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let root = std::env::temp_dir().join(format!("bpad-test-{}-{n}", std::process::id()));
+    bp_config::Locations {
+        recent: Some(root.join("recent.toml")),
+        recovery: Some(root.join(bp_config::locations::RECOVERY_DIR)),
+        security_history: Some(root.join(bp_config::locations::SECURITY_HISTORY_FILE)),
+        left_behind: Vec::new(),
+    }
+}
+
+/// A status-bar line for anything `bp-config` could not move, or `None`.
+///
+/// Worth saying because both cases leave something where the product will
+/// not look for it by itself -- and the recovery journal is the thing most
+/// worth finding. The path is the useful half; the reason is shown for the
+/// case where the user can act on it.
+pub(crate) fn describe_left_behind(left: &[bp_config::Adoption]) -> Option<String> {
+    let lines: Vec<String> = left
+        .iter()
+        .filter_map(|adoption| match adoption {
+            bp_config::Adoption::KeptLegacy { legacy, error } => Some(format!(
+                "⚠ could not move {} to its new place ({error}) — still using it there, nothing lost",
+                legacy.display()
+            )),
+            bp_config::Adoption::BothOccupied { legacy } => Some(format!(
+                "⚠ {} is from an older version and is no longer read — it was kept, not deleted",
+                legacy.display()
+            )),
+            bp_config::Adoption::NothingToMove | bp_config::Adoption::Moved => None,
+        })
+        .collect();
+    (!lines.is_empty()).then(|| lines.join("; "))
 }
 
 /// A document's path, if it has one.
@@ -3121,6 +3210,89 @@ mod tests {
             state.workspace.get(id).unwrap().is_dirty(),
             "the original still has edits that are not on disk"
         );
+    }
+
+    #[test]
+    fn a_test_state_keeps_every_file_it_writes_in_the_temp_directory() {
+        // The protection `locations()` exists to give, pinned for all three
+        // at once. Before it, `AppState::new()` here read and wrote the
+        // developer's own recent list and made a recovery directory in their
+        // real configuration directory on every run.
+        let state = AppState::new();
+        let temp = std::env::temp_dir();
+        for (what, path) in [
+            (
+                "recent list",
+                state.recent_file.clone().expect("a recent file"),
+            ),
+            ("recovery journal", state.journal.location().to_path_buf()),
+            ("security history", state.audit_path.clone()),
+        ] {
+            assert!(
+                path.starts_with(&temp),
+                "the {what} is at {} under test",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn two_test_states_never_share_a_recent_list() {
+        // Parallel tests sharing one file is the failure the security history
+        // hit; the recent list is written on every open and would hit it too.
+        assert_ne!(AppState::new().recent_file, AppState::new().recent_file);
+    }
+
+    #[test]
+    fn opening_a_file_records_it_in_the_list_this_state_was_given() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.txt");
+        std::fs::write(&path, b"hello").unwrap();
+        let mut state = AppState::new();
+        let file = state.recent_file.clone().expect("a recent file");
+
+        state.open(path.clone());
+
+        assert!(
+            bp_config::load_recent(&file).paths().contains(&path),
+            "the list was not written where the state was told to keep it"
+        );
+    }
+
+    #[test]
+    fn a_move_that_worked_or_had_nothing_to_do_says_nothing() {
+        assert_eq!(describe_left_behind(&[]), None);
+        assert_eq!(
+            describe_left_behind(&[
+                bp_config::Adoption::Moved,
+                bp_config::Adoption::NothingToMove
+            ]),
+            None
+        );
+    }
+
+    #[test]
+    fn a_journal_that_could_not_be_moved_is_named_and_the_user_told_it_is_safe() {
+        let legacy = PathBuf::from("/old/bachelorpad/recovery");
+        let line = describe_left_behind(&[bp_config::Adoption::KeptLegacy {
+            legacy: legacy.clone(),
+            error: std::io::Error::other("cross-device link"),
+        }])
+        .expect("a failed move must be reported");
+        assert!(line.contains(&legacy.display().to_string()), "{line}");
+        assert!(line.contains("cross-device link"), "{line}");
+        assert!(line.contains("nothing lost"), "{line}");
+    }
+
+    #[test]
+    fn an_old_copy_left_beside_a_new_one_is_named() {
+        let legacy = PathBuf::from("/old/bachelorpad/recovery");
+        let line = describe_left_behind(&[bp_config::Adoption::BothOccupied {
+            legacy: legacy.clone(),
+        }])
+        .expect("an unread copy must be reported");
+        assert!(line.contains(&legacy.display().to_string()), "{line}");
+        assert!(line.contains("kept, not deleted"), "{line}");
     }
 
     #[test]

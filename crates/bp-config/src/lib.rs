@@ -25,7 +25,9 @@ use std::path::PathBuf;
 use bp_platform::dirs::{self, DirKind};
 use serde::Deserialize;
 
+pub mod locations;
 pub mod recent;
+pub use locations::{Adoption, Locations};
 pub use recent::{MAX_RECENT, Recent, load_recent, save_recent};
 
 /// The platform's own view of the environment, re-exported so a caller can
@@ -292,8 +294,9 @@ pub fn config_path_in(platform: Platform, env: &EnvSnapshot) -> Option<PathBuf> 
 
 /// A named file directly inside the product's configuration directory.
 ///
-/// Shared with [`recent`] so that "beside `config.toml`" is one piece of code
-/// rather than a promise two modules each keep separately.
+/// Shared with [`locations`], which needs "beside `config.toml`" to find what
+/// older builds left there, so that it is one piece of code rather than a
+/// promise two modules each keep separately.
 ///
 /// The join goes through [`bp_platform::paths::join`] rather than
 /// [`PathBuf::join`] because `PathBuf` uses the *host* separator: assembling
