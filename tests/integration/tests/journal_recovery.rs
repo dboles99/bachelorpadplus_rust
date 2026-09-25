@@ -66,6 +66,11 @@ impl Fixture {
     /// Recovery is not "ask the object that wrote it"; it is a new run of the
     /// program finding files it did not create. Reusing the `Journal` that
     /// wrote the checkpoint would let an in-memory cache pass this test.
+    ///
+    /// **The journal that wrote must be dropped first.** Each journal holds a
+    /// lock on its own instance folder while it lives, and a live instance's
+    /// work is another window's, never offered as a recovery. A test that
+    /// keeps the writer alive is simulating two open windows, not a restart.
     fn after_a_restart(&self) -> Journal {
         Journal::new(self.dir.clone())
     }
@@ -121,6 +126,7 @@ proptest! {
         journal
             .checkpoint(1, &checkpoint(Some(&fixture.document), second.as_str(), 2), Recovery::Plaintext, None)
             .expect("second");
+        drop(journal);
 
         let pending = fixture.after_a_restart().pending();
         prop_assert_eq!(pending.len(), 1, "the journal accumulated instead of replacing");
@@ -216,6 +222,7 @@ fn several_documents_recover_independently_and_newest_first() {
             )
             .expect("checkpoint");
     }
+    drop(journal);
 
     let pending = fixture.after_a_restart().pending();
     assert_eq!(pending.len(), 3);
@@ -252,6 +259,7 @@ fn two_documents_get_two_sealed_journals_rather_than_one() {
             Some(passphrase.as_str()),
         )
         .expect("checkpoint");
+    drop(journal);
 
     let journal = fixture.after_a_restart();
     assert_eq!(journal.sealed_count(), 2);
@@ -325,6 +333,7 @@ fn a_crash_midway_through_a_checkpoint_leaves_the_previous_one_recoverable() {
     journal
         .checkpoint(1, &good, Recovery::Plaintext, None)
         .expect("checkpoint");
+    drop(journal);
     std::fs::write(fixture.dir.join("1.json.tmp"), b"{ truncated").expect("debris");
 
     let journal = fixture.after_a_restart();
@@ -337,6 +346,9 @@ fn a_crash_midway_through_a_checkpoint_leaves_the_previous_one_recoverable() {
         !fixture.dir.join("1.json.tmp").exists(),
         "the debris was not cleaned up"
     );
+    // `pending` claimed the work for this window; it has to end, as a
+    // window does, before a later launch can be offered it again.
+    drop(journal);
     assert_eq!(fixture.after_a_restart().pending().len(), 1);
 }
 
@@ -349,6 +361,7 @@ fn an_unreadable_checkpoint_does_not_cost_the_user_the_others() {
     journal
         .checkpoint(1, &good, Recovery::Plaintext, None)
         .expect("checkpoint");
+    drop(journal);
     std::fs::write(fixture.dir.join("2.json"), b"not json at all").expect("corrupt");
 
     let pending = fixture.after_a_restart().pending();
