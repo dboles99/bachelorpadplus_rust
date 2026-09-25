@@ -980,3 +980,24 @@ fn ctrl_tab_and_ctrl_shift_tab_walk_the_tabs_and_wrap() {
     assert_eq!(ui.get_doc_text(), "first", "Ctrl+Shift+Tab went forward");
     assert!(!ui.get_doc_text().contains('\t'), "a tab was typed");
 }
+
+#[test]
+fn a_notice_never_hides_the_path() {
+    // Locked decision #5, release plan M1-16: the second status line showed
+    // a notice *instead of* the path, so every message hid where the
+    // document lives.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("notes.txt");
+    std::fs::write(&path, "text\n").unwrap();
+    let mut state = crate::state::AppState::new();
+    state.open(path);
+    state.error = Some("something worth saying".to_owned());
+    let (ui, _) = wired(state);
+
+    assert!(
+        ui.get_status_path().contains("notes.txt"),
+        "{}",
+        ui.get_status_path()
+    );
+    assert_eq!(ui.get_status_notice(), "something worth saying");
+}

@@ -29,6 +29,10 @@ export component StatusBar inherits Rectangle {
     in property <string> location;
     in property <string> error-message;
 
+    /// What the path and notice segments are showing, for the window tests.
+    out property <string> shown-path: path-text.text;
+    out property <string> shown-notice: notice-text.visible ? notice-text.text : "";
+
     callback cycle-theme();
 
     height: 44px;
@@ -85,12 +89,37 @@ export component StatusBar inherits Rectangle {
             }
         }
 
-        Text {
-            text: root.error-message == "" ? root.location : root.error-message;
-            color: root.error-message == "" ? Palette.ink-dim : Palette.accent;
-            font-size: 12px;
-            overflow: elide;
-            vertical-alignment: center;
+        // The path and a notice side by side, never one instead of the
+        // other (locked decision #5, release plan M1-16). This line used to
+        // show the notice *in place of* the path, so any message -- "saved",
+        // a warning from a minute ago -- hid where the document lives, which
+        // is the one thing the status bar promises always to say.
+        HorizontalLayout {
+            spacing: 12px;
+
+            path-text := Text {
+                text: root.location;
+                color: Palette.ink-dim;
+                font-size: 12px;
+                overflow: elide;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                min-width: 120px;
+            }
+            notice-text := Text {
+                text: root.error-message;
+                visible: root.error-message != "";
+                color: Palette.accent;
+                font-size: 12px;
+                overflow: elide;
+                vertical-alignment: center;
+                horizontal-alignment: right;
+                // Under half the line, so a long notice elides before the
+                // path has to. Slint elides only at the end, so a squeezed
+                // path loses its file name first -- which the tab strip and
+                // the title bar still show; the folder is shown nowhere else.
+                max-width: root.width * 0.45;
+            }
         }
     }
 }
