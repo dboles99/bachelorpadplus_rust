@@ -283,8 +283,36 @@ pub(crate) fn read_os_clipboard() -> Option<String> {
 }
 
 /// Put text on the OS clipboard. Returns whether it worked.
-pub(crate) fn set_os_clipboard(text: &str) -> bool {
-    arboard::Clipboard::new().is_ok_and(|mut c| c.set_text(text.to_owned()).is_ok())
+///
+/// `keep_private` asks the OS to keep this copy out of its own clipboard
+/// history, and on Windows out of cloud clipboard sync and clipboard
+/// monitors -- `bp_clipboard::keep_out_of_os_history` decides when. It is a
+/// request, honoured by Windows' Win+V history and by KDE's Klipper; a
+/// clipboard manager that ignores the hint still sees the text.
+pub(crate) fn set_os_clipboard(text: &str, keep_private: bool) -> bool {
+    let Ok(mut clipboard) = arboard::Clipboard::new() else {
+        return false;
+    };
+    let set = clipboard.set();
+    #[cfg(windows)]
+    let set = if keep_private {
+        use arboard::SetExtWindows as _;
+        set.exclude_from_history()
+            .exclude_from_cloud()
+            .exclude_from_monitoring()
+    } else {
+        set
+    };
+    #[cfg(target_os = "linux")]
+    let set = if keep_private {
+        use arboard::SetExtLinux as _;
+        set.exclude_from_history()
+    } else {
+        set
+    };
+    #[cfg(not(any(windows, target_os = "linux")))]
+    let _ = keep_private;
+    set.text(text.to_owned()).is_ok()
 }
 
 /// Which Slint renderer to ask for.
@@ -647,6 +675,38 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
         });
     }
     ui.on_overwrite_end(editor_view::overwrite_end);
+
+    // --- copies made in the `TextInput` view ----------------------------
+    // Slint copies and cuts by itself, so without this the history only ever
+    // learned of them by polling -- and a poll cannot tell a copy from this
+    // window from one made in a password manager. Returns whether Rust put
+    // the text on the clipboard itself, which it does for a private copy so
+    // the OS can be asked to keep it out of its own history.
+    {
+        let cell = Rc::clone(&state);
+        let weak = ui.as_weak();
+        ui.on_copied_from_editor(move |text, anchor, cursor, cut| {
+            let Some(ui) = weak.upgrade() else {
+                return false;
+            };
+            let Some(selected) = editor_view::selected_text(&text, anchor, cursor) else {
+                return false;
+            };
+            let copied_privately = {
+                let mut s = cell.borrow_mut();
+                s.record_copy(selected);
+                // A cut is left to the widget: `TextInput` has no way to
+                // delete a selection from outside that keeps its own undo
+                // history intact. So a private *cut* in this view reaches
+                // the OS clipboard unmarked -- a known gap, recorded in the
+                // release plan, closed when the default view's editing moves
+                // to Rust.
+                !cut && s.keep_clipboard_private() && set_os_clipboard(selected, true)
+            };
+            refresh(&ui, &mut cell.borrow_mut(), state::PushText::No);
+            copied_privately
+        });
+    }
 
     // --- the custom editor surface -------------------------------------
     {
@@ -1013,6 +1073,7 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
     {
         let cell = Rc::clone(&state);
         let weak = ui.as_weak();
+        let mut last_seen: Option<String> = None;
         clipboard_timer.start(
             slint::TimerMode::Repeated,
             std::time::Duration::from_millis(1200),
@@ -1031,7 +1092,25 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
                     // looser profile, and the poll is the soonest reliable
                     // point at which that is noticed.
                     let cleared = s.clips.enforce(policy);
-                    let added = s.clips.push(&text, policy);
+                    // Copies made in the editor are recorded when they happen
+                    // (`copied-from-editor`, and the custom view's commands).
+                    // What the poll adds is everything else, which is another
+                    // program's -- recorded only if the user opted in. The
+                    // document check is the fallback for an in-app copy that
+                    // took a path nobody wired; it runs only when the
+                    // clipboard has changed, which is what `last_seen` is for.
+                    let added = if last_seen.as_deref() == Some(text.as_str()) {
+                        false
+                    } else {
+                        let origin = if s.active_text().contains(text.as_str()) {
+                            bp_clipboard::Origin::OpenDocument
+                        } else {
+                            bp_clipboard::Origin::Elsewhere
+                        };
+                        s.clips
+                            .observe(&text, policy, origin, state::RECORD_OTHER_PROGRAMS)
+                    };
+                    last_seen = Some(text);
                     cleared || added
                 };
                 // Only rebuild the menus when the history actually changed.

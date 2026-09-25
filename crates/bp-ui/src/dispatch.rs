@@ -388,7 +388,10 @@ pub fn handle_menu_action(
             };
             let mut s = state.borrow_mut();
             s.error = match path {
-                Some(path) if crate::set_os_clipboard(&path) => Some(format!("copied {path}")),
+                // A path, not document text, so the OS may keep it.
+                Some(path) if crate::set_os_clipboard(&path, false) => {
+                    Some(format!("copied {path}"))
+                }
                 Some(_) => Some("could not reach the clipboard".to_owned()),
                 None => Some("this document has never been saved".to_owned()),
             };
@@ -678,7 +681,7 @@ pub fn handle_menu_action(
         id if (action::CLIP_BASE..menus::clip_end()).contains(&id) => {
             let index = usize::try_from(id - action::CLIP_BASE).unwrap_or(0);
             let text = state.borrow().clips.get(index).map(|e| e.text.clone())?;
-            set_os_clipboard(&text);
+            set_os_clipboard(&text, state.borrow().keep_clipboard_private());
 
             let owns_caret = state.borrow().editor_view;
             if owns_caret {
@@ -715,7 +718,7 @@ pub fn handle_menu_action(
                 .get(entry_index)
                 .map(|e| e.text.clone())?;
             let text = menus::apply_transform(transform, &source)?;
-            set_os_clipboard(&text);
+            set_os_clipboard(&text, state.borrow().keep_clipboard_private());
 
             let owns_caret = state.borrow().editor_view;
             if owns_caret {
