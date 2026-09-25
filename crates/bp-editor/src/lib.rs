@@ -96,6 +96,59 @@ fn class(ch: char) -> Class {
     }
 }
 
+/// How many characters typing `typed` replaces in overwrite mode, given the
+/// characters that follow the caret.
+///
+/// One per character typed, and **never past the end of the line**: typing
+/// over the last character of a line extends it rather than eating the line
+/// break and pulling the next line up, which is what every editor with the
+/// mode does and the only answer that cannot join two lines by accident.
+/// Text containing a line break replaces nothing -- Enter inserts a line in
+/// overwrite mode too -- and neither does a key that is not text.
+///
+/// Characters, not grapheme clusters: typing over a decomposed `é` replaces
+/// the `e` and leaves the accent. That matches `TextInput`, which also moves
+/// and deletes by character, so the two views agree.
+///
+/// Public, and over an iterator rather than a buffer, so the `TextInput` view
+/// -- whose text is a string the shell does not own -- asks the same question
+/// through [`overwrite_end`] and gets the same answer.
+#[must_use]
+pub fn overwritten(following: impl IntoIterator<Item = char>, typed: &str) -> usize {
+    // A key rather than text -- an arrow, Insert itself, a control code --
+    // replaces nothing. The `TextInput` view asks before it knows what the
+    // key will do, and an arrow that selected a character first would move
+    // one further than it should.
+    if typed.is_empty()
+        || typed
+            .chars()
+            .any(|ch| ch.is_control() || crate::keys::is_toolkit_key(ch))
+    {
+        return 0;
+    }
+    following
+        .into_iter()
+        .take_while(|&ch| ch != '\n' && ch != '\r')
+        .take(typed.chars().count())
+        .count()
+}
+
+/// The byte offset in `text` up to which typing `typed` at byte `at`
+/// overwrites -- `at` itself when it overwrites nothing.
+///
+/// [`overwritten`] measured in UTF-8 bytes, for a view that selects by byte
+/// offset. An `at` that is out of range or not on a character boundary
+/// overwrites nothing rather than panicking: it comes from a toolkit, and a
+/// key press is not worth a crash.
+#[must_use]
+pub fn overwrite_end(text: &str, at: usize, typed: &str) -> usize {
+    let Some(rest) = text.get(at..) else {
+        return at;
+    };
+    let count = overwritten(rest.chars(), typed);
+    at + rest.chars().take(count).map(char::len_utf8).sum::<usize>()
+}
+
 /// A document being edited.
 #[derive(Debug, Clone)]
 pub struct Editor {
@@ -119,6 +172,9 @@ pub struct Editor {
     /// the editor's -- and once a line can occupy several rows, "the line
     /// above" is no longer the same thing as "the row above".
     wrap: crate::wrap::Wrap,
+    /// Whether typing replaces the character after the caret (the Insert
+    /// key). See [`overwritten`] for exactly what it replaces.
+    overwrite: bool,
 }
 
 /// What the Tab key puts in the document.
@@ -186,7 +242,63 @@ impl Editor {
             goal_column: None,
             indent: Indent::default(),
             wrap: crate::wrap::Wrap::OFF,
+            overwrite: false,
         }
+    }
+
+    /// Whether typing overwrites rather than inserts.
+    #[must_use]
+    pub const fn overwrite(&self) -> bool {
+        self.overwrite
+    }
+
+    /// Switch overwriting on or off.
+    ///
+    /// Set from outside rather than toggled by [`Command::ToggleOverwrite`],
+    /// because the mode is the window's: every open document follows the one
+    /// key, and a document that toggled itself would disagree with its
+    /// neighbours the moment the user switched tabs.
+    pub fn set_overwrite(&mut self, overwrite: bool) {
+        self.overwrite = overwrite;
+    }
+
+    /// Type `text` at the caret, overwriting if the mode says so.
+    ///
+    /// Distinct from [`insert`](Self::insert), which is what paste, Replace
+    /// and every programmatic edit use: overwrite mode is about *typing*,
+    /// and a paste that ate the text after it would destroy something the
+    /// user never pointed at. A selection is replaced either way, as it is
+    /// in every editor that has the mode.
+    pub fn type_text(&mut self, text: &str) {
+        if !self.overwrite || self.selection().is_some() {
+            self.insert(text);
+            return;
+        }
+        let following =
+            (self.cursor..self.buffer.len_chars()).map_while(|i| self.buffer.char_at(i));
+        let count = overwritten(following, text);
+        if count == 0 {
+            self.insert(text);
+            return;
+        }
+
+        let at = self.cursor;
+        let removed = self.buffer.slice(at..at + count);
+        self.buffer.remove(at..at + count);
+        self.buffer.insert(at, text);
+        self.cursor = at + text.chars().count();
+        self.anchor = self.cursor;
+        self.commit(
+            vec![
+                Op::Remove { at, text: removed },
+                Op::Insert {
+                    at,
+                    text: text.to_owned(),
+                },
+            ],
+            at,
+            true,
+        );
     }
 
     /// How the text should wrap from now on.
@@ -869,22 +981,30 @@ impl Editor {
         // run was aiming for no longer means anything.
         self.goal_column = None;
 
-        // Only merge when this insert continues exactly where the previous one
+        // Only merge when this edit continues exactly where the previous one
         // stopped. Typing elsewhere is a separate edit even if nothing else
         // intervened.
+        //
+        // An overwrite arrives as a remove and an insert at one position, and
+        // merges by appending both: undo inverts a transaction's ops in
+        // reverse, so a run of overwrites unpicks itself one character at a
+        // time, back to the original text, in one press.
+        let first_at = match ops.first() {
+            Some(Op::Insert { at, .. } | Op::Remove { at, .. }) => Some(*at),
+            None => None,
+        };
         if typing
             && self.coalesce == Coalesce::Typing
             && let Some(last) = self.undo.last_mut()
-            && let (
-                Some(Op::Insert { at, text }),
-                Op::Insert {
-                    at: new_at,
-                    text: new,
-                },
-            ) = (last.ops.last_mut(), &ops[0])
-            && *at + text.chars().count() == *new_at
+            && let Some(Op::Insert { at, text }) = last.ops.last()
+            && Some(*at + text.chars().count()) == first_at
         {
-            text.push_str(new);
+            match (last.ops.last_mut(), ops.as_slice()) {
+                (Some(Op::Insert { text, .. }), [Op::Insert { text: new, .. }]) => {
+                    text.push_str(new);
+                }
+                _ => last.ops.extend(ops),
+            }
             last.cursor_after = self.cursor;
             return;
         }
@@ -959,7 +1079,7 @@ impl Editor {
     pub fn apply(&mut self, command: &Command) -> bool {
         match command {
             Command::Insert(text) => {
-                self.insert(text);
+                self.type_text(text);
                 true
             }
             Command::Indent => {
@@ -1005,7 +1125,12 @@ impl Editor {
                 self.select_all();
                 false
             }
-            Command::Copy | Command::Cut | Command::Paste | Command::Ignore => false,
+            // The mode is the window's; see `set_overwrite`.
+            Command::ToggleOverwrite
+            | Command::Copy
+            | Command::Cut
+            | Command::Paste
+            | Command::Ignore => false,
         }
     }
 
@@ -2222,5 +2347,120 @@ mod tests {
                 );
             }
         }
+    }
+
+    // --- overwrite mode ----------------------------------------------------
+
+    fn overwriting(text: &str, cursor: usize) -> Editor {
+        let mut editor = Editor::new(text);
+        editor.set_cursor(cursor);
+        editor.set_overwrite(true);
+        editor
+    }
+
+    fn typed(editor: &mut Editor, text: &str) {
+        for ch in text.chars() {
+            editor.apply(&Command::Insert(ch.to_string()));
+        }
+    }
+
+    #[test]
+    fn overwriting_replaces_one_character_per_character_typed() {
+        let mut editor = overwriting("hello world", 6);
+        typed(&mut editor, "there");
+        assert_eq!(editor.text(), "hello there");
+        assert_eq!(editor.cursor(), 11);
+    }
+
+    #[test]
+    fn overwriting_past_the_end_of_a_line_extends_it_and_keeps_the_break() {
+        // Eating the line break would pull the next line up -- a join the
+        // user never asked for.
+        let mut editor = overwriting("ab\ncd", 1);
+        typed(&mut editor, "xyz");
+        assert_eq!(editor.text(), "axyz\ncd");
+    }
+
+    #[test]
+    fn overwriting_stops_at_a_bare_carriage_return_too() {
+        let mut editor = overwriting("ab\r\ncd", 1);
+        typed(&mut editor, "xy");
+        assert_eq!(editor.text(), "axy\r\ncd");
+    }
+
+    #[test]
+    fn enter_inserts_a_line_even_when_overwriting() {
+        let mut editor = overwriting("abc", 1);
+        editor.apply(&Command::Insert("\n".to_owned()));
+        assert_eq!(editor.text(), "a\nbc");
+    }
+
+    #[test]
+    fn a_selection_is_replaced_not_overwritten_past() {
+        let mut editor = overwriting("hello world", 0);
+        editor.select(0, 5);
+        typed(&mut editor, "J");
+        assert_eq!(editor.text(), "J world");
+    }
+
+    #[test]
+    fn paste_inserts_whatever_the_mode() {
+        // `insert` is the programmatic edit; only typing overwrites.
+        let mut editor = overwriting("abc", 1);
+        editor.insert("XY");
+        assert_eq!(editor.text(), "aXYbc");
+    }
+
+    #[test]
+    fn a_run_of_overwriting_undoes_in_one_step_back_to_the_original() {
+        let mut editor = overwriting("hello world", 6);
+        typed(&mut editor, "there!!");
+        assert_eq!(editor.text(), "hello there!!");
+        assert!(editor.undo());
+        assert_eq!(editor.text(), "hello world");
+        assert_eq!(editor.cursor(), 6);
+        assert!(editor.redo());
+        assert_eq!(editor.text(), "hello there!!");
+    }
+
+    #[test]
+    fn switching_the_mode_off_goes_back_to_inserting() {
+        let mut editor = overwriting("abc", 0);
+        editor.set_overwrite(false);
+        typed(&mut editor, "x");
+        assert_eq!(editor.text(), "xabc");
+        assert!(!editor.overwrite());
+    }
+
+    #[test]
+    fn the_editor_does_not_toggle_the_mode_by_itself() {
+        // The window owns it, so every document follows one key.
+        let mut editor = overwriting("abc", 0);
+        assert!(!editor.apply(&Command::ToggleOverwrite));
+        assert!(editor.overwrite());
+    }
+
+    #[test]
+    fn overwrite_end_agrees_with_the_editor_in_bytes() {
+        // The `TextInput` view asks through this; it must replace exactly
+        // what the editor replaces, measured in UTF-8.
+        assert_eq!(overwrite_end("héllo", 0, "ab"), 3, "h and the two-byte é");
+        assert_eq!(overwrite_end("ab\ncd", 1, "xyz"), 2, "stops at the break");
+        assert_eq!(overwrite_end("abc", 3, "x"), 3, "nothing after the caret");
+        assert_eq!(overwrite_end("abc", 1, "\n"), 1, "Enter replaces nothing");
+    }
+
+    #[test]
+    fn a_key_that_is_not_text_overwrites_nothing() {
+        // U+F702 is Slint's Left arrow, U+F727 its Insert.
+        for key in ["\u{F702}", "\u{F727}", "\u{8}", "\t"] {
+            assert_eq!(overwrite_end("abc", 1, key), 1, "{key:?}");
+        }
+    }
+
+    #[test]
+    fn overwrite_end_refuses_an_offset_it_cannot_use() {
+        assert_eq!(overwrite_end("abc", 99, "x"), 99);
+        assert_eq!(overwrite_end("é", 1, "x"), 1, "mid-character");
     }
 }

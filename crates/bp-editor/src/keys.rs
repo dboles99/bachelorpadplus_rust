@@ -28,6 +28,7 @@ pub enum Key {
     Enter,
     Tab,
     Escape,
+    Insert,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -78,6 +79,12 @@ pub enum Command {
     Copy,
     Cut,
     Paste,
+    /// The Insert key: switch between inserting and overwriting.
+    ///
+    /// A command rather than something the editor does to itself, because
+    /// the mode belongs to the window -- every document follows it, and the
+    /// status bar shows it -- so the shell has to hear about the change.
+    ToggleOverwrite,
     /// Not ours. The view must let it through rather than swallowing it.
     Ignore,
 }
@@ -107,6 +114,16 @@ pub fn command_for(key: Key, modifiers: Modifiers, page_rows: usize) -> Command 
         Key::PageUp => move_to(Motion::PageUp(page_rows)),
         Key::PageDown => move_to(Motion::PageDown(page_rows)),
 
+        // The CUA clipboard keys, older than Ctrl+C/X/V and still in every
+        // Windows hand that learned on them. Checked before the plain arms
+        // below, which would read Shift+Delete as a delete and Shift+Insert
+        // as a mode switch.
+        Key::Insert if modifiers.shift && !modifiers.control => Command::Paste,
+        Key::Insert if modifiers.is_chord() => Command::Copy,
+        Key::Delete if modifiers.shift && !modifiers.control => Command::Cut,
+        Key::Insert if !modifiers.control && !modifiers.alt => Command::ToggleOverwrite,
+        Key::Insert => Command::Ignore,
+
         Key::Backspace if modifiers.is_chord() => Command::DeleteWordBackward,
         Key::Delete if modifiers.is_chord() => Command::DeleteWordForward,
         Key::Backspace => Command::DeleteBackward,
@@ -132,9 +149,11 @@ pub fn command_for(key: Key, modifiers: Modifiers, page_rows: usize) -> Command 
         },
 
         // Plain text, or AltGr text. A control character reaching here is a
-        // key the backend did not name, not something to put in the document.
+        // key the backend did not name, not something to put in the document;
+        // so is a code point from the block toolkits encode named keys into
+        // (see `is_toolkit_key`).
         Key::Char(ch) if !modifiers.control || modifiers.is_altgr() => {
-            if ch.is_control() {
+            if ch.is_control() || is_toolkit_key(ch) {
                 Command::Ignore
             } else {
                 Command::Insert(ch.to_string())
@@ -142,6 +161,20 @@ pub fn command_for(key: Key, modifiers: Modifiers, page_rows: usize) -> Command 
         }
         Key::Char(_) => Command::Ignore,
     }
+}
+
+/// Whether `ch` is a code point a toolkit uses to name a key rather than a
+/// character anybody typed.
+///
+/// Slint, like the macOS convention it follows, reports Insert, the function
+/// keys, Menu and the rest as characters in U+F700..=U+F7FF. A key the shell
+/// has not named arrives as one of those, and inserting it put an invisible
+/// private-use character into the document -- which is what pressing Insert
+/// did before it had a meaning. `TextInput` refuses the same block, for the
+/// same reason.
+#[must_use]
+pub const fn is_toolkit_key(ch: char) -> bool {
+    matches!(ch, '\u{F700}'..='\u{F7FF}')
 }
 
 #[cfg(test)]
@@ -327,5 +360,52 @@ mod tests {
         // Alt is the menu-bar modifier; typing under it still inserts, which
         // matches every other plain-text field.
         assert_eq!(cmd(Key::Char('f'), alt), Command::Insert("f".to_owned()));
+    }
+
+    #[test]
+    fn insert_switches_between_inserting_and_overwriting() {
+        assert_eq!(cmd(Key::Insert, NONE), Command::ToggleOverwrite);
+    }
+
+    #[test]
+    fn the_cua_clipboard_keys_do_what_windows_taught_them_to() {
+        assert_eq!(cmd(Key::Insert, SHIFT), Command::Paste);
+        assert_eq!(cmd(Key::Insert, CTRL), Command::Copy);
+        assert_eq!(cmd(Key::Delete, SHIFT), Command::Cut);
+    }
+
+    #[test]
+    fn insert_under_other_modifiers_is_left_for_the_window() {
+        let alt = Modifiers {
+            control: false,
+            shift: false,
+            alt: true,
+        };
+        let everything = Modifiers {
+            control: true,
+            shift: true,
+            alt: true,
+        };
+        assert_eq!(cmd(Key::Insert, alt), Command::Ignore);
+        assert_eq!(cmd(Key::Insert, everything), Command::Ignore);
+    }
+
+    #[test]
+    fn a_key_the_toolkit_names_is_never_typed_into_the_document() {
+        // U+F727 is Slint's Insert, U+F704 its F1, U+F7FF the end of the
+        // block. Each used to arrive here as a character and be inserted.
+        for ch in ['\u{F700}', '\u{F704}', '\u{F727}', '\u{F7FF}'] {
+            assert_eq!(cmd(Key::Char(ch), NONE), Command::Ignore, "{ch:?}");
+        }
+        // The block's neighbours are ordinary private-use characters that a
+        // font or a document may genuinely carry.
+        assert_eq!(
+            cmd(Key::Char('\u{F6FF}'), NONE),
+            Command::Insert("\u{F6FF}".to_owned())
+        );
+        assert_eq!(
+            cmd(Key::Char('\u{F800}'), NONE),
+            Command::Insert("\u{F800}".to_owned())
+        );
     }
 }
