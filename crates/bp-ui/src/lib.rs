@@ -276,13 +276,49 @@ fn ui_query(ui: &AppWindow) -> bp_search::Query {
     )
 }
 
-/// Whatever the OS clipboard holds, if it holds text.
+thread_local! {
+    /// The process's one connection to the OS clipboard, made on first use
+    /// (release plan M2-08).
+    ///
+    /// One, not one per copy, because on Linux the clipboard is not a store
+    /// but a promise: under X11 the program that copied answers every paste
+    /// itself, for as long as its `arboard::Clipboard` lives. A clipboard
+    /// made for one copy and dropped at the end of it takes the text with it
+    /// unless a clipboard manager happened to grab it first -- so a copy
+    /// from this editor could paste as nothing. It also spares the history
+    /// poll a fresh display connection every 1.2 seconds.
+    ///
+    /// Thread-local because everything that touches it runs on the UI
+    /// thread; `None` until the first use, and again after a failed attempt,
+    /// so a clipboard that was unavailable at startup is retried rather than
+    /// lost for the session.
+    static OS_CLIPBOARD: RefCell<Option<arboard::Clipboard>> = const { RefCell::new(None) };
+
+    /// The timer that clears a private copy off the OS clipboard, and what
+    /// it is waiting to clear. A later private copy restarts it; see
+    /// [`bp_clipboard::clear_after`].
+    static PRIVATE_CLEAR: RefCell<Option<(slint::Timer, bp_clipboard::PendingClear)>> =
+        const { RefCell::new(None) };
+}
+
+/// Run `f` against the process's clipboard, connecting first if need be.
+/// `None` if there is no clipboard to be had.
+fn with_os_clipboard<T>(f: impl FnOnce(&mut arboard::Clipboard) -> Option<T>) -> Option<T> {
+    OS_CLIPBOARD.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        if slot.is_none() {
+            *slot = arboard::Clipboard::new().ok();
+        }
+        f(slot.as_mut()?)
+    })
+}
+
 /// Read the OS clipboard, if it holds text.
 ///
 /// Failures are silent: a clipboard held open by another process is normal
 /// and momentary, and there is nothing useful to say about it.
 pub(crate) fn read_os_clipboard() -> Option<String> {
-    arboard::Clipboard::new().ok()?.get_text().ok()
+    with_os_clipboard(|clipboard| clipboard.get_text().ok())
 }
 
 /// Put text on the OS clipboard. Returns whether it worked.
@@ -291,31 +327,76 @@ pub(crate) fn read_os_clipboard() -> Option<String> {
 /// history, and on Windows out of cloud clipboard sync and clipboard
 /// monitors -- `bp_clipboard::keep_out_of_os_history` decides when. It is a
 /// request, honoured by Windows' Win+V history and by KDE's Klipper; a
-/// clipboard manager that ignores the hint still sees the text.
+/// clipboard manager that ignores the hint still sees the text. A private
+/// copy is also cleared off the clipboard after
+/// [`bp_clipboard::PRIVATE_CLEAR_AFTER`], which does not depend on anyone
+/// honouring anything.
 pub(crate) fn set_os_clipboard(text: &str, keep_private: bool) -> bool {
-    let Ok(mut clipboard) = arboard::Clipboard::new() else {
-        return false;
+    let set = with_os_clipboard(|clipboard| {
+        let set = clipboard.set();
+        #[cfg(windows)]
+        let set = if keep_private {
+            use arboard::SetExtWindows as _;
+            set.exclude_from_history()
+                .exclude_from_cloud()
+                .exclude_from_monitoring()
+        } else {
+            set
+        };
+        #[cfg(target_os = "linux")]
+        let set = if keep_private {
+            use arboard::SetExtLinux as _;
+            set.exclude_from_history()
+        } else {
+            set
+        };
+        set.text(text.to_owned()).ok()
+    })
+    .is_some();
+    if set {
+        schedule_private_clear(text, keep_private);
+    }
+    set
+}
+
+/// After a successful copy: start the countdown to clearing a private one,
+/// or, for a standard one, cancel any countdown still running -- the private
+/// text it was waiting for is no longer on the clipboard, and the fingerprint
+/// check would leave the new text alone anyway, but a timer with nothing to
+/// do should not be left running.
+fn schedule_private_clear(text: &str, keep_private: bool) {
+    PRIVATE_CLEAR.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        // Dropping a `slint::Timer` stops it.
+        *slot = None;
+        if !keep_private {
+            return;
+        }
+        let pending = bp_clipboard::PendingClear::new(text);
+        let timer = slint::Timer::default();
+        timer.start(
+            slint::TimerMode::SingleShot,
+            bp_clipboard::PRIVATE_CLEAR_AFTER,
+            clear_if_still_ours,
+        );
+        *slot = Some((timer, pending));
+    });
+}
+
+/// The timer's end: clear the OS clipboard if it still holds the private
+/// copy. The pending entry is taken out first and the borrow released, so
+/// nothing here holds `PRIVATE_CLEAR` while it talks to the clipboard.
+fn clear_if_still_ours() {
+    let Some((_timer, pending)) = PRIVATE_CLEAR.with(|cell| cell.borrow_mut().take()) else {
+        return;
     };
-    let set = clipboard.set();
-    #[cfg(windows)]
-    let set = if keep_private {
-        use arboard::SetExtWindows as _;
-        set.exclude_from_history()
-            .exclude_from_cloud()
-            .exclude_from_monitoring()
-    } else {
-        set
-    };
-    #[cfg(target_os = "linux")]
-    let set = if keep_private {
-        use arboard::SetExtLinux as _;
-        set.exclude_from_history()
-    } else {
-        set
-    };
-    #[cfg(not(any(windows, target_os = "linux")))]
-    let _ = keep_private;
-    set.text(text.to_owned()).is_ok()
+    with_os_clipboard(|clipboard| {
+        let current = clipboard.get_text().ok();
+        pending
+            .should_clear(current.as_deref())
+            .then(|| clipboard.clear().ok())
+            .flatten()
+    });
 }
 
 /// Which Slint renderer to ask for.
@@ -1873,4 +1954,34 @@ fn settle_then_quit(
         }
         dialog::Unsaved::Cancel => refresh(ui, &mut cell.borrow_mut(), state::PushText::Yes),
     });
+}
+
+#[cfg(test)]
+mod clipboard_tests {
+    use super::{PRIVATE_CLEAR, schedule_private_clear};
+
+    fn waiting() -> Option<bool> {
+        PRIVATE_CLEAR.with(|cell| cell.borrow().as_ref().map(|(timer, _)| timer.running()))
+    }
+
+    #[test]
+    fn a_private_copy_starts_the_countdown_and_a_standard_copy_cancels_it() {
+        assert_eq!(waiting(), None);
+        schedule_private_clear("hunter2", true);
+        assert_eq!(waiting(), Some(true));
+        // A second private copy restarts the countdown for the newer text.
+        schedule_private_clear("correct horse", true);
+        assert_eq!(
+            PRIVATE_CLEAR.with(|cell| cell.borrow().as_ref().map(|(_, pending)| *pending)),
+            Some(bp_clipboard::PendingClear::new("correct horse"))
+        );
+        schedule_private_clear("a shopping list", false);
+        assert_eq!(waiting(), None);
+    }
+
+    #[test]
+    fn a_standard_copy_starts_no_countdown() {
+        schedule_private_clear("a shopping list", false);
+        assert_eq!(waiting(), None);
+    }
 }

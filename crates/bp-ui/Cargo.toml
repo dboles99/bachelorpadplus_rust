@@ -47,11 +47,14 @@ bp-naming = { path = "../bp-naming" }
 bp-theme = { path = "../bp-theme" }
 # Text only: the editor reads and writes plain text and never an image.
 # `image-data` (a default) would pull in the `image` crate and, on Windows,
-# GDI bindings for a feature nothing here calls. `wayland-data-control` is not
-# a default and was never on: under Wayland the clipboard goes through
-# XWayland, as before. Turning it on is a behaviour change with its own
-# trade-offs (compositors without the data-control protocol), not hygiene.
-arboard = { version = "3", default-features = false }
+# GDI bindings for a feature nothing here calls. `wayland-data-control`
+# (release plan M2-08) talks to a Wayland compositor's clipboard directly
+# rather than through XWayland, which some sessions run without and which
+# syncs with the Wayland side late or not at all. arboard tries it first when
+# WAYLAND_DISPLAY is set and falls back to X11 by itself on a compositor
+# without the data-control protocol, so turning it on costs no session the
+# clipboard it had before.
+arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 # Passphrases and decrypted document bytes are wiped rather than dropped.
 zeroize.workspace = true
 # Exactly what the shell uses, so nothing ships that nothing calls. Slint's
