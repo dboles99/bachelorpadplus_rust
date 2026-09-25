@@ -907,15 +907,37 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
     // Autosave to the recovery journal. Separate from the disk watcher
     // because they answer different questions on different clocks: "did
     // someone else change this file" and "is my work safe if the power goes".
+    //
+    // The sealing and writing run on a worker (release plan M1-07): for an
+    // encrypted document each checkpoint is a key derivation, and on this
+    // thread that was a stall in the typing every five seconds. Each tick
+    // first collects the previous batch's outcome, then starts the next --
+    // never two at once, so a slow batch delays the next rather than
+    // piling up behind it. Writes that a save or close overtook are
+    // dropped by the journal's tickets (`prepare_checkpoints`).
     let journal_timer = slint::Timer::default();
     {
         let cell = Rc::clone(&state);
         let weak = ui.as_weak();
+        let batches = RefCell::new(worker::Background::new());
         journal_timer.start(
             slint::TimerMode::Repeated,
             std::time::Duration::from_secs(5),
             move || {
-                cell.borrow_mut().checkpoint_all();
+                {
+                    let mut batches = batches.borrow_mut();
+                    let mut s = cell.borrow_mut();
+                    if let Some(written) = batches.take() {
+                        s.apply_checkpoints(written);
+                    }
+                    if !batches.busy() {
+                        let jobs = s.prepare_checkpoints();
+                        if !jobs.is_empty() {
+                            let journal = s.journal.clone();
+                            batches.start(move |_| state::write_checkpoints(&journal, jobs));
+                        }
+                    }
+                }
                 // The status bar shows the checkpoint time, so it has to
                 // repaint -- but a checkpoint is not a save and the save
                 // state must not move.
