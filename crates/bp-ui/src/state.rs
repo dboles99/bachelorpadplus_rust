@@ -200,6 +200,16 @@ impl AppState {
         state
     }
 
+    /// Add a notice beside whatever the status bar already says, never over
+    /// it. Startup is the case that needs it: several things may each have
+    /// something to report, and the last to speak used to erase the rest.
+    pub(crate) fn add_notice(&mut self, notice: String) {
+        self.error = Some(match self.error.take() {
+            Some(earlier) => format!("{earlier}; {notice}"),
+            None => notice,
+        });
+    }
+
     /// Open the files named on the command line, then say everything startup
     /// has to say.
     ///
@@ -420,6 +430,18 @@ impl AppState {
             self.stamps.insert(id, stamp);
         }
         self.disk_warning = None;
+        // The recent list is a record *about* the document -- its path, on
+        // disk, outliving the session -- which is exactly what
+        // `Metadata::Disabled` forbids. Confidential and Maximum set it, and
+        // Privacy Mode clamps every document to it, so one check covers all
+        // three. It used to be written regardless, the one record in the
+        // product that ignored the profile.
+        let recordable = self.workspace.get(id).is_none_or(|doc| {
+            doc.security().policy_under(self.privacy).metadata != bp_security::Metadata::Disabled
+        });
+        if !recordable {
+            return;
+        }
         self.recent.push(path);
         if let Some(file) = &self.recent_file {
             bp_config::save_recent(file, &self.recent);
@@ -683,9 +705,21 @@ impl AppState {
             (action::DATA_FORMAT, Format::Json) => {
                 self.apply_to_active(bp_data::json_format(&text));
             }
-            (action::DATA_FORMAT, Format::Toml) => {
-                self.apply_to_active(bp_data::toml_format(&text));
+            (action::DATA_SORT_KEYS, Format::Json) => {
+                self.apply_to_active(bp_data::json_sort_keys(&text));
             }
+            (action::DATA_FORMAT, Format::Toml) => match bp_data::toml_format(&text) {
+                // Said after the fact as well as on the row, like YAML: the
+                // document has changed in a way a person would not guess.
+                Ok(formatted) => {
+                    self.edit(formatted);
+                    self.error = Some(
+                        "✓ formatted — comments were not kept and keys were sorted; Ctrl+Z undoes it"
+                            .to_owned(),
+                    );
+                }
+                Err(e) => self.error = Some(format!("this TOML was left unchanged — {e}")),
+            },
             (action::DATA_MINIFY, Format::Json) => {
                 self.apply_to_active(bp_data::json_minify(&text));
             }
@@ -895,9 +929,21 @@ impl AppState {
                 }
                 self.editors.insert(id, bp_editor::Editor::new(&file.text));
                 self.mark_in_step(id, &path2);
+                // Loaded, but big enough that whole-document tools -- Find,
+                // the data operations, statistics -- will be noticeably slow.
+                // Said once, at open, rather than left for the user to
+                // discover as a hang. A file past the editable limit never
+                // gets here: `load` refuses it, and the arm below shows why.
+                if file.size_class() == bp_buffer::SizeClass::Large {
+                    self.error = Some(format!(
+                        "Large file ({} MiB): whole-document tools may be slow",
+                        file.bytes_on_disk / (1024 * 1024)
+                    ));
+                }
             }
             // The error types already render a message naming the file and
             // what to do about it, which is exactly what the status bar wants.
+            // That includes a file too large to edit, which opens no tab.
             Err(e) => self.error = Some(e.to_string()),
         }
     }
@@ -2696,6 +2742,37 @@ fn locations() -> bp_config::Locations {
     }
 }
 
+/// What an answer to the startup "Unsaved work recovered" prompt means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RecoveryChoice {
+    /// Open the recovered documents now.
+    Restore,
+    /// Delete them. Only ever an explicit "No".
+    Discard,
+    /// Leave them in the journal and ask again at the next launch.
+    Keep,
+}
+
+/// The one place the prompt's answer becomes an action.
+///
+/// **Only an explicit No discards.** This was a data-loss bug on Linux: rfd
+/// shows message dialogs by running `zenity`, and when zenity is absent --
+/// most KDE installations -- the dialog cannot appear and rfd reports
+/// `Cancel`. The prompt used to treat every answer but Yes as a decision to
+/// discard, so recovered work was deleted without the user ever seeing the
+/// question. Worse, zenity's Yes/No dialog reports a window closed with Esc
+/// or the title-bar button as `No`, which is why the prompt now asks
+/// Yes/No/Cancel: closing it is Cancel, and Cancel keeps.
+pub(crate) fn recovery_choice(answer: &rfd::MessageDialogResult) -> RecoveryChoice {
+    match answer {
+        rfd::MessageDialogResult::Yes => RecoveryChoice::Restore,
+        rfd::MessageDialogResult::No => RecoveryChoice::Discard,
+        // Cancel, a dialog that could not be shown, a closed window, a
+        // custom button no build of ours defines: none is a decision.
+        _ => RecoveryChoice::Keep,
+    }
+}
+
 /// A status-bar line for anything `bp-config` could not move, or `None`.
 ///
 /// Worth saying because both cases leave something where the product will
@@ -3067,6 +3144,7 @@ mod tests {
             action::DATA_CSV_TO_JSON,
             action::DATA_CSV_TO_JSONL,
             action::DATA_COLUMN_TYPES,
+            action::DATA_SORT_KEYS,
             action::NOTE_TITLE,
             action::NOTE_OUTLINE,
             action::SCAN_SECRETS,
@@ -3279,6 +3357,101 @@ mod tests {
     }
 
     #[test]
+    fn only_an_explicit_no_discards_recovered_work() {
+        use rfd::MessageDialogResult as Answer;
+        assert_eq!(recovery_choice(&Answer::Yes), RecoveryChoice::Restore);
+        assert_eq!(recovery_choice(&Answer::No), RecoveryChoice::Discard);
+        // What rfd reports when zenity is missing, and when the window is
+        // closed: the two ways the old prompt deleted work unasked.
+        assert_eq!(recovery_choice(&Answer::Cancel), RecoveryChoice::Keep);
+        assert_eq!(recovery_choice(&Answer::Ok), RecoveryChoice::Keep);
+        assert_eq!(
+            recovery_choice(&Answer::Custom("Later".to_owned())),
+            RecoveryChoice::Keep
+        );
+    }
+
+    #[test]
+    fn a_confidential_document_never_enters_the_recent_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut state, id, path) = dirty_saved_state(dir.path());
+        state.recent = Recent::new();
+        state.set_security(bp_security::Security::Named(
+            bp_security::Profile::Confidential,
+        ));
+
+        state.save_document(id, None);
+
+        assert!(
+            !state.recent.paths().contains(&path),
+            "Confidential forbids recording anything about the document"
+        );
+    }
+
+    #[test]
+    fn privacy_mode_keeps_an_opened_file_out_of_the_recent_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("diary.txt");
+        std::fs::write(&path, b"dear diary").unwrap();
+        let mut state = AppState::new();
+        state.set_privacy(bp_security::Privacy::On);
+
+        state.open(path.clone());
+
+        assert!(!state.recent.paths().contains(&path));
+    }
+
+    #[test]
+    fn a_standard_document_is_still_remembered() {
+        // The control: the check must not switch the feature off.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.txt");
+        std::fs::write(&path, b"hello").unwrap();
+        let mut state = AppState::new();
+
+        state.open(path.clone());
+
+        assert!(state.recent.paths().contains(&path));
+    }
+
+    #[test]
+    fn a_file_too_large_to_edit_opens_no_tab_and_says_why() {
+        // Sparse, so the test costs a `stat` and not 40 MiB of disk. The
+        // point is that the shell never hands such a file to the editable
+        // widget, which is what used to hang the whole application.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("server.log");
+        std::fs::File::create(&path)
+            .unwrap()
+            .set_len(bp_files::EDITABLE_LIMIT_BYTES + 1)
+            .unwrap();
+        let mut state = AppState::new();
+        let tabs = state.workspace.len();
+
+        state.open(path);
+
+        assert_eq!(state.workspace.len(), tabs, "a tab was opened for it");
+        let error = state.error.expect("the refusal is reported");
+        assert!(error.contains("too large to edit"), "{error}");
+    }
+
+    #[test]
+    fn a_large_file_that_loads_says_tools_may_be_slow() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.txt");
+        std::fs::File::create(&path)
+            .unwrap()
+            .set_len(bp_buffer::LARGE_FILE_BYTES + 1)
+            .unwrap();
+        let mut state = AppState::new();
+
+        state.open(path);
+
+        let notice = state.error.expect("a large file is flagged");
+        assert!(notice.starts_with("Large file"), "{notice}");
+    }
+
+    #[test]
     fn a_test_state_keeps_every_file_it_writes_in_the_temp_directory() {
         // The protection `locations()` exists to give, pinned for all three
         // at once. Before it, `AppState::new()` here read and wrote the
@@ -3356,6 +3529,14 @@ mod tests {
         let error = state.error.expect("something to say");
         assert!(error.starts_with("⚠ an old journal; "), "{error}");
         assert!(error.len() > "⚠ an old journal; ".len(), "{error}");
+    }
+
+    #[test]
+    fn a_notice_is_added_beside_the_last_one_not_over_it() {
+        let mut state = AppState::new();
+        state.add_notice("first".to_owned());
+        state.add_notice("second".to_owned());
+        assert_eq!(state.error.as_deref(), Some("first; second"));
     }
 
     #[test]
@@ -3812,6 +3993,10 @@ mod tests {
         assert!(before.journal.pending().is_empty());
         assert_eq!(before.journal.sealed_count(), 1);
 
+        // The first session ends before the second starts, as a crash or a
+        // quit would end it. While it is alive its journal is held, and a
+        // second window rightly neither offers nor discards its work.
+        drop(before);
         let mut after = AppState::new();
         after.journal = bp_history::Journal::new(recovery.path().to_path_buf());
         after.open_maybe_encrypted(target);
@@ -4787,6 +4972,63 @@ mod tests {
         assert!(
             notice.contains('3'),
             "the count belongs in it; got {notice}"
+        );
+    }
+
+    fn json_state(text: &str) -> AppState {
+        let mut state = AppState::new();
+        let id = state.workspace.active_id().unwrap();
+        state
+            .workspace
+            .get_mut(id)
+            .unwrap()
+            .set_path(PathBuf::from("data.json"));
+        state.edit(text.to_owned());
+        state
+    }
+
+    #[test]
+    fn json_format_keeps_the_key_order_and_sort_keys_sorts() {
+        // Sort Keys shared Format's id and only sorted because Format did.
+        // With the author's order kept, the two have to be different rows
+        // doing different things.
+        let mut state = json_state(r#"{"z":1,"a":2}"#);
+        state.run_data_action(action::DATA_FORMAT);
+        let formatted = state.active_text();
+        assert!(
+            formatted.find("\"z\"") < formatted.find("\"a\""),
+            "{formatted}"
+        );
+
+        state.run_data_action(action::DATA_SORT_KEYS);
+        let sorted = state.active_text();
+        assert!(sorted.find("\"a\"") < sorted.find("\"z\""), "{sorted}");
+    }
+
+    #[test]
+    fn formatting_toml_says_what_it_did_to_the_comments() {
+        let mut state = AppState::new();
+        let id = state.workspace.active_id().unwrap();
+        state
+            .workspace
+            .get_mut(id)
+            .unwrap()
+            .set_path(PathBuf::from("Cargo.toml"));
+        state.edit(
+            "# keep me
+b = 1
+a = 2
+"
+            .to_owned(),
+        );
+
+        state.run_data_action(action::DATA_FORMAT);
+
+        assert!(!state.active_text().contains("keep me"));
+        let notice = state.error.expect("a notice");
+        assert!(
+            notice.contains("comments") && notice.contains("Ctrl+Z"),
+            "{notice}"
         );
     }
 
