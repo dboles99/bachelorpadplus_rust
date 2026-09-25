@@ -576,6 +576,7 @@ pub fn edit(clips: &[bp_clipboard::Entry]) -> Vec<MenuItem> {
 pub fn view(
     theme: ThemeId,
     follow_system: bool,
+    system_reports: bool,
     gutter: bool,
     wrap: bool,
     font_size: u8,
@@ -589,9 +590,21 @@ pub fn view(
         toggle("Dark", chosen(ThemeId::Dark), action::THEME_DARK),
         toggle("Organic", chosen(ThemeId::Organic), action::THEME_ORGANIC),
         toggle("Green", chosen(ThemeId::Green), action::THEME_GREEN),
+        // Still clickable where the desktop does not say -- plain X11, some
+        // window managers -- because the choice is remembered for when it
+        // does; but the row says so, rather than looking like it did
+        // nothing (release plan M1-21).
         MenuItem {
             separator_after: true,
-            ..toggle("Follow System", follow_system, action::THEME_SYSTEM)
+            ..toggle(
+                if system_reports {
+                    "Follow System"
+                } else {
+                    "Follow System (this desktop does not say)"
+                },
+                follow_system,
+                action::THEME_SYSTEM,
+            )
         },
         toggle("Line Numbers", gutter, action::TOGGLE_GUTTER),
         MenuItem {
@@ -1736,7 +1749,7 @@ mod tests {
             ("Edit".to_owned(), edit(&[])),
             (
                 "View".to_owned(),
-                view(ThemeId::Green, false, true, false, 11),
+                view(ThemeId::Green, false, true, true, false, 11),
             ),
             (
                 "Format".to_owned(),
@@ -1801,6 +1814,19 @@ mod tests {
                 assert!(!last.separator_after, "{name} ends on a divider");
             }
         }
+    }
+
+    #[test]
+    fn follow_system_says_when_the_desktop_reports_nothing() {
+        let label = |reports| {
+            view(ThemeId::Green, true, reports, true, false, 11)
+                .into_iter()
+                .find(|i| i.action == action::THEME_SYSTEM)
+                .map(|i| i.label.to_string())
+                .unwrap_or_default()
+        };
+        assert!(!label(true).contains("does not say"), "{}", label(true));
+        assert!(label(false).contains("does not say"), "{}", label(false));
     }
 
     #[test]
@@ -1976,6 +2002,7 @@ mod tests {
             ThemeId::Green,
             false,
             true,
+            true,
             false,
             bp_config::DEFAULT_FONT_SIZE,
         );
@@ -1992,7 +2019,14 @@ mod tests {
 
     #[test]
     fn the_zoom_rows_grey_out_at_the_bound_they_cannot_pass() {
-        let at_max = view(ThemeId::Dark, false, true, false, bp_config::MAX_FONT_SIZE);
+        let at_max = view(
+            ThemeId::Dark,
+            false,
+            true,
+            true,
+            false,
+            bp_config::MAX_FONT_SIZE,
+        );
         let zoom_in = at_max
             .iter()
             .find(|i| i.action == action::ZOOM_IN)
@@ -2011,7 +2045,14 @@ mod tests {
             "Zoom Out is still available at the largest size"
         );
 
-        let at_min = view(ThemeId::Dark, false, true, false, bp_config::MIN_FONT_SIZE);
+        let at_min = view(
+            ThemeId::Dark,
+            false,
+            true,
+            true,
+            false,
+            bp_config::MIN_FONT_SIZE,
+        );
         assert!(
             at_min
                 .iter()
@@ -2032,6 +2073,7 @@ mod tests {
             ThemeId::Dark,
             false,
             true,
+            true,
             false,
             bp_config::DEFAULT_FONT_SIZE,
         );
@@ -2044,6 +2086,7 @@ mod tests {
         let zoomed = view(
             ThemeId::Dark,
             false,
+            true,
             true,
             false,
             bp_config::DEFAULT_FONT_SIZE + 2,
@@ -2060,7 +2103,7 @@ mod tests {
     fn the_reset_row_names_the_size_currently_in_force() {
         // The question a zoom menu is opened to answer. A row reading "Reset
         // Zoom" alone leaves the user no way to tell 13 pt from 15 pt.
-        let items = view(ThemeId::Dark, false, true, false, 22);
+        let items = view(ThemeId::Dark, false, true, true, false, 22);
         let reset = items
             .iter()
             .find(|i| i.action == action::ZOOM_RESET)
@@ -2079,6 +2122,7 @@ mod tests {
             false,
             true,
             true,
+            true,
             bp_config::DEFAULT_FONT_SIZE,
         );
         let gutter = on
@@ -2090,6 +2134,7 @@ mod tests {
         let off = view(
             ThemeId::Dark,
             false,
+            true,
             false,
             false,
             bp_config::DEFAULT_FONT_SIZE,
@@ -2215,6 +2260,7 @@ mod tests {
             ThemeId::Organic,
             false,
             true,
+            true,
             false,
             bp_config::DEFAULT_FONT_SIZE,
         ));
@@ -2317,6 +2363,7 @@ mod tests {
         rust_side.extend(view(
             ThemeId::Green,
             false,
+            true,
             true,
             false,
             bp_config::DEFAULT_FONT_SIZE,
