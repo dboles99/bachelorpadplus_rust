@@ -229,8 +229,8 @@ def isolated_env(home: Path) -> dict[str, str]:
     """An environment that cannot read or write the developer's own state.
 
     Every base directory the app resolves goes under the throwaway home, so
-    config, recovery journals, profiles and logs (``$XDG_STATE_HOME``) all
-    land there and are deleted with it.
+    config, recovery journals, profiles and logs (``BACHELORPAD_LOG_DIR``)
+    all land there and are deleted with it.
     """
     env = dict(os.environ)
     for var, sub in (
@@ -245,8 +245,9 @@ def isolated_env(home: Path) -> dict[str, str]:
         path.mkdir(parents=True, exist_ok=True)
         env[var] = str(path)
     (home / "runtime").chmod(0o700)
-    # Not read by the app today (logs follow XDG_STATE_HOME); set so that a
-    # future override of that name cannot escape the throwaway home.
+    # The app's log directory override (`apps/bachelorpad/src/logging.rs`):
+    # set, so the log and any crash report land in the throwaway home even
+    # if the developer's shell exports a directory of their own.
     env["BACHELORPAD_LOG_DIR"] = str(home / "logs")
     for var in ("BACHELORPAD_CONFIG", "BACHELORPAD_THEME", "BACHELORPAD_RENDERER",
                 "BACHELORPAD_FONT_SIZE", "BACHELORPAD_TAB_WIDTH",
