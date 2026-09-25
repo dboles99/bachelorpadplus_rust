@@ -572,3 +572,57 @@ fn a_long_body_pages_from_the_keyboard_and_starts_at_the_top_each_time() {
         "the next question opened scrolled"
     );
 }
+
+#[test]
+fn a_save_windows_1252_cannot_hold_offers_utf8_and_saves_it_there() {
+    let ui = window();
+    answer_through_dialog(&ui);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ansi.txt");
+    std::fs::write(&path, b"caf\xe9\n").unwrap();
+    let mut state = crate::state::AppState::new();
+    state.open(path.clone());
+    state.edit("café, Gdańsk\n".to_owned());
+    let id = state.workspace.active_id().expect("a document");
+    let cell = Rc::new(std::cell::RefCell::new(state));
+    let result = Rc::new(std::cell::Cell::new(None));
+    let seen = Rc::clone(&result);
+
+    crate::save_with_prompt(&ui, &cell, id, move |_, r| seen.set(Some(r)));
+    assert!(ui.get_dialog_open(), "the save failed without asking");
+    assert_eq!(buttons(&ui), ["Save as UTF-8", "Cancel"]);
+    assert_eq!(result.get(), None);
+
+    press(&ui, Key::Return);
+
+    assert_eq!(result.get(), Some(crate::state::SaveResult::Saved));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "café, Gdańsk\n");
+    assert_eq!(
+        cell.borrow().workspace.get(id).unwrap().encoding(),
+        bp_core::Encoding::Utf8
+    );
+}
+
+#[test]
+fn declining_utf8_leaves_the_file_and_the_encoding_as_they_were() {
+    let ui = window();
+    answer_through_dialog(&ui);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ansi.txt");
+    std::fs::write(&path, b"caf\xe9\n").unwrap();
+    let mut state = crate::state::AppState::new();
+    state.open(path.clone());
+    state.edit("café, Gdańsk\n".to_owned());
+    let id = state.workspace.active_id().expect("a document");
+    let cell = Rc::new(std::cell::RefCell::new(state));
+
+    crate::save_with_prompt(&ui, &cell, id, |_, _| {});
+    press(&ui, Key::Escape);
+
+    assert_eq!(std::fs::read(&path).unwrap(), b"caf\xe9\n");
+    assert_eq!(
+        cell.borrow().workspace.get(id).unwrap().encoding(),
+        bp_core::Encoding::Windows1252
+    );
+    assert!(cell.borrow().is_dirty(id));
+}

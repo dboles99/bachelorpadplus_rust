@@ -10,7 +10,10 @@ use std::path::{Path, PathBuf};
 
 use bp_config::Recent;
 use bp_core::{Document, DocumentId, Encoding, LineEnding, UNTITLED, Workspace};
-use bp_files::{DiskState, FileStamp, LineEndingPolicy, SaveOptions, atomic_write, encode, load};
+use bp_files::{
+    DiskState, EncodeError, FileStamp, LineEndingPolicy, SaveOptions, atomic_write, load,
+    try_encode,
+};
 use bp_formats::Format;
 use bp_naming::SemanticName;
 use bp_theme::ThemeId;
@@ -37,6 +40,10 @@ pub(crate) enum SaveResult {
     NeedsPath,
     /// Attempted and refused; `AppState::error` explains why.
     Failed,
+    /// Nothing written: the document's encoding has no bytes for one of its
+    /// characters. The caller offers UTF-8 instead (release plan M1-10);
+    /// writing a `?` in its place is how a character is lost unannounced.
+    Unrepresentable(bp_core::Unrepresentable),
 }
 
 /// What a Note-menu action decided to do.
@@ -366,7 +373,10 @@ impl AppState {
     pub(crate) fn restore(&mut self, entries: Vec<(u64, bp_history::Checkpoint)>) {
         for (_, entry) in entries {
             let id = match entry.path {
-                Some(path) => self.workspace.open_path(path, now()),
+                Some(path) => {
+                    let created = created_at(&path);
+                    self.workspace.open_path(path, created)
+                }
                 None => self.workspace.open_new(now()),
             };
             self.editors.insert(id, bp_editor::Editor::new(&entry.text));
@@ -817,7 +827,37 @@ impl AppState {
     }
 
     pub(crate) fn set_encoding(&mut self, encoding: Encoding) {
-        if let Some(doc) = self.workspace.active_mut()
+        if let Some(id) = self.workspace.active_id() {
+            self.set_encoding_of(id, encoding);
+        }
+    }
+
+    /// Change a document's encoding, refusing one that cannot hold its text.
+    ///
+    /// Refused here, when the user chooses it, rather than discovered at the
+    /// next save: Unicode holds everything, but Windows-1252 has 256
+    /// characters, and the status bar says which one stands in the way and
+    /// where, so the user can decide what to do about it.
+    pub(crate) fn set_encoding_of(&mut self, id: DocumentId, encoding: Encoding) {
+        if !encoding.is_unicode() {
+            let text = self.text_of(id);
+            if let Err(EncodeError::Unrepresentable(what)) =
+                try_encode(&text, encoding, LineEndingPolicy::Preserve)
+            {
+                let line = text[..what.byte_offset].matches('\n').count() + 1;
+                let current = self
+                    .workspace
+                    .get(id)
+                    .map_or("unchanged", |d| d.encoding().label());
+                self.error = Some(format!(
+                    "still {current}: \"{}\" on line {line} has no {} form",
+                    what.character,
+                    encoding.label()
+                ));
+                return;
+            }
+        }
+        if let Some(doc) = self.workspace.get_mut(id)
             && doc.encoding() != encoding
         {
             doc.set_encoding(encoding);
@@ -922,7 +962,7 @@ impl AppState {
         let path2 = path.clone();
         match load(&path) {
             Ok(file) => {
-                let id = self.workspace.open_path(path, now());
+                let id = self.workspace.open_path(path, created_at(&path2));
                 if let Some(doc) = self.workspace.get_mut(id) {
                     doc.set_encoding(file.encoding);
                     doc.set_line_ending(file.line_ending);
@@ -967,11 +1007,17 @@ impl AppState {
         // every save quietly rewrite the minority convention in a mixed
         // document, with nothing on screen to say it had happened. Format ▸
         // LF / CRLF is where a conversion is asked for, and it asks first.
-        let bytes = encode(
+        let bytes = match try_encode(
             &self.text_of(id),
             doc.encoding(),
             LineEndingPolicy::Preserve,
-        );
+        ) {
+            Ok(bytes) => bytes,
+            Err(EncodeError::Unrepresentable(what)) => {
+                self.error = Some(format!("not saved: {what}"));
+                return SaveResult::Unrepresentable(what);
+            }
+        };
 
         // An encrypted document stays encrypted. The passphrase is held for
         // the session precisely so this does not ask again on every save --
@@ -1039,11 +1085,17 @@ impl AppState {
         // The same policy as a real save, for the same reason the encoding is
         // shared: bytes written differently from the original would make the
         // copy a different file.
-        let bytes = encode(
+        let bytes = match try_encode(
             &self.text_of(id),
             doc.encoding(),
             LineEndingPolicy::Preserve,
-        );
+        ) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                self.error = Some(format!("copy not saved: {e}"));
+                return SaveResult::Failed;
+            }
+        };
 
         match atomic_write(target, &bytes, SaveOptions::default()) {
             Ok(_) => {
@@ -1098,11 +1150,15 @@ impl AppState {
         let Some(doc) = self.workspace.active() else {
             return Err("there is no document to read".to_owned());
         };
-        Ok(encode(
+        // A document that cannot be encoded has no file form to hash, and a
+        // digest of some other encoding's bytes would describe a file that
+        // does not exist.
+        try_encode(
             &self.active_text(),
             doc.encoding(),
             LineEndingPolicy::Preserve,
-        ))
+        )
+        .map_err(|e| e.to_string())
     }
 
     /// Whether the active document differs from whatever is on disk.
@@ -1678,7 +1734,7 @@ impl AppState {
                 // it because one byte is not UTF-8 would strand it inside a
                 // file only this program can open.
                 let text = String::from_utf8_lossy(&plain).into_owned();
-                let id = self.workspace.open_path(path.clone(), now());
+                let id = self.workspace.open_path(path.clone(), created_at(&path));
 
                 // Unsaved work from a crashed session, if there is any. This
                 // is the only moment it can be read: the journal is sealed
@@ -2076,6 +2132,32 @@ pub(crate) fn save_state_label(doc: &Document) -> String {
 /// be a large one.
 pub(crate) fn now() -> OffsetDateTime {
     OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc())
+}
+
+/// When the document at `path` was created, for naming (release plan M1-15).
+///
+/// The date an opened file was *opened* is not its creation date, and a
+/// semantic rename used to stamp every file with the day somebody happened
+/// to open it. `bp_naming::creation_date_for` weighs the evidence: a date
+/// already in a semantic name, then the file's birth time, then its last
+/// write. Only the date is ever read from `created_at`, so the time of day
+/// stays now's; with no evidence at all, the date does too.
+pub(crate) fn created_at(path: &Path) -> OffsetDateTime {
+    let now = now();
+    let local = |at: std::time::SystemTime| OffsetDateTime::from(at).to_offset(now.offset()).date();
+    let meta = std::fs::metadata(path).ok();
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    // `created()` is an error on filesystems that keep no birth time, and
+    // that is the evidence missing rather than a failure.
+    bp_naming::creation_date_for(
+        name,
+        meta.as_ref().and_then(|m| m.created().ok()).map(local),
+        meta.as_ref().and_then(|m| m.modified().ok()).map(local),
+    )
+    .map_or(now, |date| now.replace_date(date))
 }
 
 /// `8:05 PM`, as specs.md section 3 shows it.
@@ -3146,6 +3228,47 @@ mod tests {
     }
 
     #[test]
+    fn a_semantic_name_keeps_the_date_already_in_it_when_opened_later() {
+        // Opening a file is not creating it. The rename used to stamp the
+        // day it was opened over the date its name already carried.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Budget_02MAR2026.txt");
+        std::fs::write(&path, "# Budget\n").unwrap();
+        let mut state = AppState::new();
+        state.open(path);
+        let id = state.workspace.active_id().unwrap();
+
+        let doc = state.workspace.get(id).unwrap();
+        assert_eq!(doc.created_at().date(), time::macros::date!(2026 - 03 - 02));
+        let name = state.semantic_filename(id).expect("a name");
+        assert!(name.contains("02MAR2026"), "got {name}");
+    }
+
+    #[test]
+    fn a_plain_name_takes_its_date_from_the_file_not_from_today() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.txt");
+        std::fs::write(&path, "notes\n").unwrap();
+        // Noon, so no time zone can move it to another day.
+        let written = time::macros::datetime!(2020 - 01 - 15 12:00 UTC);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(written.into())
+            .unwrap();
+        let mut state = AppState::new();
+        state.open(path);
+        let id = state.workspace.active_id().unwrap();
+
+        assert_eq!(
+            state.workspace.get(id).unwrap().created_at().date(),
+            time::macros::date!(2020 - 01 - 15),
+            "a file last written in 2020 cannot have been created today"
+        );
+    }
+
+    #[test]
     fn suggested_filename_follows_the_grammar() {
         let state = AppState::new();
         let id = state.workspace.active_id().unwrap();
@@ -3355,6 +3478,82 @@ mod tests {
         state.edit("first\nsecond\n".to_owned());
         assert!(state.workspace.get(id).unwrap().is_dirty());
         (state, id, original)
+    }
+
+    /// A Windows-1252 file on disk, opened: "café" with a Windows line end.
+    fn opened_1252(dir: &std::path::Path) -> (AppState, DocumentId, PathBuf) {
+        let path = dir.join("ansi.txt");
+        std::fs::write(&path, b"caf\xe9\r\n").unwrap();
+        let mut state = AppState::new();
+        state.open(path.clone());
+        let id = state.workspace.active_id().unwrap();
+        (state, id, path)
+    }
+
+    #[test]
+    fn a_windows_1252_file_opens_as_one_and_saves_back_byte_for_byte() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut state, id, path) = opened_1252(dir.path());
+        assert_eq!(
+            state.workspace.get(id).unwrap().encoding(),
+            Encoding::Windows1252
+        );
+        assert_eq!(state.active_text(), "café\r\n");
+
+        state.edit("café au lait\r\n".to_owned());
+        assert_eq!(state.save_document(id, None), SaveResult::Saved);
+        assert_eq!(std::fs::read(&path).unwrap(), b"caf\xe9 au lait\r\n");
+    }
+
+    #[test]
+    fn a_character_windows_1252_cannot_hold_stops_the_save_and_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut state, id, path) = opened_1252(dir.path());
+        state.edit("café, Gdańsk\r\n".to_owned());
+
+        let result = state.save_document(id, None);
+
+        let SaveResult::Unrepresentable(what) = result else {
+            panic!("saved anyway: {result:?}");
+        };
+        assert_eq!(what.character, 'ń');
+        assert_eq!(&state.active_text()[what.byte_offset..], "ńsk\r\n");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"caf\xe9\r\n",
+            "the file changed"
+        );
+        assert!(state.is_dirty(id), "unsaved work was marked saved");
+    }
+
+    #[test]
+    fn choosing_windows_1252_for_text_it_cannot_hold_is_refused_with_the_line() {
+        let mut state = AppState::new();
+        state.edit("fine\nstill fine\nGdańsk\n".to_owned());
+        let id = state.workspace.active_id().unwrap();
+
+        state.set_encoding(Encoding::Windows1252);
+
+        assert_eq!(state.workspace.get(id).unwrap().encoding(), Encoding::Utf8);
+        let notice = state.error.clone().expect("a reason");
+        assert!(
+            notice.contains('ń') && notice.contains("line 3"),
+            "{notice}"
+        );
+    }
+
+    #[test]
+    fn choosing_windows_1252_for_text_it_can_hold_changes_the_encoding() {
+        let mut state = AppState::new();
+        state.edit("café — naïve\n".to_owned());
+        let id = state.workspace.active_id().unwrap();
+
+        state.set_encoding(Encoding::Windows1252);
+
+        assert_eq!(
+            state.workspace.get(id).unwrap().encoding(),
+            Encoding::Windows1252
+        );
     }
 
     #[test]

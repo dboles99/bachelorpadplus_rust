@@ -266,10 +266,8 @@ pub fn handle_menu_action(
         action::SAVE_AS => {
             let target = state.borrow().workspace.active_id();
             if let Some(id) = target {
-                let chosen = pick_save_path(&state.borrow(), id);
-                if let Some(path) = chosen {
-                    state.borrow_mut().save_document(id, Some(path));
-                }
+                crate::save_as(ui, state, id);
+                return None;
             }
         }
         action::SAVE_ALL => {
@@ -625,6 +623,7 @@ pub fn handle_menu_action(
         action::LINE_ENDING_CRLF => state.borrow_mut().set_line_ending(LineEnding::CrLf),
         action::ENCODING_UTF8 => state.borrow_mut().set_encoding(Encoding::Utf8),
         action::ENCODING_UTF8_BOM => state.borrow_mut().set_encoding(Encoding::Utf8Bom),
+        action::ENCODING_WINDOWS_1252 => state.borrow_mut().set_encoding(Encoding::Windows1252),
 
         action::SHORTCUTS => dialog::inform(ui, "Keyboard shortcuts", SHORTCUTS),
         action::ABOUT => dialog::inform(
@@ -724,10 +723,8 @@ pub fn handle_menu_action(
                 NoteOutcome::SaveAs => {
                     let target = state.borrow().workspace.active_id();
                     if let Some(doc_id) = target {
-                        let chosen = pick_save_path(&state.borrow(), doc_id);
-                        if let Some(path) = chosen {
-                            state.borrow_mut().save_document(doc_id, Some(path));
-                        }
+                        crate::save_as(ui, state, doc_id);
+                        return None;
                     }
                 }
                 NoteOutcome::Nothing => {}
