@@ -720,7 +720,10 @@ pub fn association_report(
             Capability::AssociationQuery
                 .availability(platform)
                 .reason()
-                .unwrap_or("This platform cannot be queried."),
+                .unwrap_or(
+                    "The current handler is read from the registry, and no registry reader was \
+                     supplied here.",
+                ),
             selection,
         ),
     }

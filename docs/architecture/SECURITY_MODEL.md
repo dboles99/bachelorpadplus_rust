@@ -8,20 +8,29 @@
 - Maximum
 - Custom
 
-## Propagation requirement
+## Propagation: what a protected document's policy reaches
 
-If a document is protected, the policy must cover:
+Only what is enforced today is listed here (release plan M2-12). The table
+below says which code honours each axis and where it stops.
 
-- primary file
-- autosave
-- recovery journal
-- revision history
-- clipboard persistence
-- semantic metadata
-- embeddings
-- temporary files
-- audit events
-- cloud/network eligibility
+- **The primary file**: an encrypted document is saved through the same
+  `.bpadx` envelope every time, with the passphrase held for the session.
+- **The recovery journal**: plaintext, sealed with the document's
+  passphrase, or not kept, per the profile.
+- **The clipboard**: the in-app history keeps nothing under a profile that
+  forbids it. Copies from a Private or stricter document are marked to stay
+  out of the OS clipboard history, and are cleared off the OS clipboard
+  after a minute if it still holds them.
+- **Metadata the product keeps about files**: the recent-files list, the
+  security history and the document-profile store (a digest of the path).
+- **Audit events**: every security-relevant action appends to the security
+  history, which names no document content.
+
+Not reached, because the thing does not exist in 1.0: revision history
+(deferred to 1.x), semantic metadata and embeddings (the crates are not
+wired to the shell), and network eligibility (nothing in the product sends a
+document anywhere; ADR-0030). Temporary files are an accepted deviation: the
+atomic save writes its temporary copy beside the document.
 
 ## What each axis does today, and where it stops
 
@@ -34,7 +43,7 @@ product honours each one, and where each one stops. Release plan M1-20,
 | Axis | Honoured by | Limit |
 |---|---|---|
 | `recovery` | The recovery journal: plaintext, sealed with the document's passphrase, or none (ADR-0020, ADR-0022) | None known |
-| `clipboard` | The in-app clipboard history, and marking copies to stay out of the OS history (Win+V, cloud clipboard, Klipper) | The OS clipboard itself holds whatever was copied until something replaces it |
+| `clipboard` | The in-app clipboard history; marking private copies to stay out of the OS history (Win+V, cloud clipboard, Klipper); clearing a private copy off the OS clipboard after `bp_clipboard::PRIVATE_CLEAR_AFTER` (a minute) if it still holds it (M2-08) | For that minute the OS clipboard holds the text, and a clipboard manager that ignores the exclusion hint keeps its own copy. A private *cut* in the default view reaches the OS clipboard unmarked (the widget owns cut) |
 | `metadata` | The recent-files list, the security history, the document-profile store (digest only) | The profile store keeps a digest of each protected file's path. Anyone who guesses a path can confirm the guess (`bp_history::profiles`) |
 | `network` | Shown in the Security menu | Nothing in the product sends a document anywhere yet, so there is nothing for this axis to stop |
 | `embeddings` | **Nothing yet** | No embeddings are computed yet. Until they are, this axis is a promise about future code, and this row says so |
