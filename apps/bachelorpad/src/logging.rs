@@ -17,9 +17,10 @@
 //! could carry text the user typed is a `panic!` that formats it -- which the
 //! workspace lints forbid in library code.
 //!
-//! Deliberately not here: a message box on Windows. That is `MessageBoxW`,
-//! Win32 and `unsafe`, and belongs to `bp-platform-windows` (ADR-0033,
-//! release plan M2-03).
+//! When nothing is listening on stderr -- a Windows release build started
+//! from Explorer -- the crash hook also shows a message box naming the
+//! report. The box is `MessageBoxW` behind `bp-platform-windows`' safe
+//! function (ADR-0033, release plan M2-03); this binary holds no `unsafe`.
 
 use std::fs::{File, OpenOptions};
 use std::io::Write as _;
@@ -93,16 +94,39 @@ pub fn init(filter: EnvFilter, file: Option<File>) {
 
 /// Install a panic hook that writes a crash report into `dir` and then runs
 /// the hook that was there before, so the console output is unchanged.
+///
+/// With nobody on stderr, it shows a message box naming the report first.
+/// Asked of stderr rather than of the build, because what matters is
+/// whether anyone would read the line: a test harness or a terminal is on
+/// stderr and must never be blocked by a box, and a double-clicked release
+/// build has nothing there at all. On Linux stderr is always the answer.
 pub fn install_crash_hook(dir: Option<PathBuf>) {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        if let Some(dir) = &dir
-            && let Some(report) = write_crash_report(dir, info)
-        {
+        let report = dir.as_deref().and_then(|dir| write_crash_report(dir, info));
+        if let Some(report) = &report {
             eprintln!(
                 "BachelorPad+ stopped unexpectedly. A report was written to {}",
                 report.display()
             );
+        }
+        if !bp_platform_windows::standard_error_is_connected() {
+            // The report path, not the panic message: the path is what the
+            // user can act on, and the message is already in the report.
+            let body = report.as_ref().map_or_else(
+                || {
+                    "BachelorPad+ stopped unexpectedly, and no crash report could be written."
+                        .to_owned()
+                },
+                |path| {
+                    format!(
+                        "BachelorPad+ stopped unexpectedly.\n\nA report was written to:\n{}",
+                        path.display()
+                    )
+                },
+            );
+            // Nothing more can be done if the box cannot be shown either.
+            let _ = bp_platform_windows::show_fatal_message("BachelorPad+", &body);
         }
         previous(info);
     }));

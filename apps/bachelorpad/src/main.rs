@@ -23,17 +23,21 @@ fn main() -> anyhow::Result<()> {
     // work with a broken config.toml, and must print nothing else.
     //
     // A release build on Windows is a GUI-subsystem binary with no console,
-    // so these lines currently go nowhere there when launched from a shell.
-    // Attaching to the parent's console needs `AttachConsole`, which is
-    // `unsafe` Win32 and arrives with `bp-platform-windows` (ADR-0033,
-    // release plan M2-03) -- the one crate allowed to hold it. Debug builds
-    // keep their console, and Linux is unaffected.
+    // so launched from a shell these lines would go nowhere. Attaching to the
+    // parent's console first gives them somewhere to go (ADR-0033, release
+    // plan M2-03). Only for these two: a normal launch must not grab the
+    // console of the shell it was started from. The call is a no-op that
+    // returns false on Linux and in a debug build (which already has a
+    // console), so there is no `cfg` here; whether it attached changes
+    // nothing about what is printed.
     match invocation.action {
         Action::Version => {
+            let _ = bp_platform_windows::attach_parent_console();
             println!("bachelorpad {}", env!("CARGO_PKG_VERSION"));
             return Ok(());
         }
         Action::Help => {
+            let _ = bp_platform_windows::attach_parent_console();
             print!("{}", cli::usage());
             return Ok(());
         }

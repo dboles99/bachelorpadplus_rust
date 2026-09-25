@@ -21,6 +21,7 @@ members = [
     "crates/bp-integrity",
     "crates/bp-notebook",
     "crates/bp-platform",
+    "crates/bp-platform-windows",
     "crates/bp-redaction",
     "crates/bp-research",
     "crates/bp-search",
