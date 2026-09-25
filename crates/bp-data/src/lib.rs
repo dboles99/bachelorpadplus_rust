@@ -82,32 +82,57 @@ pub fn json_validate(text: &str) -> Result<(), DataError> {
         .map_err(|e| DataError::from_json(&e))
 }
 
-/// Pretty-print JSON.
-pub fn json_format(text: &str) -> Result<String, DataError> {
-    let value: serde_json::Value =
-        serde_json::from_str(text).map_err(|e| DataError::from_json(&e))?;
+/// Parse JSON, keeping every object's keys in the order they were written.
+///
+/// The order survives because the workspace builds `serde_json` with
+/// `preserve_order`, which makes its map an insertion-ordered one. Without
+/// that feature the map is a `BTreeMap` and every operation below would sort
+/// the user's keys whether they asked for it or not.
+fn parse_json(text: &str) -> Result<serde_json::Value, DataError> {
+    serde_json::from_str(text).map_err(|e| DataError::from_json(&e))
+}
+
+/// Write a value pretty-printed with the house indent.
+fn write_pretty(value: &serde_json::Value) -> Result<String, DataError> {
     let mut out = Vec::new();
     let formatter = serde_json::ser::PrettyFormatter::with_indent(INDENT.as_bytes());
     let mut ser = serde_json::Serializer::with_formatter(&mut out, formatter);
-    serde::Serialize::serialize(&value, &mut ser).map_err(|e| DataError::Other(e.to_string()))?;
+    serde::Serialize::serialize(value, &mut ser).map_err(|e| DataError::Other(e.to_string()))?;
     String::from_utf8(out).map_err(|e| DataError::Other(e.to_string()))
 }
 
-/// Strip all optional whitespace from JSON.
-pub fn json_minify(text: &str) -> Result<String, DataError> {
-    let value: serde_json::Value =
-        serde_json::from_str(text).map_err(|e| DataError::from_json(&e))?;
-    serde_json::to_string(&value).map_err(|e| DataError::Other(e.to_string()))
+/// Pretty-print JSON, keeping the author's key order.
+///
+/// Formatting changes whitespace and nothing else. An object whose keys were
+/// written in a meaningful order -- `id` first, `name` before `address` --
+/// comes back in that order; reordering them is `json_sort_keys`, which the
+/// user has to ask for.
+pub fn json_format(text: &str) -> Result<String, DataError> {
+    write_pretty(&parse_json(text)?)
 }
 
-/// Pretty-print JSON with object keys in lexicographic order.
+/// Strip all optional whitespace from JSON, keeping the author's key order.
+pub fn json_minify(text: &str) -> Result<String, DataError> {
+    serde_json::to_string(&parse_json(text)?).map_err(|e| DataError::Other(e.to_string()))
+}
+
+/// Pretty-print JSON with every object's keys sorted, at every level.
 ///
-/// Uses `serde_json`'s `preserve_order` being **off**, which means its map is
-/// a `BTreeMap` and already sorted. Kept as a named operation because that is
-/// an implementation detail that could change, and because the user asked for
-/// sorting rather than for whatever the parser happens to do.
+/// Objects nested inside arrays are sorted too; the order of array elements
+/// is never touched, because that order is data. Keys compare as Rust
+/// `String`s do, which is by Unicode code point: deterministic, independent
+/// of locale, and with every upper-case ASCII letter before every lower-case
+/// one (`"B"` sorts before `"a"`).
+///
+/// This used to be `json_format` under another name, relying on
+/// `serde_json`'s map happening to be a `BTreeMap`. Now that the map keeps
+/// insertion order, sorting is done here, explicitly, where the user asked
+/// for it.
 pub fn json_sort_keys(text: &str) -> Result<String, DataError> {
-    json_format(text)
+    let mut value = parse_json(text)?;
+    // Recursive, but no deeper than the 128 levels `serde_json` will parse.
+    value.sort_all_objects();
+    write_pretty(&value)
 }
 
 // --- JSON Lines ---------------------------------------------------------
@@ -169,7 +194,7 @@ pub fn jsonl_validate(text: &str) -> JsonLinesReport {
     report
 }
 
-/// Convert JSON Lines to a JSON array.
+/// Convert JSON Lines to a JSON array, keeping every record's key order.
 pub fn jsonl_to_json(text: &str) -> Result<String, DataError> {
     let mut values = Vec::new();
     for (index, line) in text.lines().enumerate() {
@@ -183,13 +208,13 @@ pub fn jsonl_to_json(text: &str) -> Result<String, DataError> {
             })?;
         values.push(value);
     }
-    json_format(&serde_json::to_string(&values).map_err(|e| DataError::Other(e.to_string()))?)
+    write_pretty(&serde_json::Value::Array(values))
 }
 
-/// Convert a JSON array to JSON Lines.
+/// Convert a JSON array to JSON Lines, one compact record per element, each
+/// keeping its keys in the order they were written.
 pub fn json_to_jsonl(text: &str) -> Result<String, DataError> {
-    let value: serde_json::Value =
-        serde_json::from_str(text).map_err(|e| DataError::from_json(&e))?;
+    let value = parse_json(text)?;
     let serde_json::Value::Array(items) = value else {
         return Err(DataError::Other(
             "JSON Lines needs an array at the top level".to_owned(),
@@ -526,6 +551,9 @@ fn emit_flow(documents: &[Yaml<'_>]) -> Result<String, DataError> {
 /// refused rather than wrapped in an array: an array of documents is a
 /// different shape from the document the user was looking at, and inventing
 /// it would hide the mismatch instead of naming it.
+///
+/// A mapping's keys keep their order: `saphyr` loads a mapping into an
+/// insertion-ordered map, and `serde_json` is built to keep one too.
 pub fn yaml_to_json(text: &str) -> Result<String, DataError> {
     let documents = load_yaml(text)?;
     let value = match documents.as_slice() {
@@ -538,7 +566,7 @@ pub fn yaml_to_json(text: &str) -> Result<String, DataError> {
             )));
         }
     };
-    json_format(&serde_json::to_string(&value).map_err(|e| DataError::Other(e.to_string()))?)
+    write_pretty(&value)
 }
 
 /// Convert JSON to YAML.
@@ -546,9 +574,10 @@ pub fn yaml_to_json(text: &str) -> Result<String, DataError> {
 /// The pair to `yaml_to_json`, and the direction that cannot lose anything:
 /// every JSON value has a YAML spelling. The reverse is not true, which is
 /// why `yaml_to_json` has a list of refusals and this does not.
+///
+/// Keys go out in the order the JSON object was written in.
 pub fn json_to_yaml(text: &str) -> Result<String, DataError> {
-    let value: serde_json::Value =
-        serde_json::from_str(text).map_err(|e| DataError::from_json(&e))?;
+    let value = parse_json(text)?;
     let mut out = String::new();
     YamlEmitter::new(&mut out)
         .dump(&value_to_yaml(value)?)
@@ -1102,10 +1131,13 @@ fn rows_to_objects(rows: &[Row]) -> Vec<serde_json::Value> {
 /// integer loses precision, the moment it is read back as a JSON number.
 /// `column_types` reports what a column looks like without changing what is
 /// actually stored.
+///
+/// Each object's keys follow the header left to right, so the JSON reads in
+/// the same column order as the file it came from.
 pub fn delimited_to_json(text: &str) -> Result<String, DataError> {
     let rows = delimited_rows(text, detect_delimiter(text))?;
     let values = serde_json::Value::Array(rows_to_objects(&rows));
-    json_format(&serde_json::to_string(&values).map_err(|e| DataError::Other(e.to_string()))?)
+    write_pretty(&values)
 }
 
 /// Convert a delimited document to JSON Lines, one compact object per row.
@@ -1292,13 +1324,135 @@ mod tests {
         );
     }
 
+    /// Where each of `keys` first appears in `text`, asserting every one is
+    /// there. Comparing positions says more than comparing whole strings: a
+    /// failure names the order found rather than a wall of JSON.
+    fn positions(text: &str, keys: &[&str]) -> Vec<usize> {
+        keys.iter()
+            .map(|key| {
+                text.find(&format!("\"{key}\""))
+                    .unwrap_or_else(|| panic!("key {key:?} missing from:\n{text}"))
+            })
+            .collect()
+    }
+
+    fn ascending(positions: &[usize]) -> bool {
+        positions.windows(2).all(|pair| pair[0] < pair[1])
+    }
+
     #[test]
-    fn formatting_sorts_keys() {
-        let pretty = json_format("{\"z\":1,\"a\":2,\"m\":3}").unwrap();
-        let a = pretty.find("\"a\"").unwrap();
-        let m = pretty.find("\"m\"").unwrap();
-        let z = pretty.find("\"z\"").unwrap();
-        assert!(a < m && m < z, "keys out of order:\n{pretty}");
+    fn format_keeps_the_authors_key_order() {
+        let source = r#"{"z":1,"a":{"y":2,"b":3},"m":[{"q":4,"c":5}]}"#;
+        let pretty = json_format(source).unwrap();
+        assert!(
+            ascending(&positions(&pretty, &["z", "a", "y", "b", "m", "q", "c"])),
+            "formatting changed whitespace and also the key order:\n{pretty}"
+        );
+    }
+
+    #[test]
+    fn minify_keeps_the_authors_key_order() {
+        let source = "{\n  \"z\": 1,\n  \"a\": { \"y\": 2, \"b\": 3 },\n  \"m\": [ { \"q\": 4, \"c\": 5 } ]\n}";
+        assert_eq!(
+            json_minify(source).unwrap(),
+            r#"{"z":1,"a":{"y":2,"b":3},"m":[{"q":4,"c":5}]}"#
+        );
+    }
+
+    #[test]
+    fn sort_keys_sorts_every_level() {
+        // Nested objects, an object inside an array, and an array whose own
+        // element order must survive: sorting keys is not sorting data.
+        let source = r#"{"z":{"y":1,"b":2},"a":[{"q":3,"c":4},"second","first"],"B":0}"#;
+        let sorted = json_sort_keys(source).unwrap();
+        let expected = r#"{"B":0,"a":[{"c":4,"q":3},"second","first"],"z":{"b":2,"y":1}}"#;
+        assert_eq!(
+            json_minify(&sorted).unwrap(),
+            expected,
+            "upper case sorts before lower case: the order is by code point"
+        );
+        assert!(sorted.contains('\n'), "sorting still pretty-prints");
+    }
+
+    #[test]
+    fn sort_keys_orders_by_code_point_rather_than_by_locale() {
+        // `é` is U+00E9, past every ASCII letter; `Z` is before `a`. A
+        // locale-aware collation would put both somewhere else.
+        let sorted = json_sort_keys(r#"{"é":1,"a":2,"Z":3,"10":4,"9":5}"#).unwrap();
+        assert!(
+            ascending(&positions(&sorted, &["10", "9", "Z", "a", "é"])),
+            "got:\n{sorted}"
+        );
+    }
+
+    #[test]
+    fn sort_keys_leaves_the_values_alone() {
+        let source = r#"{"b":[3,1,2],"a":{"d":null,"c":"x"}}"#;
+        let a: serde_json::Value = serde_json::from_str(source).unwrap();
+        let b: serde_json::Value = serde_json::from_str(&json_sort_keys(source).unwrap()).unwrap();
+        assert_eq!(a, b, "sorting keys must not change what the document means");
+    }
+
+    #[test]
+    fn jsonl_conversion_keeps_each_records_key_order() {
+        let jsonl = "{\"z\":1,\"a\":2}\n{\"m\":3,\"b\":{\"y\":4,\"c\":5}}\n";
+        let json = jsonl_to_json(jsonl).unwrap();
+        assert!(
+            ascending(&positions(&json, &["z", "a", "m", "b", "y", "c"])),
+            "got:\n{json}"
+        );
+        assert_eq!(
+            json_to_jsonl(&json).unwrap(),
+            jsonl,
+            "and back, byte for byte"
+        );
+    }
+
+    #[test]
+    fn yaml_to_json_keeps_the_mapping_order() {
+        let json =
+            yaml_to_json("zeta: 1\nalpha:\n  yak: 2\n  bee: 3\nmid:\n  - quux: 4\n    cat: 5\n")
+                .unwrap();
+        assert!(
+            ascending(&positions(
+                &json,
+                &["zeta", "alpha", "yak", "bee", "mid", "quux", "cat"]
+            )),
+            "got:\n{json}"
+        );
+    }
+
+    #[test]
+    fn json_to_yaml_keeps_the_object_order() {
+        let yaml = json_to_yaml(r#"{"zeta":1,"alpha":{"yak":2,"bee":3}}"#).unwrap();
+        let at = |key: &str| {
+            yaml.find(&format!("{key}:"))
+                .unwrap_or_else(|| panic!("{key} missing from:\n{yaml}"))
+        };
+        assert!(
+            ascending(&[at("zeta"), at("alpha"), at("yak"), at("bee")]),
+            "got:\n{yaml}"
+        );
+    }
+
+    #[test]
+    fn csv_to_json_keeps_the_header_order() {
+        let text = "zip,name,age\n90210,Ann,40\n";
+        let json = delimited_to_json(text).unwrap();
+        assert!(
+            ascending(&positions(&json, &["zip", "name", "age"])),
+            "columns must come out in header order:\n{json}"
+        );
+        assert_eq!(
+            delimited_to_jsonl(text).unwrap(),
+            "{\"zip\":\"90210\",\"name\":\"Ann\",\"age\":\"40\"}\n"
+        );
+    }
+
+    #[test]
+    fn csv_to_json_puts_unnamed_extra_fields_after_the_header_columns() {
+        let jsonl = delimited_to_jsonl("b,a\n1,2,3\n").unwrap();
+        assert_eq!(jsonl, "{\"b\":\"1\",\"a\":\"2\",\"_3\":\"3\"}\n");
     }
 
     #[test]
@@ -1373,6 +1527,19 @@ mod tests {
 
         let out = toml_format("b=2\na=1\n").unwrap();
         assert!(out.contains("a = 1"), "got {out}");
+    }
+
+    #[test]
+    fn toml_format_drops_comments_and_sorts_keys_today() {
+        // Documents current behaviour, not a wish. `toml_format` goes through
+        // `toml::Table`, which holds data only -- a comment is not data -- and
+        // is a `BTreeMap` because the workspace does not turn on the `toml`
+        // crate's `preserve_order`. The shell has to warn about both before
+        // offering the command; if either assertion starts failing, the
+        // warning in the menu is what needs to change with it.
+        let out = toml_format("# why b matters\nb = 2 # inline\na = 1\n").unwrap();
+        assert!(!out.contains('#'), "comments survived after all:\n{out}");
+        assert_eq!(out, "a = 1\nb = 2\n", "keys are no longer re-sorted");
     }
 
     #[test]
@@ -1974,7 +2141,59 @@ mod tests {
         })
     }
 
+    /// An arbitrary JSON value, with objects whose keys arrive in whatever
+    /// order the generator produced them -- which is the point, since the
+    /// property is about what sorting does to an order nobody chose.
+    fn arb_json() -> impl Strategy<Value = serde_json::Value> {
+        let leaf = prop_oneof![
+            Just(serde_json::Value::Null),
+            any::<bool>().prop_map(serde_json::Value::Bool),
+            any::<i64>().prop_map(serde_json::Value::from),
+            any::<String>().prop_map(serde_json::Value::String),
+        ];
+        leaf.prop_recursive(4, 64, 6, |inner| {
+            prop_oneof![
+                prop::collection::vec(inner.clone(), 0..6).prop_map(serde_json::Value::Array),
+                prop::collection::vec((any::<String>(), inner), 0..6)
+                    .prop_map(|entries| serde_json::Value::Object(entries.into_iter().collect())),
+            ]
+        })
+    }
+
+    /// Whether every object anywhere in `value` has its keys in order.
+    fn sorted_everywhere(value: &serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::Object(map) => {
+                map.keys().zip(map.keys().skip(1)).all(|(a, b)| a < b)
+                    && map.values().all(sorted_everywhere)
+            }
+            serde_json::Value::Array(items) => items.iter().all(sorted_everywhere),
+            _ => true,
+        }
+    }
+
     proptest! {
+        #[test]
+        fn sort_keys_is_idempotent(value in arb_json()) {
+            let text = serde_json::to_string(&value).unwrap();
+            let once = json_sort_keys(&text).unwrap();
+            let twice = json_sort_keys(&once).unwrap();
+            prop_assert_eq!(&once, &twice, "sorting sorted keys changed them");
+
+            let parsed: serde_json::Value = serde_json::from_str(&once).unwrap();
+            prop_assert!(sorted_everywhere(&parsed), "left unsorted:\n{}", once);
+            prop_assert_eq!(parsed, value, "sorting keys changed the data");
+        }
+
+        #[test]
+        fn format_and_minify_keep_the_generated_key_order(value in arb_json()) {
+            // Byte equality with serde_json's own writer means the order the
+            // generator produced -- insertion order -- is the order written.
+            let compact = serde_json::to_string(&value).unwrap();
+            prop_assert_eq!(json_minify(&compact).unwrap(), compact.clone());
+            prop_assert_eq!(json_minify(&json_format(&compact).unwrap()).unwrap(), compact);
+        }
+
         #[test]
         fn writing_yaml_out_and_reading_it_back_gives_the_same_documents(
             documents in prop::collection::vec(arb_document(), 0..4)
