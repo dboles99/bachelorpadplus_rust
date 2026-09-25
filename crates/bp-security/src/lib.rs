@@ -29,6 +29,8 @@
 //! network destinations are acceptable when the network is permitted, how a
 //! document acquires a profile, and encryption itself.
 
+#![forbid(unsafe_code)]
+
 use serde::{Deserialize, Serialize};
 
 /// Whether unsaved work may be written to the recovery journal, and how.
