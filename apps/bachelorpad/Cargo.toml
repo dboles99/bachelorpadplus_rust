@@ -21,6 +21,12 @@ bp-platform-windows = { path = "../../crates/bp-platform-windows" }
 bp-theme = { path = "../../crates/bp-theme" }
 bp-ui = { path = "../../crates/bp-ui" }
 
+[build-dependencies]
+# Embeds the icon, VERSIONINFO and `app.manifest` into the Windows executable
+# (release plan M2-02). `build.rs` calls it only when building on Windows for
+# Windows; elsewhere it is compiled and never run.
+winresource = "0.1"
+
 [dev-dependencies]
 # The process tests point the log directory at a temporary one: running the
 # binary must never write into the developer's own state directory.

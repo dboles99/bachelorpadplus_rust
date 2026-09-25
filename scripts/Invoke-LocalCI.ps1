@@ -169,6 +169,23 @@ try {
         $exeName = if ($OnWindows) { 'bachelorpad.exe' } else { 'bachelorpad' }
         $exe = Join-Path (Join-Path $targetDir 'debug') $exeName
         if (-not (Test-Path $exe)) { throw "no binary at $exe after a successful build" }
+
+        # The resources `apps/bachelorpad/build.rs` embeds (release plan
+        # M2-02). Checked here because nothing else reads them: a build
+        # script that silently skipped would leave an exe with no icon, no
+        # version on its Properties page and no manifest, and every other
+        # stage would still pass.
+        if ($OnWindows) {
+            $info = (Get-Item $exe).VersionInfo
+            $version = ((Get-Content (Join-Path $PSScriptRoot '..' 'Cargo.toml') -Raw) |
+                Select-String -Pattern '(?m)^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+            if ($info.ProductName -ne 'BachelorPad+') {
+                throw "the exe carries no VERSIONINFO (ProductName is '$($info.ProductName)')"
+            }
+            if (-not $info.ProductVersion.StartsWith($version)) {
+                throw "the exe says version '$($info.ProductVersion)', Cargo.toml says '$version'"
+            }
+        }
         $out = Join-Path ([System.IO.Path]::GetTempPath()) "bpad-selfcheck-$PID.txt"
 
         if ($OnWindows) {
