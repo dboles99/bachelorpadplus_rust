@@ -16,11 +16,15 @@
 //! [`resolve`] is pure: it takes the file contents, the environment and the
 //! arguments as values, so precedence and malformed-input recovery are
 //! testable without a filesystem or a process environment.
+//!
+//! The writing half -- what the user chooses in the app, put back into the
+//! same `config.toml` without disturbing what they wrote there by hand -- is
+//! [`settings`].
 
 #![forbid(unsafe_code)]
 
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use bp_platform::dirs::{self, DirKind};
 use serde::Deserialize;
@@ -28,9 +32,11 @@ use serde::Deserialize;
 pub mod cli;
 pub mod locations;
 pub mod recent;
+pub mod settings;
 use cli::Setting;
 pub use locations::{Adoption, Locations};
 pub use recent::{MAX_RECENT, Recent, load_recent, save_recent};
+pub use settings::{SaveError, Settings, edit_config, save};
 
 /// The platform's own view of the environment, re-exported so a caller can
 /// name [`config_path_in`]'s arguments without depending on `bp-platform`
@@ -116,6 +122,76 @@ const MAX_TAB_WIDTH: u8 = 32;
 /// `bp_editor::view` already falls back to.
 const DEFAULT_TAB_WIDTH: u8 = 4;
 
+/// Smallest accepted editable-file limit, in MiB.
+///
+/// Zero would send every file, however small, to the read-only viewer, which
+/// is a broken editor rather than a cautious one.
+pub const MIN_EDITABLE_LIMIT_MIB: u8 = 1;
+
+/// Largest accepted editable-file limit, in MiB.
+///
+/// The editable buffer holds the whole document in memory several times over
+/// (text, undo, the Slint model), so past this the viewer is the only honest
+/// answer however much memory the machine has.
+pub const MAX_EDITABLE_LIMIT_MIB: u8 = 192;
+
+/// The editable-file limit before any configuration is applied, in MiB.
+/// Matches `bp_files::EDITABLE_LIMIT_BYTES`, which this setting replaces as
+/// the number the shell passes to `bp_files::load_with_limit`.
+pub const DEFAULT_EDITABLE_LIMIT_MIB: u8 = 32;
+
+/// A security profile, by name.
+///
+/// Mirrors `bp_security::Profile` by name rather than depending on it. This
+/// crate sits below everything and is read before anything else starts; a
+/// configuration layer that pulled in the security model would make the
+/// crate that must never fail to load depend on one that does real work. The
+/// shell converts by [`SecurityProfile::name`], and the list is short and
+/// fixed by specs.md section 15, so the duplication is four words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SecurityProfile {
+    /// What the product does today.
+    #[default]
+    Standard,
+    Private,
+    Confidential,
+    Maximum,
+}
+
+impl SecurityProfile {
+    /// Every profile, strictest last -- the same order as
+    /// `bp_security::Profile::all`.
+    pub const ALL: &'static [Self] = &[
+        Self::Standard,
+        Self::Private,
+        Self::Confidential,
+        Self::Maximum,
+    ];
+
+    /// The name as written in `config.toml`, and as `bp_security::Profile`
+    /// spells it.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Standard => "Standard",
+            Self::Private => "Private",
+            Self::Confidential => "Confidential",
+            Self::Maximum => "Maximum",
+        }
+    }
+
+    /// Case-insensitive, because a hand-written `private` means `Private` and
+    /// refusing it would be pedantry, not safety.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        let value = value.trim();
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|p| p.name().eq_ignore_ascii_case(value))
+    }
+}
+
 /// Resolved settings.
 ///
 /// `theme` stays a `String` rather than a `bp-theme` enum on purpose: an
@@ -143,6 +219,33 @@ pub struct Config {
     /// Whether the Tab key inserts spaces instead of a literal tab
     /// character.
     pub indent_spaces: bool,
+    /// Whether long lines wrap at the window edge.
+    pub word_wrap: bool,
+    /// Whether the line-number gutter is shown.
+    pub line_numbers: bool,
+    /// Whether the clipboard history also records what *other* programs
+    /// copy. Replaces `bp-ui`'s `RECORD_OTHER_PROGRAMS` constant.
+    pub clipboard_record_other_programs: bool,
+    /// The security profile a newly opened document starts under.
+    pub default_profile: SecurityProfile,
+    /// Whether to use the experimental custom editor view instead of Slint's
+    /// own text editor.
+    pub editor_view: bool,
+    /// Whether the menu bar shows the menus whose rows are still plans
+    /// (release plan M1-05). For agents and the owner; never written by the
+    /// app, see [`Settings`].
+    pub show_planned_menus: bool,
+    /// Files larger than this, in MiB, open in the read-only viewer.
+    pub editable_limit_mib: u8,
+}
+
+impl Config {
+    /// [`Config::editable_limit_mib`] in bytes, the unit
+    /// `bp_files::load_with_limit` takes.
+    #[must_use]
+    pub fn editable_limit_bytes(&self) -> u64 {
+        u64::from(self.editable_limit_mib) * 1024 * 1024
+    }
 }
 
 impl Default for Config {
@@ -160,6 +263,20 @@ impl Default for Config {
             // kind of surprise that promise rules out, so opting into spaces
             // is something the user must ask for.
             indent_spaces: false,
+            // Notepad's defaults: no wrap, so a log file's columns line up.
+            word_wrap: false,
+            // Matches the shell's gutter, which has always been on.
+            line_numbers: true,
+            // Off: recording every copy on the machine put whatever a password
+            // manager copied into the Edit menu's previews (release plan
+            // M0-07). Recording it is something the user must ask for.
+            clipboard_record_other_programs: false,
+            default_profile: SecurityProfile::Standard,
+            // Experimental: the default view is the one that is measured.
+            editor_view: false,
+            // A release does not advertise its backlog in the menu bar.
+            show_planned_menus: false,
+            editable_limit_mib: DEFAULT_EDITABLE_LIMIT_MIB,
         }
     }
 }
@@ -240,6 +357,10 @@ impl Env {
 /// for the same reason: any value written the way TOML expects a boolean to
 /// look deserialises fine, and only genuinely wrong types (e.g. a quoted
 /// string) become a file-level error.
+///
+/// The same holds for the newer settings: `editable_limit_mib` is an `i64`
+/// like `font_size`, the switches are native booleans like `indent_spaces`,
+/// and `default_profile` is text checked against [`SecurityProfile`].
 #[derive(Debug, Default, Deserialize)]
 struct FileConfig {
     theme: Option<String>,
@@ -248,7 +369,33 @@ struct FileConfig {
     font_size: Option<i64>,
     tab_width: Option<i64>,
     indent_spaces: Option<bool>,
+    word_wrap: Option<bool>,
+    line_numbers: Option<bool>,
+    clipboard_record_other_programs: Option<bool>,
+    default_profile: Option<String>,
+    editor_view: Option<bool>,
+    show_planned_menus: Option<bool>,
+    editable_limit_mib: Option<i64>,
 }
+
+/// Every top-level key a config file may hold, so an unknown one can be
+/// reported. [`FileConfig`]'s fields, as text; the round-trip tests catch a
+/// field added to one and not the other.
+const KNOWN_KEYS: &[&str] = &[
+    "theme",
+    "renderer",
+    "log",
+    "font_size",
+    "tab_width",
+    "indent_spaces",
+    "word_wrap",
+    "line_numbers",
+    "clipboard_record_other_programs",
+    "default_profile",
+    "editor_view",
+    "show_planned_menus",
+    "editable_limit_mib",
+];
 
 /// Outcome of loading configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -258,6 +405,12 @@ pub struct Loaded {
     pub notices: Vec<Notice>,
     /// The file actually read, if any.
     pub source: Option<PathBuf>,
+    /// Where [`save`] should write: the file read, or the one that would
+    /// have been read had it existed -- `BACHELORPAD_CONFIG` included, so a
+    /// user who points the editor at another file has their choices kept
+    /// there too. `None` when there is no home to put one in, and then the
+    /// shell simply does not save.
+    pub path: Option<PathBuf>,
 }
 
 /// Where the config file lives on the platform this binary runs on.
@@ -345,19 +498,51 @@ pub fn resolve(file: Option<&str>, env: &Env, args: &[String]) -> (Config, Vec<N
                 if let Some(s) = parsed.indent_spaces {
                     apply_indent_spaces(&mut config, &s.to_string(), &mut notices);
                 }
+                // The rest are file-only: nothing on the command line or in
+                // the environment sets them, so they are applied here rather
+                // than through a string-taking helper shared by three layers.
+                let switches = [
+                    (parsed.word_wrap, &mut config.word_wrap),
+                    (parsed.line_numbers, &mut config.line_numbers),
+                    (
+                        parsed.clipboard_record_other_programs,
+                        &mut config.clipboard_record_other_programs,
+                    ),
+                    (parsed.editor_view, &mut config.editor_view),
+                    (parsed.show_planned_menus, &mut config.show_planned_menus),
+                ];
+                for (value, field) in switches {
+                    if let Some(v) = value {
+                        *field = v;
+                    }
+                }
+                if let Some(p) = parsed.default_profile {
+                    match SecurityProfile::parse(&p) {
+                        Some(profile) => config.default_profile = profile,
+                        None => notices.push(Notice::UnknownValue {
+                            key: "default-profile".to_owned(),
+                            value: p,
+                        }),
+                    }
+                }
+                if let Some(m) = parsed.editable_limit_mib {
+                    match parse_ranged_u8(
+                        &m.to_string(),
+                        MIN_EDITABLE_LIMIT_MIB,
+                        MAX_EDITABLE_LIMIT_MIB,
+                    ) {
+                        Some(n) => config.editable_limit_mib = n,
+                        None => notices.push(Notice::UnknownValue {
+                            key: "editable-limit-mib".to_owned(),
+                            value: m.to_string(),
+                        }),
+                    }
+                }
                 // Report keys we ignored, so a typo is visible instead of
                 // silently doing nothing.
                 if let Ok(table) = toml::from_str::<toml::Table>(text) {
                     for key in table.keys() {
-                        if !matches!(
-                            key.as_str(),
-                            "theme"
-                                | "renderer"
-                                | "log"
-                                | "font_size"
-                                | "tab_width"
-                                | "indent_spaces"
-                        ) {
+                        if !KNOWN_KEYS.contains(&key.as_str()) {
                             notices.push(Notice::UnknownKey { key: key.clone() });
                         }
                     }
@@ -493,7 +678,17 @@ pub fn load(args: &[String]) -> Loaded {
         .as_ref()
         .map(PathBuf::from)
         .or_else(config_path);
+    load_from(path.as_deref(), &env, args)
+}
 
+/// [`load`], with the file's location and the environment given rather than
+/// looked up.
+///
+/// The seam a test -- or the shell's own window tests -- uses to read a
+/// temporary `config.toml` back after [`save`] without touching the
+/// developer's real one or the process environment.
+pub fn load_from(path: Option<&Path>, env: &Env, args: &[String]) -> Loaded {
+    let path = path.map(Path::to_path_buf);
     let mut notices = Vec::new();
     let mut source = None;
     let text = match &path {
@@ -514,7 +709,7 @@ pub fn load(args: &[String]) -> Loaded {
         _ => None,
     };
 
-    let (config, mut more) = resolve(text.as_deref(), &env, args);
+    let (config, mut more) = resolve(text.as_deref(), env, args);
     notices.append(&mut more);
 
     // Point malformed-file notices at the real path now that we know it.
@@ -530,6 +725,7 @@ pub fn load(args: &[String]) -> Loaded {
         config,
         notices,
         source,
+        path,
     }
 }
 
@@ -1041,8 +1237,8 @@ mod tests {
         // Structural guard for ADR-0011: everything in Config is a setting.
         // If a field is ever added that could carry document text, this test
         // is where the argument about it should happen.
-        let file = "theme = \"Green\"\nrenderer = \"software\"\nlog = \"warn\"\nfont_size = 18\ntab_width = 8\nindent_spaces = true\n";
-        let (c, _) = resolve(Some(file), &Env::default(), &[]);
+        let file = "theme = \"Green\"\nrenderer = \"software\"\nlog = \"warn\"\nfont_size = 18\ntab_width = 8\nindent_spaces = true\n".to_owned() + EVERY_NEW_SETTING;
+        let (c, _) = resolve(Some(&file), &Env::default(), &[]);
         let rendered = format!("{c:?}");
 
         for forbidden in ["passphrase", "secret", "token", "password", "content"] {
@@ -1051,6 +1247,143 @@ mod tests {
                 "Config debug output must never carry {forbidden}"
             );
         }
+    }
+
+    // --- the settings the app writes ------------------------------------
+
+    /// Every setting added for release plan M1-03, each at a valid value that
+    /// is not its default.
+    const EVERY_NEW_SETTING: &str = "\
+word_wrap = true
+line_numbers = false
+clipboard_record_other_programs = true
+default_profile = \"Private\"
+editor_view = true
+show_planned_menus = true
+editable_limit_mib = 100
+";
+
+    #[test]
+    fn the_new_settings_default_to_what_the_shell_does_today() {
+        let c = Config::default();
+        assert!(!c.word_wrap, "Notepad does not wrap until asked");
+        assert!(c.line_numbers, "the gutter has always been on");
+        assert!(
+            !c.clipboard_record_other_programs,
+            "recording other programs' copies put password-manager secrets in the Edit menu; it must be opted into"
+        );
+        assert_eq!(c.default_profile, SecurityProfile::Standard);
+        assert!(!c.editor_view, "the custom view is experimental");
+        assert!(!c.show_planned_menus, "a release does not show its backlog");
+        assert_eq!(
+            c.editable_limit_bytes(),
+            32 * 1024 * 1024,
+            "must match bp_files::EDITABLE_LIMIT_BYTES, the limit this replaces"
+        );
+    }
+
+    #[test]
+    fn the_file_sets_every_new_setting() {
+        let (c, n) = resolve(Some(EVERY_NEW_SETTING), &Env::default(), &[]);
+        assert!(n.is_empty(), "valid values must not warn: {n:?}");
+        assert_eq!(
+            c,
+            Config {
+                word_wrap: true,
+                line_numbers: false,
+                clipboard_record_other_programs: true,
+                default_profile: SecurityProfile::Private,
+                editor_view: true,
+                show_planned_menus: true,
+                editable_limit_mib: 100,
+                ..Config::default()
+            }
+        );
+    }
+
+    #[test]
+    fn the_editable_limit_is_held_to_its_bounds() {
+        for (value, expected) in [
+            ("1", MIN_EDITABLE_LIMIT_MIB),
+            ("192", MAX_EDITABLE_LIMIT_MIB),
+            ("0", DEFAULT_EDITABLE_LIMIT_MIB),
+            ("193", DEFAULT_EDITABLE_LIMIT_MIB),
+            ("-1", DEFAULT_EDITABLE_LIMIT_MIB),
+            ("100000000000", DEFAULT_EDITABLE_LIMIT_MIB),
+        ] {
+            let file = format!("editable_limit_mib = {value}");
+            let (c, n) = resolve(Some(&file), &Env::default(), &[]);
+            assert_eq!(c.editable_limit_mib, expected, "{value}");
+            let in_range = expected.to_string() == value;
+            assert_eq!(
+                n.is_empty(),
+                in_range,
+                "{value}: an out-of-range limit must warn, and only then"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_default_profile_warns_and_falls_back() {
+        let (c, n) = resolve(Some("default_profile = \"Paranoid\""), &Env::default(), &[]);
+        assert_eq!(c.default_profile, SecurityProfile::Standard);
+        assert_eq!(
+            n,
+            vec![Notice::UnknownValue {
+                key: "default-profile".to_owned(),
+                value: "Paranoid".to_owned()
+            }]
+        );
+    }
+
+    #[test]
+    fn a_profile_name_is_read_whatever_its_case() {
+        for profile in SecurityProfile::ALL {
+            for spelling in [
+                profile.name().to_owned(),
+                profile.name().to_lowercase(),
+                profile.name().to_uppercase(),
+            ] {
+                assert_eq!(SecurityProfile::parse(&spelling), Some(*profile));
+            }
+        }
+    }
+
+    #[test]
+    fn a_wrongly_typed_setting_yields_defaults_and_a_notice() {
+        // The corrupt-settings case: the editor still starts.
+        let (c, n) = resolve(
+            Some("word_wrap = \"yes\"\nfont_size = 20\n"),
+            &Env::default(),
+            &[],
+        );
+        assert_eq!(c, Config::default());
+        assert!(matches!(n.as_slice(), [Notice::Malformed { .. }]), "{n:?}");
+    }
+
+    #[test]
+    fn a_corrupt_file_on_disk_yields_defaults_and_a_notice_naming_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "line_numbers = = off").unwrap();
+
+        let loaded = load_from(Some(&path), &Env::default(), &[]);
+        assert_eq!(loaded.config, Config::default());
+        assert_eq!(loaded.notices.len(), 1);
+        assert!(
+            matches!(&loaded.notices[0], Notice::Malformed { path: p, .. } if *p == path),
+            "the notice must name the real file: {:?}",
+            loaded.notices
+        );
+    }
+
+    #[test]
+    fn load_says_where_to_save_even_when_there_is_no_file_yet() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let loaded = load_from(Some(&path), &Env::default(), &[]);
+        assert_eq!(loaded.source, None, "nothing was read");
+        assert_eq!(loaded.path, Some(path), "but that is where a save goes");
     }
 
     // --- where the config file lives -----------------------------------
