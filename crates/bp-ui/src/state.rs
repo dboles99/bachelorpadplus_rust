@@ -151,6 +151,11 @@ pub struct AppState {
     pub(crate) show_planned_menus: bool,
     /// Where the log and crash reports go, for Tools ▸ Open Log Folder.
     pub(crate) log_dir: Option<PathBuf>,
+    /// Each document's edit count (`Document::edits`) when its checkpoint
+    /// was last written (release plan M1-08). A dirty document whose count
+    /// has not moved already has a current checkpoint, and writing it again
+    /// every interval cost a key derivation each time for an encrypted one.
+    checkpointed: HashMap<DocumentId, u64>,
     /// What is drawing the window, in words, for Help ▸ About.
     pub(crate) renderer: String,
     /// Whether typing overwrites (the Insert key).
@@ -410,6 +415,7 @@ impl AppState {
             settings_sheet: None,
             show_planned_menus: false,
             log_dir: None,
+            checkpointed: HashMap::new(),
             renderer: String::new(),
             overwrite: false,
             stamps: HashMap::new(),
@@ -467,6 +473,11 @@ impl AppState {
                 // Clean means the file holds the work; the journal must not
                 // linger and offer to "recover" a stale copy.
                 let _ = self.journal.discard(id.get());
+                self.checkpointed.remove(&id);
+                continue;
+            }
+            let edits = doc.edits();
+            if self.checkpointed.get(&id) == Some(&edits) {
                 continue;
             }
 
@@ -492,6 +503,7 @@ impl AppState {
                     if let Some(doc) = self.workspace.get_mut(id) {
                         doc.record_checkpoint(at);
                     }
+                    self.checkpointed.insert(id, edits);
                 }
                 // A profile doing what it was set to do is not news; one that
                 // cannot be honoured is. `notice` decides which this was.
@@ -1251,6 +1263,7 @@ impl AppState {
                 // it has to be discarded by path.
                 let _ = self.journal.discard(id.get());
                 let _ = self.journal.discard_sealed_for(&target);
+                self.checkpointed.remove(&id);
                 // Re-stamp from what we just wrote, or our own save would
                 // look like somebody else's change on the next poll.
                 self.mark_in_step(id, &target);
@@ -1809,6 +1822,9 @@ impl AppState {
         if previous == security {
             return;
         }
+        // The journal's form follows the profile, so the recorded one is no
+        // longer current whatever happens below.
+        self.checkpointed.remove(&id);
         // Remembered for the file, so reopening a Confidential document is
         // Confidential. An untitled document has no file to remember it
         // for yet; its first save does it.
@@ -2093,6 +2109,11 @@ impl AppState {
             return;
         }
         self.privacy = privacy;
+        // Every document's journal changes form (or goes) without an edit,
+        // so none of the recorded checkpoints is current any more: turning
+        // the mode off must journal unchanged work again at the next
+        // interval, not wait for the next keystroke.
+        self.checkpointed.clear();
         if !privacy.is_on() {
             // Turning it off restores each document's own profile. Nothing to
             // clean up -- the clamp only ever removed permissions.
@@ -2276,6 +2297,7 @@ impl AppState {
         // on disk in the meantime. Sealed checkpoints are keyed by path, as
         // in `save_document`.
         let _ = self.journal.discard(id.get());
+        self.checkpointed.remove(&id);
         if let Some(path) = self.workspace.get(id).and_then(Document::path) {
             let _ = self.journal.discard_sealed_for(path);
         }
@@ -4936,6 +4958,67 @@ mod tests {
 
         assert!(state.clips.is_empty(), "clipboard history survived");
         assert!(state.journal.pending().is_empty(), "the journal survived");
+    }
+
+    /// A state journalling into `dir`, with one dirty document.
+    fn journalling(dir: &Path) -> (AppState, DocumentId) {
+        let mut state = AppState::new();
+        state.journal = bp_history::Journal::new(dir.to_path_buf());
+        state.edit("first".to_owned());
+        let id = state.workspace.active_id().unwrap();
+        (state, id)
+    }
+
+    fn journalled_text(state: &AppState) -> Vec<String> {
+        state
+            .journal
+            .pending()
+            .into_iter()
+            .map(|(_, c)| c.text)
+            .collect()
+    }
+
+    #[test]
+    fn an_unchanged_document_is_not_checkpointed_again() {
+        // Release plan M1-08. Detected by removing the checkpoint behind
+        // the journal's back: a second write would bring it back.
+        let dir = tempfile::tempdir().unwrap();
+        let (mut state, id) = journalling(dir.path());
+        state.checkpoint_all();
+        assert_eq!(journalled_text(&state), ["first"]);
+
+        state.journal.discard(id.get()).unwrap();
+        state.checkpoint_all();
+        assert!(
+            journalled_text(&state).is_empty(),
+            "rewritten with nothing new"
+        );
+
+        state.edit("second".to_owned());
+        state.checkpoint_all();
+        assert_eq!(
+            journalled_text(&state),
+            ["second"],
+            "a real edit was not journalled"
+        );
+    }
+
+    #[test]
+    fn leaving_privacy_mode_journals_unchanged_work_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut state, _) = journalling(dir.path());
+        state.checkpoint_all();
+        state.set_privacy(bp_security::Privacy::On);
+        assert!(journalled_text(&state).is_empty());
+
+        state.set_privacy(bp_security::Privacy::Off);
+        state.checkpoint_all();
+
+        assert_eq!(
+            journalled_text(&state),
+            ["first"],
+            "recovery lapsed until the next keystroke"
+        );
     }
 
     #[test]
