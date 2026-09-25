@@ -216,7 +216,7 @@ All of it, in one pass. What is worth carrying forward:
 | --- | --- |
 | ~~Word wrap in the editor surface~~ | **Done.** `bp_editor::wrap` owns the breaking rule; `view`'s wrapped half maps rows to characters; `Editor` moves Up and Down by visual row. The shell anchors scrolling to a line *and* a row within it, and Slint reports the column count because it owns the font. |
 | **Input-method composition** | **Slint 1.17.1, and this was checked rather than assumed.** `FocusScope` returns `EventResult::Reject` for `UpdateComposition` and `CommitComposition` in *both* `capture_key_event` and `key_event` (`i-slint-core/items/input_items.rs`), and exposes no callback for either. `TextInput` is the only item in the whole toolkit that consumes them, and `input_method_request` is a backend-internal trait, not an application hook. There is no route to pre-edit text from a `FocusScope`. Revisit on a Slint upgrade. |
-| **Security ▸ Sign Document** | **No longer blocked: D5 is answered** (ADR-0030, a seed sealed in a passphrase `.bpadx` envelope); the work is release-plan item M2-10. Until then, as recorded: **D5 — where a signing key lives.** `bp_integrity::sign_file` exists, is tested, and writes the very sidecar the Verify row now reads, so this is a key store away from working. The row is greyed with the reason on it rather than `planned`. Verifying shipped without it, because verifying needs nothing stored. |
+| ~~Security ▸ Sign Document~~ | **Done** (release plan M2-10, decision 16 = D5 option c). The key is made on first use and kept at `signing-key.bpadx` in the data directory, sealed with a passphrase the bar asks for twice. The public half is `signing-key.pub` beside it. The row is live for a saved document. |
 | Anything writing to `bp-storage` | **Still a decision, but a narrower one.** Phase 14 exists now and `record_document` honours the policy, so the security half is answered. What remains is ADR-0019's product judgement plus a design pass. Do not "just wire it up". |
 | `bp-organize` (planned in `ARCHITECTURE.md`, not created) | The above, plus a design pass. Deferred to 1.2 by ADR-0030 (S2). |
 | ~~YAML support~~ | **Done and wired.** ADR-0023 picked `saphyr`; `bp-data` validates, formats, minifies and converts, with nesting, alias expansion and duplicate keys all bounded, and the Data menu reaches all of it: `bp-ui`'s `state.rs` calls `bp_data::yaml_validate`, `yaml_format`, `yaml_minify` and `yaml_to_json`. |
@@ -224,6 +224,24 @@ All of it, in one pass. What is worth carrying forward:
 | ~~`.bpadx` encryption~~ | **Done.** ADR-0021 settled the envelope and it ships; ADR-0022 seals the recovery journal with it. |
 | Print | Platform work with no cross-platform story yet. |
 | **W11, drag and drop to open** | **Slint 1.17.1**, and this was checked rather than assumed. `DropArea` exists and compiles, and the item is implemented in `i-slint-core/items/drag_n_drop.rs` -- but the winit backend has no file-drop plumbing, and `DataTransfer` exposes only `plain_text` and `image`. There is no channel a dropped file's path could arrive through. Revisit on a Slint upgrade; do not spend an afternoon on it before checking that changed. |
+
+## Follow-ups from M2
+
+- **The window's Wayland `app_id` / X11 `WM_CLASS` is the binary name
+  (`bachelorpad`), not `io.github.dboles99.BachelorPad`.** A desktop matches
+  a window to its `.desktop` entry, and so to its icon in the dock, by that
+  id. Setting it needs Slint's `unstable-winit-030` feature
+  (`BackendSelector::with_winit_window_attributes_hook`), an API that pins
+  the shell to Slint's winit version. The alternative is `StartupWMClass=bachelorpad`
+  in the generated entry, which GNOME and KDE both honour. Decide which
+  before M3-02 packages the entry.
+- **Set as Default runs its commands on the UI thread.** They are short
+  (`update-mime-database` on a per-user tree is the longest), but a hung
+  `xdg-mime` would freeze the window. `worker::Background` is the pattern if
+  that is ever seen.
+- **Windows: none of M2-02/03/04 has run on Windows.** The owner's gate run
+  checks VERSIONINFO now. The things to watch are listed in the plan's M2
+  progress note.
 
 ## Not a queue item
 

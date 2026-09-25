@@ -206,12 +206,10 @@ server: winit's X11 backend and libxkbcommon, real key events through the
 server's focus, the real save path to a real disk, and the close request
 answered by the in-window sheet rather than by a test invoking a callback.
 
-**What it has found.** On its first run, that `--editor-view` loses every
-key typed before the first click: the window's `forward-focus` names the
-`TextInput`, which that view hides. The script reports this as `XFAIL`,
-clicks, and carries on, so the rest of the path stays covered. It says
-`XPASS` once the defect is fixed, and the entry in `KNOWN_DEFECTS` should
-then be deleted. Any other lost key is a `FAIL`.
+**What it has found.** On its first run, that `--editor-view` lost every
+key typed before the first click: the window's `forward-focus` named the
+`TextInput`, which that view hides. That is fixed (`a0f5e40`), and the check
+that found it now passes like any other; a lost key anywhere is a `FAIL`.
 
 **Why an earlier attempt could not drive the default view.** Not the input
 method. With no window manager, nobody gives the window X focus, and neither
@@ -225,8 +223,8 @@ empty `GTK_IM_MODULE`/`QT_IM_MODULE` were tried first and changed nothing.
 requires today, and it has no Windows counterpart, so adding it would make
 the two legs check different things. It is also about 30 s on top of a gate
 that already builds the binary it needs. Run it by hand after touching the
-window, focus, keyboard, save or close paths. It passed five runs in a row
-on Ubuntu 24.04; wiring it into `Invoke-LocalCI.ps1` as an opt-in switch is
+window, focus, keyboard, save or close paths. It passed eight runs in a
+row on Ubuntu 24.04; wiring it into `Invoke-LocalCI.ps1` as an opt-in switch is
 the next step if it keeps doing so.
 
 ## The Linux leg

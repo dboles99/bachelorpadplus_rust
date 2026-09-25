@@ -142,11 +142,6 @@ where they are, in use, and says so ([ADR-0029](docs/decisions/ADR-0029.md)).
   CJK entry does not work at all, so the default stays `TextInput`. **This was
   the second of two parity conditions, and it is now a blocker rather than a
   task** -- see `project/WORK_QUEUE.md`.
-- **Word wrap now works under `--editor-view`.** A document line can occupy
-  several visual rows: `bp_editor::wrap` decides where they break, the view
-  maps rows to characters, Up and Down move by row rather than by line, and
-  scrolling is anchored to a line *and* a row within it so a line taller than
-  the window can be scrolled through.
 - **Drag and drop to open does not work, and cannot yet.** specs §4 wants it.
   On Slint 1.17.1 the winit backend has no file-drop plumbing and
   `DataTransfer` carries only plain text or an image, so there is no channel a
