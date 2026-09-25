@@ -51,6 +51,11 @@ export { EditorRow, MenuItem, MenuNav, Palette, SearchHit, SelectionBox, Setting
 
 export component AppWindow inherits Window {
     title: "BachelorPad+";
+    // The window's own icon (title bar, taskbar, Alt+Tab), embedded at
+    // build time from the icon set (release plan M2-01). 64 px: the
+    // largest any of those places draws it, and small enough to cost
+    // nothing. The installed application icon is the packages' business.
+    icon: @image-url("../../../assets/icon/hicolor/64x64/apps/io.github.dboles99.BachelorPad.png");
     preferred-width: 1000px;
     preferred-height: 680px;
     background: Palette.shell;
