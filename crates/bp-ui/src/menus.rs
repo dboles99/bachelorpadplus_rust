@@ -679,7 +679,7 @@ pub fn security(
     items.extend([
         planned(&format!(
             "Recovery journal: {}",
-            describe_recovery(policy.recovery)
+            describe_recovery(policy.recovery, encrypted)
         )),
         planned(&format!(
             "Clipboard history: {}",
@@ -788,15 +788,23 @@ pub fn security(
     items
 }
 
-fn describe_recovery(recovery: bp_security::Recovery) -> &'static str {
+/// What the recovery journal is doing for this document, in the user's terms.
+///
+/// `encrypted` is whether the document has a passphrase, because under a
+/// profile that wants an encrypted journal that is the whole answer:
+/// `bp-history` seals the checkpoint with the document's own passphrase
+/// (ADR-0022) and refuses, rather than writing plaintext, when there is none
+/// (ADR-0020). This row used to say encryption had not shipped, a session
+/// after it had.
+fn describe_recovery(recovery: bp_security::Recovery, encrypted: bool) -> &'static str {
     match recovery {
         // Named plainly. A user who has not thought about it should be able
         // to read this row and understand that unsaved work is on disk.
         bp_security::Recovery::Plaintext => "on, unencrypted",
-        // The honest answer while bp-crypto does not exist (ADR-0020): the
-        // profile asks for encryption, so the journal is off rather than
-        // silently plaintext.
-        bp_security::Recovery::Encrypted => "off until encryption ships (phase 15)",
+        bp_security::Recovery::Encrypted if encrypted => "on, sealed with the passphrase",
+        // Says what fixes it: Encrypt Document gives the journal the
+        // passphrase it needs.
+        bp_security::Recovery::Encrypted => "off until the document is encrypted",
         bp_security::Recovery::Disabled => "off",
     }
 }
@@ -922,14 +930,14 @@ pub fn data(format: Format) -> Vec<MenuItem> {
             row("Convert to JSON", "", action::DATA_CSV_TO_JSON),
             row_end("Convert to JSON Lines", "", action::DATA_CSV_TO_JSONL),
         ],
-        _ => {
-            let mut items = planned_menu("Data");
-            items.insert(
-                0,
-                planned(&format!("— nothing for {} documents", format.label())),
-            );
-            items
-        }
+        // One honest row. This used to append the phase-6 placeholder list,
+        // which offered Validate and Format as "not implemented yet" on a
+        // `.txt` -- while the same rows worked on the JSON document in the
+        // next tab.
+        _ => vec![planned(&format!(
+            "Nothing here for {} documents",
+            format.label()
+        ))],
     }
 }
 
@@ -1262,9 +1270,10 @@ mod tests {
     }
 
     #[test]
-    fn a_profile_wanting_encryption_says_recovery_is_off_not_encrypted() {
-        // The honest readout while `bp-crypto` does not exist. Saying
-        // "encrypted" here would be the exact lie ADR-0020 forbids.
+    fn a_profile_wanting_encryption_says_recovery_is_off_for_a_plain_document() {
+        // `bp-history` refuses to journal such a document at all rather than
+        // write plaintext (ADR-0020). Saying "encrypted" here would be the
+        // exact lie that rule exists to prevent.
         let items = security(
             bp_security::Security::Named(bp_security::Profile::Private),
             false,
@@ -1282,6 +1291,46 @@ mod tests {
             "the journal is not being written; got {:?}",
             row.label
         );
+    }
+
+    #[test]
+    fn an_encrypted_document_under_such_a_profile_says_its_journal_is_sealed() {
+        // The other half: with a passphrase the journal really is written,
+        // sealed (ADR-0022), and "off" would send the user looking for a
+        // setting that is already on.
+        let items = security(
+            bp_security::Security::Named(bp_security::Profile::Private),
+            true,
+            bp_security::Privacy::Off,
+            true,
+            true,
+        );
+        let row = items
+            .iter()
+            .find(|i| i.label.contains("Recovery journal"))
+            .expect("a recovery row");
+        assert!(row.label.contains("sealed"), "got {:?}", row.label);
+    }
+
+    #[test]
+    fn no_menu_text_promises_a_phase_that_has_shipped() {
+        // The recovery row said "off until encryption ships (phase 15)" for a
+        // session after phase 15 shipped. A readout naming a phase is a claim
+        // about the future that goes stale silently; none may name one that
+        // is already done.
+        for encrypted in [false, true] {
+            for profile in bp_security::Profile::all() {
+                for item in security(
+                    bp_security::Security::Named(*profile),
+                    encrypted,
+                    bp_security::Privacy::Off,
+                    true,
+                    true,
+                ) {
+                    assert!(!item.label.contains("phase 15"), "{:?}", item.label);
+                }
+            }
+        }
     }
 
     /// The Security menu as the shell builds it for an ordinary document.
