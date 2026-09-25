@@ -8,15 +8,66 @@
 use std::process::{Command, Output};
 
 fn run(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_bachelorpad"))
+    let logs = tempfile::tempdir().expect("temp dir");
+    run_with_logs(args, logs.path(), false)
+}
+
+/// The binary with its log directory redirected, as every process test must
+/// run it: launching it creates a log file, and that must never land in the
+/// developer's own state directory.
+fn run_with_logs(args: &[&str], logs: &std::path::Path, crash: bool) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bachelorpad"));
+    command
         .args(args)
         // A developer's own config must not change what these assert.
         .env(
             "BACHELORPAD_CONFIG",
             "/nonexistent/bachelorpad-test/config.toml",
         )
-        .output()
-        .expect("the binary launches")
+        .env("BACHELORPAD_LOG_DIR", logs);
+    if crash {
+        command.env("BACHELORPAD_CRASH_TEST", "1");
+    }
+    command.output().expect("the binary launches")
+}
+
+#[test]
+fn a_run_leaves_a_log_file_in_the_log_directory() {
+    let logs = tempfile::tempdir().expect("temp dir");
+    let out = run_with_logs(&["--self-check"], logs.path(), false);
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        logs.path().join("bachelorpad.log").is_file(),
+        "a release build on Windows has no console; the log file is the only record"
+    );
+}
+
+#[test]
+fn a_crash_writes_a_report_naming_the_version_and_where_it_happened() {
+    let logs = tempfile::tempdir().expect("temp dir");
+    let out = run_with_logs(&["--self-check"], logs.path(), true);
+    assert!(!out.status.success(), "the deliberate crash did not happen");
+
+    let reports: Vec<_> = std::fs::read_dir(logs.path())
+        .expect("log dir")
+        .map(|e| e.expect("entry").path())
+        .filter(|p| {
+            p.file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with("crash-"))
+        })
+        .collect();
+    assert_eq!(reports.len(), 1, "{reports:?}");
+    let report = std::fs::read_to_string(&reports[0]).expect("report");
+    assert!(report.contains(env!("CARGO_PKG_VERSION")), "{report}");
+    assert!(report.contains("deliberate crash test"), "{report}");
+    assert!(
+        report.contains("main.rs"),
+        "the location is missing: {report}"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("A report was written to"),
+        "the user is not told where the report is"
+    );
 }
 
 #[test]

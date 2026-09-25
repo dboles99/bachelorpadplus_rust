@@ -14,3 +14,8 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 bp-config = { path = "../../crates/bp-config" }
 bp-theme = { path = "../../crates/bp-theme" }
 bp-ui = { path = "../../crates/bp-ui" }
+
+[dev-dependencies]
+# The process tests point the log directory at a temporary one: running the
+# binary must never write into the developer's own state directory.
+tempfile.workspace = true
