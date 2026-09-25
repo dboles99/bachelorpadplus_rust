@@ -23,17 +23,25 @@ Re-run it after pulling a change to `scripts/hooks/`.
 ./scripts/Invoke-LocalCI.ps1 -Linux -IncludeSpikes # everything, both platforms
 ```
 
+On Linux the same script runs every stage natively; see
+[Native Linux](#native-linux).
+
+```sh
+pwsh -NoProfile -File scripts/Invoke-LocalCI.ps1          # full gate, Linux host
+pwsh -NoProfile -File scripts/Invoke-LocalCI.ps1 -Quick   # what pre-commit runs
+```
+
 | Stage | What it runs |
 | --- | --- |
 | fmt | `cargo fmt --all -- --check` |
 | check (locked) | `cargo check --workspace --all-targets --locked` |
 | clippy | `cargo clippy --workspace --all-targets -- -D warnings` |
 | test | `cargo test --workspace` |
-| launch | Runs `bachelorpad --self-check` and asserts it starts |
+| launch | Runs `bachelorpad --self-check` and asserts it starts (Linux: under `xvfb-run -a` when there is no display) |
 | log hygiene | Fails on any `tracing::` call that may carry document content or secrets |
 | fuzz | fmt, clippy and test over the standalone workspace in `fuzz/` |
 | spikes | fmt and clippy over each standalone workspace in `spikes/` |
-| linux (wsl) | fmt, clippy and test inside WSL |
+| linux (wsl) | fmt, clippy and test inside WSL (Windows hosts; skipped on Linux) |
 | linux fuzz (wsl) | The same for `fuzz/`, inside WSL |
 
 Every stage runs even after one fails, so a single run reports everything
@@ -108,6 +116,56 @@ BPAD_SKIP_CI=1 git commit -m "wip: ..."
 
 The escape hatch is deliberate. A gate with no bypass gets disabled wholesale
 the first time it is wrong, and then nothing is checked at all.
+
+## Native Linux
+
+The mode follows the host. Run on Linux (or any non-Windows host), the script
+runs **every** stage natively -- fmt, `check --locked`, clippy, test, launch,
+log hygiene and fuzz -- which is more than the WSL leg does: that leg skips
+`--locked`, launch and log hygiene. There is no flag to pass, so the tracked
+`pre-commit` and `pre-push` hooks work unchanged, and `-Quick` means what it
+means on Windows. `-Linux` is meaningless there and the `linux (wsl)` stage
+is skipped, saying why.
+
+Setup on Ubuntu 24.04 (the container this was brought up in):
+
+```sh
+# PowerShell 7 from Microsoft's apt repository.
+curl -sSfLo /tmp/pmc.deb https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb
+sudo dpkg -i /tmp/pmc.deb && sudo apt-get update && sudo apt-get install -y powershell
+
+# Build dependencies (as for WSL, below), plus a virtual display for launch.
+sudo apt-get install -y build-essential pkg-config libfontconfig1-dev libxkbcommon-dev \
+    libxcb1-dev libgl1-mesa-dev libwayland-dev libssl-dev \
+    libxkbcommon-x11-0 libxcb-cursor0 xvfb xauth
+```
+
+The **launch** stage runs `<target-dir>/debug/bachelorpad` (no `.exe`). It
+asks `cargo metadata` for the target directory rather than assuming
+`target/`, so `CARGO_TARGET_DIR` -- relative or absolute -- and
+`build.target-dir` are honoured; the Windows path does the same. It picks a
+display in this order, and the stage's detail column records which it used:
+
+1. `DISPLAY` or `WAYLAND_DISPLAY` set -- run directly.
+2. `xvfb-run` on `PATH` -- run under `xvfb-run -a`.
+3. Neither -- run headless, and say so in yellow and in the table.
+
+Why the third case runs rather than failing or skipping: `--self-check`
+prints its marker and returns before anything touches the windowing stack,
+so the assertion -- the linked binary loads and reaches `main` -- does not
+depend on a display. Failing would reject a machine for something the check
+does not need; skipping would give up the only stage that loads the binary.
+The display is still provided when it can be, so a stale binary that ignores
+the flag and opens a window hangs and is killed at the 30 s bound exactly as
+on Windows, and so the stage stays meaningful if the self-check ever grows to
+create an event loop (winit dlopens `libxkbcommon-x11` there, which is why it
+is in the setup list). On timeout the whole process tree -- `xvfb-run`, `Xvfb`
+and the app -- is killed, not just the wrapper.
+
+A shared `CARGO_TARGET_DIR` is inherited by the `fuzz` stage too, so both
+workspaces build into one directory. That is a deliberate trade for disk
+space on small machines; unset it if the cross-workspace rebuilds cost more
+than the space.
 
 ## The Linux leg
 
