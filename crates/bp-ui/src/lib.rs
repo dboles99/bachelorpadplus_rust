@@ -1038,6 +1038,12 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
     // `run` spelled out, because the recovery question needs the window
     // shown before it can take the keyboard focus.
     ui.show()?;
+    // The keyboard to whichever editor is showing. The window's
+    // `forward-focus` names the default view's `TextInput`, which is hidden
+    // under `--editor-view`, so there every key typed before the first click
+    // went nowhere -- found by `scripts/smoke-linux.sh`, invisible to the
+    // window tests, which focus the editor themselves.
+    ui.invoke_focus_editor();
     if !pending.is_empty() {
         offer_recovery(&ui, &state, pending);
     }

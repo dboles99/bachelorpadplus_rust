@@ -64,11 +64,9 @@ KEY_GAP = 0.02
 # path stays covered; when the defect is fixed the run says XPASS and the
 # entry should go. Anything else that loses keys is a FAIL.
 KNOWN_DEFECTS: dict[str, str] = {
-    "editor-view": (
-        "keys typed before any click are lost: at start-up the keyboard focus "
-        "is not on the custom surface (app.slint has `forward-focus: editor`, "
-        "the hidden TextInput, and nothing calls focus-editor on launch)"
-    ),
+    # Empty. "editor-view" was here -- keys typed before any click were lost,
+    # because nothing gave the custom surface the keyboard at launch -- until
+    # `run_with` started calling `focus-editor` after showing the window.
 }
 
 
