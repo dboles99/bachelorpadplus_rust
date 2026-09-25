@@ -1,54 +1,47 @@
 # 02-core-editor
 
-Roadmap phase 2. **Crates built and tested; wiring blocked.**
+Roadmap phase 2. **Done for RC1 except the editor context menu** (release-plan
+M1-18, waiting on U5). Status checked against the code on 2026-09-25.
 
 | Task | Status |
 | --- | --- |
-| [rope-buffer](01-rope-buffer.md) | Crate done; not yet the editor's storage |
-| [tabs](02-tabs.md) | Done in phase 1 (`bp-core::Workspace` + tab strip) |
-| [file-io](03-file-io.md) | Done in phase 1 (`bp-files`) |
-| [status-bar](04-status-bar.md) | Done except Ln/Col |
-| [undo-redo](05-undo-redo.md) | Crate done; not yet the authority |
+| [rope-buffer](01-rope-buffer.md) | Done: a `bp-buffer` rope holds every document |
+| tabs | Done in phase 1 (`bp-core::Workspace` + tab strip); Ctrl+Tab since M1-11 |
+| file-io | Done in phase 1 (`bp-files`) |
+| status-bar | Done, with Ln/Col in both views (M1-04) |
+| [undo-redo](05-undo-redo.md) | Done under `--editor-view`; the default view keeps `TextInput`'s own undo |
 
-## The one thing blocking this phase
+The tabs, file-io and status-bar task files were empty templates and were
+deleted on 2026-09-25 (see [../README.md](../README.md)).
 
-**Slint's `TextInput` owns the text and the caret.** It hands the whole buffer
-back on every edit, keeps its own undo stack, and exposes the caret only
-through a property marked *"internal, undocumented, only exposed for tests"*.
+## What changed the picture
 
-That single fact blocks three separate items:
+This folder used to say the phase was blocked on one fact: Slint's
+`TextInput` owns the text and the caret. Two things answered it.
 
-- the rope cannot become the storage — a rope behind that widget means
-  converting to `String` on every push, which is worse than the `String` it
-  would replace;
-- `bp-editor`'s undo cannot become the authority — two undo stacks over one
-  document is worse than one;
-- the status bar cannot show Ln/Col.
+- **A custom editor view** (ADR-0018) owns its text and routes keys itself,
+  so under `--editor-view` the rope is the text and `bp-editor`'s undo is the
+  authority. It ships as experimental, behind the flag (D2); it cannot do
+  input-method composition on Slint 1.17.1.
+- **The default view reads `TextInput`'s caret** (M1-04), converting bytes to
+  characters through the rope, so Ln/Col, Go to Line, Insert Date/Time,
+  Duplicate Line and Move Line Up/Down work in the view that ships. Its text
+  is copied into the rope after every edit.
 
-All three unblock together, with a custom virtualised editor view that owns
-its own text and routes keys itself.
+Line operations (sort, remove duplicates, reverse, trim, duplicate, move),
+Go to Line and zoom are all reachable from the menus.
 
-Building the libraries first was the right order: their semantics are provable
-without a window, and the widget is the risky part. `bp-editor` has 19 tests
-pinning undo behaviour — typing coalesces into one step, newlines and caret
-moves end the run, replacing a selection undoes as one — none of which needed
-a window to establish.
+## Evidence for the rope
 
-## Evidence that the switch is worth making
-
-`bachelorpad --latency-probe`, release, Windows:
+`bachelorpad --latency-probe`, release, Windows, measured in phase 2:
 
 | Document | insert via `String` | insert via rope |
 | ---: | ---: | ---: |
 | 100 KB | 55.8 µs | 0.3 µs |
 | 1 MB | 563.7 µs | 0.3 µs |
 
-Linear versus flat — roughly 1900× at 1 MB. The current path stays inside a
-16 ms frame budget to about **40 MB**, so this is not urgent for notes. It is
-the prerequisite for the large-file work in phase 4.
+## Not in RC1
 
-## Also outstanding
-
-Multi-cursor, column selection, folding, indentation guides, line operations
-(duplicate/move/sort/remove-duplicates), go-to-line and zoom — specs.md
-section 4. All of them want the custom view too, since they need the caret.
+Multi-cursor, column selection, folding and indentation guides (specs.md
+section 4) are deferred to 1.x by the release plan (§3). Drag and drop to
+open is blocked on Slint (README, "Known gaps").

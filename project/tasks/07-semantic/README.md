@@ -1,15 +1,21 @@
 # 07-semantic
 
 Roadmap phases 8 (semantic foundation), 9 (organization) and 10 (hybrid
-search). **Phase 8 started; 9 and 10 not.**
+search). **Phase 8 done for RC1; phase 9 built as far as a metadata store and
+kept unwired; phase 10 not started.** ADR-0030 (S2) defers 9 and 10 to 1.2,
+and D3 in `project/DECISIONS_NEEDED.md` holds the question of wiring
+`bp-storage`. Status checked against the code on 2026-09-25.
 
 | Task | Status |
 | --- | --- |
-| [deterministic-analysis](01-deterministic-analysis.md) | Done — `bp-semantic` |
-| [semantic-naming](02-semantic-naming.md) | Done — feeds Save As |
-| [metadata](03-metadata.md) | Not started — needs `bp-storage` |
-| [related-notes](04-related-notes.md) | Not started |
-| [hybrid-search](05-hybrid-search.md) | Not started |
+| deterministic-analysis | Done — `bp-semantic`: title, summary, keywords, outline, statistics |
+| semantic-naming | Done — feeds Save As and Note ▸ Semantic Rename |
+| metadata | `bp-storage` is built and tested (SQLite, its own migrations) and nothing in the application calls it: ADR-0019, D3, and ADR-0030 for RC1 |
+| related-notes | Not started; 1.2 (ADR-0030, S2) |
+| hybrid-search | Not started; 1.2 (ADR-0030, S2) |
+
+The five task files were empty templates and were deleted on 2026-09-25 (see
+[../README.md](../README.md)).
 
 ## What exists
 
@@ -43,11 +49,15 @@ routes through the save dialog — a physical rename needs explicit approval
 - **Layers two and three** — local statistical models and optional generative
   providers. Both must stay optional (ADR-0006), and layer three needs a
   decision about which providers and what leaves the machine (ADR-0011).
-- **Metadata store** (`bp-storage`): documents, topics, entities, tags,
-  relationships. `database/migrations/0001_initial.sql` exists but nothing
-  reads it, and the schema covers governance tables rather than the document
-  model in `DATA_MODEL.md`.
+- **Metadata store.** `bp-storage` exists: documents and tags, with its
+  migrations embedded in `crates/bp-storage/src/migrations.rs`. Topics,
+  entities and relationships from `DATA_MODEL.md` are not in it. Nothing in
+  the application calls it (D3; ADR-0030 keeps it out of RC1).
+  `database/migrations/0001_initial.sql` is a different, older schema that
+  nothing reads (see `database/README.md`).
 - **Related notes, duplicate detection, folder suggestions, semantic diff** —
-  all of phase 9, all needing the metadata store first.
+  all of phase 9, all needing the metadata store wired first. Deferred to 1.2
+  (ADR-0030, S2).
 - **Hybrid lexical + semantic search** (phase 10) needs embeddings, which need
-  a security decision before anything is indexed.
+  a security decision before anything is indexed (D1). Deferred to 1.2
+  (ADR-0030, S2).

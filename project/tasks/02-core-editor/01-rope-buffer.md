@@ -1,7 +1,7 @@
 # Task: rope-buffer
 
 **Phase:** 02-core-editor
-**Status:** Crate done; not yet the editor's storage (see Notes)
+**Status:** Done: the rope holds every document (checked 2026-09-25)
 
 ## Objective
 
@@ -25,8 +25,11 @@ line and column maths every other feature depends on.
 - [x] `line_count(&str)` free function for callers that need only the count,
       so the gutter does not build a rope on every keystroke — with a test
       asserting it never disagrees with the rope.
-- [ ] Used as the editor's text storage. Blocked on the editor view; see
-      Notes.
+- [x] Used as the editor's text storage. Each open document is a
+      `bp_editor::Editor` over this buffer (`editors` in
+      `bp-ui/src/state.rs`); it became the storage with the custom editor
+      view (ADR-0018). The default `TextInput` view still keeps its own copy
+      of the text, which is copied into the rope after every edit.
 
 ## Measurements
 
@@ -44,7 +47,11 @@ difference is roughly 1900×.
 
 ## Notes
 
-**The rope is not yet the editor's storage, deliberately.** Slint's
+The next three paragraphs were written before the switch and are kept as the
+reasoning for it. The switch happened with the custom view (ADR-0018), as
+they predicted.
+
+**The rope was not yet the editor's storage, deliberately.** Slint's
 `TextInput` owns its own text and caret: it hands back the entire buffer on
 every edit and exposes the caret only through a property marked "internal,
 undocumented, only exposed for tests". Putting a rope behind that widget means

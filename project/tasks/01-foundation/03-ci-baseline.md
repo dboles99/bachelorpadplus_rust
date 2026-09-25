@@ -1,7 +1,7 @@
 # Task: ci-baseline
 
 **Phase:** 01-foundation
-**Status:** Done on Windows; Linux leg built but not enabled
+**Status:** Done on both platforms (checked 2026-09-25)
 
 ## Objective
 
@@ -23,9 +23,13 @@ project, so the gate is local and it is the only gate (ADR-0016).
 - [x] A documented bypass exists for deliberate work-in-progress commits.
 - [x] The dormant GitHub workflow is set to manual trigger only, so pushes do
       not queue runs that cannot execute, and its steps match the local gate.
+      No longer true of the second half on 2026-09-25: the workflow has no
+      launch or log-hygiene step and no Linux system packages. Bringing it
+      back in step is release-plan item M3-07.
 - [x] Documented in `docs/governance/LOCAL_CI.md`.
-- [ ] Linux leg enabled — needs a Rust toolchain inside WSL. Until then the
-      stage reports `skipped`, never a false pass.
+- [x] Linux leg enabled — needed a Rust toolchain inside WSL. Working since
+      2026-08-17 (`docs/governance/LOCAL_CI.md`, "The Linux leg"); on a Linux
+      host the same script runs every stage natively (release-plan M0-13).
 
 ## Artifacts
 

@@ -1,7 +1,7 @@
 # Task: undo-redo
 
 **Phase:** 02-core-editor
-**Status:** Crate done; not yet wired (see Notes)
+**Status:** Done under `--editor-view`; the default view keeps `TextInput`'s own undo (checked 2026-09-25)
 
 ## Objective
 
@@ -33,10 +33,14 @@ happened to arrive.
       previous document's content is nonsense.
 - [x] Full round trip — undo everything, redo everything — returns the exact
       text at both ends.
-- [ ] Wired to Ctrl+Z / Ctrl+Y in the shell. Blocked; see Notes.
+- [x] Wired to Ctrl+Z / Ctrl+Y in the shell, under `--editor-view`
+      (`bp_editor::Command::Undo`/`Redo` in `bp-ui/src/dispatch.rs`). In the
+      default `TextInput` view, which ships as the default (ADR-0018, D2),
+      Slint's widget still handles undo itself.
 
 ## Notes
 
+Written before the custom view existed; still true of the default view.
 Not wired for the same reason the rope is not yet the editor's storage:
 Slint's `TextInput` has its own undo stack and its own caret. Two undo stacks
 over one document is worse than one, and ours cannot become the authority
