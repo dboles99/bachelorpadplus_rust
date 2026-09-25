@@ -151,6 +151,8 @@ pub struct AppState {
     pub(crate) show_planned_menus: bool,
     /// Where the log and crash reports go, for Tools ▸ Open Log Folder.
     pub(crate) log_dir: Option<PathBuf>,
+    /// What is drawing the window, in words, for Help ▸ About.
+    pub(crate) renderer: String,
     /// Whether typing overwrites (the Insert key).
     ///
     /// The window's, not a document's: one key switches it and every tab
@@ -408,6 +410,7 @@ impl AppState {
             settings_sheet: None,
             show_planned_menus: false,
             log_dir: None,
+            renderer: String::new(),
             overwrite: false,
             stamps: HashMap::new(),
             recent: locations

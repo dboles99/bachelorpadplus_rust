@@ -63,6 +63,7 @@ pub use generated::*;
 
 mod menus;
 
+mod about;
 mod audit;
 mod default_editor;
 mod dialog;
@@ -382,16 +383,26 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
     // An explicit SLINT_BACKEND wins: someone debugging a rendering problem
     // has set it deliberately, and silently overriding them would waste an
     // afternoon. Selection must happen before the first window is created.
-    if options.renderer == Renderer::Software && std::env::var_os("SLINT_BACKEND").is_none() {
+    // Said in Help ▸ About as it was decided here, rather than guessed at
+    // later: Slint has no call that reports which renderer it picked.
+    let renderer = if let Ok(asked) = std::env::var("SLINT_BACKEND") {
+        format!("as SLINT_BACKEND={asked} asks")
+    } else if options.renderer == Renderer::Software {
         // A failure here is not fatal -- the platform default still draws a
         // usable window, just a heavier one.
-        if let Err(e) = slint::BackendSelector::new()
+        match slint::BackendSelector::new()
             .renderer_name("software".to_owned())
             .select()
         {
-            tracing::warn!("software renderer unavailable, using platform default: {e}");
+            Ok(()) => "software renderer".to_owned(),
+            Err(e) => {
+                tracing::warn!("software renderer unavailable, using platform default: {e}");
+                "the platform's default (the software renderer was unavailable)".to_owned()
+            }
         }
-    }
+    } else {
+        "the platform's default".to_owned()
+    };
 
     let ui = AppWindow::new()?;
     let mut initial = state::AppState::new();
@@ -403,6 +414,7 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
     }
     initial.follow_system_theme = options.follow_system_theme;
     initial.log_dir = options.log_dir.clone();
+    initial.renderer = renderer;
     if let Some(size) = options.font_size {
         // Clamped again rather than trusted. `bp-config` bounds what it
         // parses, but `RunOptions` is a public API and a caller reaching it
@@ -628,6 +640,7 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
     }
 
     bind_settings(&ui, &state);
+    about::bind(&ui, &state);
 
     // Every in-app question reports here; `dialog` runs what was waiting on
     // the answer.

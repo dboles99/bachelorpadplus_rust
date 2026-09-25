@@ -31,6 +31,30 @@ Ctrl+0          Reset zoom
 Ctrl+D          Duplicate line (--editor-view)
 Alt+Up / Down   Move line up / down (--editor-view)";
 
+/// Tools ▸ Open Log Folder: the folder the binary really logs to. A failure
+/// is a status line.
+pub(crate) fn open_log_folder(state: &mut AppState) {
+    let outcome = match state.log_dir.clone() {
+        Some(dir) => reveal(&dir),
+        None => Err("this system names no folder for logs".to_owned()),
+    };
+    state.error = outcome.err();
+}
+
+/// Tools ▸ Open Config Folder: where config.toml is, or would be.
+pub(crate) fn open_config_folder(state: &mut AppState) {
+    let file = state
+        .settings
+        .as_ref()
+        .map(|s| s.path.clone())
+        .or_else(bp_config::config_path);
+    let outcome = match file.as_deref().and_then(std::path::Path::parent) {
+        Some(dir) => reveal(dir),
+        None => Err("this system names no folder for configuration".to_owned()),
+    };
+    state.error = outcome.err();
+}
+
 /// Show `dir` in the desktop's file manager.
 ///
 /// Made first if it is missing: a user sent to the configuration folder
@@ -681,40 +705,19 @@ pub fn handle_menu_action(
             return None;
         }
         action::OPEN_LOG_FOLDER => {
-            let dir = state.borrow().log_dir.clone();
-            let outcome = match dir {
-                Some(dir) => reveal(&dir),
-                None => Err("this system names no folder for logs".to_owned()),
-            };
-            state.borrow_mut().error = outcome.err();
+            open_log_folder(&mut state.borrow_mut());
             push = PushText::No;
         }
         action::OPEN_CONFIG_FOLDER => {
-            let file = state
-                .borrow()
-                .settings
-                .as_ref()
-                .map(|s| s.path.clone())
-                .or_else(bp_config::config_path);
-            let outcome = match file.as_deref().and_then(std::path::Path::parent) {
-                Some(dir) => reveal(dir),
-                None => Err("this system names no folder for configuration".to_owned()),
-            };
-            state.borrow_mut().error = outcome.err();
+            open_config_folder(&mut state.borrow_mut());
             push = PushText::No;
         }
 
         action::SHORTCUTS => dialog::inform(ui, "Keyboard shortcuts", SHORTCUTS),
-        action::ABOUT => dialog::inform(
-            ui,
-            "About BachelorPad+",
-            &format!(
-                "BachelorPad+ {}\n\nNotepad when you want it. More when you need it.\n\n\
-                 Renderer: {}\nLicence: MIT OR Apache-2.0",
-                env!("CARGO_PKG_VERSION"),
-                std::env::var("SLINT_BACKEND").unwrap_or_else(|_| "software".to_owned()),
-            ),
-        ),
+        action::ABOUT => {
+            crate::about::open(ui, &state.borrow());
+            return None;
+        }
 
         // Only reachable with the custom surface. Under `TextInput`
         // Slint handles these on the widget itself and they never get

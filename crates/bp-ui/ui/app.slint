@@ -33,6 +33,7 @@
 import "../fonts/DejaVuSansMono.ttf";
 import { Palette as SystemPalette } from "std-widgets.slint";
 import { MenuLabel, MenuPopup } from "menu.slint";
+import { AboutSheet } from "about.slint";
 import { DialogSheet } from "dialog.slint";
 import { EditorSurface } from "editor_surface.slint";
 import { FindBar } from "find_bar.slint";
@@ -256,6 +257,17 @@ export component AppWindow inherits Window {
         settings.take-focus();
     }
 
+    // --- Help ▸ About (`about.slint`) ------------------------------------
+    in-out property <bool> about-open;
+    in property <string> about-body;
+    in property <[string]> about-buttons;
+    out property <int> about-highlighted: about.highlighted;
+    callback about-chosen(int);
+
+    public function focus-about() {
+        about.take-focus();
+    }
+
     /// Select a range in the editor. Called from Rust once it has worked out
     /// where the next match is -- `set-selection-offsets` is a function on
     /// the widget, so only Slint can invoke it.
@@ -351,7 +363,7 @@ export component AppWindow inherits Window {
         // the Settings sheet, the passphrase or Go to Line. Taking it back
         // unconditionally left a question from the Help menu on screen with
         // the keys still typing into the document behind it.
-        if (!root.dialog-open && !root.settings-open && !root.passphrase-open && !root.goto-open) {
+        if (!root.dialog-open && !root.settings-open && !root.about-open && !root.passphrase-open && !root.goto-open) {
             root.focus-editor();
         }
     }
@@ -1068,6 +1080,19 @@ export component AppWindow inherits Window {
             root.settings-open = false;
             root.focus-editor();
             root.settings-cancelled();
+        }
+    }
+
+    about := AboutSheet {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        open: root.about-open;
+        body: root.about-body;
+        buttons: root.about-buttons;
+        chosen(button) => {
+            root.about-chosen(button);
         }
     }
 
