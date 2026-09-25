@@ -455,15 +455,36 @@ impl AppState {
         }
     }
 
-    /// Write a recovery checkpoint for every unsaved document, and clear the
-    /// journal for those that are now clean.
+    /// Write a recovery checkpoint for every unsaved document that changed
+    /// since its last one, and clear the journal for those that are now
+    /// clean -- all on this thread.
     ///
     /// specs.md section 3 is emphatic that a checkpoint is not a save, and
     /// `bp-core` enforces that: `record_checkpoint` deliberately leaves the
     /// document dirty.
+    ///
+    /// The three steps below, run in a row. The autosave timer runs the
+    /// middle one on a background thread instead (release plan M1-07), so a
+    /// sealed checkpoint's key derivation never stalls the keyboard.
     pub(crate) fn checkpoint_all(&mut self) {
+        let jobs = self.prepare_checkpoints();
+        let journal = self.journal.clone();
+        let written = write_checkpoints(&journal, jobs);
+        self.apply_checkpoints(written);
+    }
+
+    /// The UI-thread half of a checkpoint pass: discard the journal of every
+    /// clean document, and snapshot every dirty one whose checkpoint is not
+    /// already current, each with a journal ticket.
+    ///
+    /// The ticket is what makes writing later, elsewhere, safe: a save or a
+    /// close between now and the write discards the document's journal, and
+    /// that discard cancels the ticket, so a snapshot taken before it can
+    /// never land after it and be offered as "recovered" work the user
+    /// already saved or threw away.
+    pub(crate) fn prepare_checkpoints(&mut self) -> Vec<CheckpointJob> {
         let ids: Vec<DocumentId> = self.workspace.iter().map(Document::id).collect();
-        let at = now();
+        let mut jobs = Vec::new();
 
         for id in ids {
             let Some(doc) = self.workspace.get(id) else {
@@ -481,7 +502,7 @@ impl AppState {
                 continue;
             }
 
-            let entry = bp_history::Checkpoint {
+            let checkpoint = bp_history::Checkpoint {
                 path: doc.path().map(Path::to_path_buf),
                 name: doc.display_name().to_owned(),
                 text: self.text_of(id).to_owned(),
@@ -494,16 +515,35 @@ impl AppState {
             // Its own passphrase, if it has one. A sealed journal is
             // encrypted with the document's key so that it can be recovered
             // at unlock time and never needs a prompt of its own (ADR-0022).
-            let passphrase = self.passphrases.get(&id).map(|p| p.to_string());
-            match self
-                .journal
-                .checkpoint(id.get(), &entry, recovery, passphrase.as_deref())
-            {
+            let passphrase = self
+                .passphrases
+                .get(&id)
+                .map(|p| zeroize::Zeroizing::new(p.to_string()));
+            jobs.push(CheckpointJob {
+                id,
+                edits,
+                ticket: self.journal.ticket(id.get()),
+                checkpoint,
+                recovery,
+                passphrase,
+            });
+        }
+        jobs
+    }
+
+    /// The UI-thread half after the write: record what reached the journal,
+    /// and say so when a profile could not be honoured.
+    pub(crate) fn apply_checkpoints(&mut self, written: Vec<CheckpointWritten>) {
+        let at = now();
+        for done in written {
+            match done.result {
                 Ok(bp_history::Written::Yes) => {
-                    if let Some(doc) = self.workspace.get_mut(id) {
+                    if let Some(doc) = self.workspace.get_mut(done.id) {
                         doc.record_checkpoint(at);
                     }
-                    self.checkpointed.insert(id, edits);
+                    // The count the snapshot was taken at: typing since then
+                    // leaves the record behind, and the next pass writes again.
+                    self.checkpointed.insert(done.id, done.edits);
                 }
                 // A profile doing what it was set to do is not news; one that
                 // cannot be honoured is. `notice` decides which this was.
@@ -512,7 +552,8 @@ impl AppState {
                         self.error = Some(message.to_owned());
                     }
                 }
-                Err(_) => {}
+                // A save or a close got there first; its discard stands.
+                Ok(bp_history::Written::Superseded) | Err(_) => {}
             }
         }
     }
@@ -3180,6 +3221,48 @@ fn locations() -> bp_config::Locations {
     }
 }
 
+/// One document's checkpoint, snapshotted on the UI thread and ready to be
+/// sealed and written anywhere (`write_checkpoints`).
+pub(crate) struct CheckpointJob {
+    id: DocumentId,
+    edits: u64,
+    ticket: bp_history::Ticket,
+    checkpoint: bp_history::Checkpoint,
+    recovery: bp_security::Recovery,
+    passphrase: Option<zeroize::Zeroizing<String>>,
+}
+
+/// What became of one [`CheckpointJob`].
+pub(crate) struct CheckpointWritten {
+    id: DocumentId,
+    edits: u64,
+    result: std::io::Result<bp_history::Written>,
+}
+
+/// Seal and write `jobs` -- the slow half of a checkpoint pass, safe on any
+/// thread: it touches nothing but the journal, which is shared and locked,
+/// and each write is dropped if its ticket was cancelled meanwhile.
+pub(crate) fn write_checkpoints(
+    journal: &bp_history::Journal,
+    jobs: Vec<CheckpointJob>,
+) -> Vec<CheckpointWritten> {
+    jobs.into_iter()
+        .map(|job| {
+            let prepared = journal.prepare(
+                job.ticket,
+                &job.checkpoint,
+                job.recovery,
+                job.passphrase.as_ref().map(|p| p.as_str()),
+            );
+            CheckpointWritten {
+                id: job.id,
+                edits: job.edits,
+                result: journal.commit(prepared),
+            }
+        })
+        .collect()
+}
+
 /// Where settings chosen in the window are saved, and what the file last
 /// said about them.
 #[derive(Debug, Clone)]
@@ -5004,6 +5087,53 @@ mod tests {
             ["second"],
             "a real edit was not journalled"
         );
+    }
+
+    #[test]
+    fn a_checkpoint_snapshotted_before_a_save_never_lands_after_it() {
+        // Release plan M1-07: the write now happens later, on another
+        // thread. A save in between discards the journal, and the stale
+        // snapshot must not bring it back as "recovered" work.
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("doc.txt");
+        std::fs::write(&file, "old\n").unwrap();
+        let mut state = AppState::new();
+        state.journal = bp_history::Journal::new(dir.path().join("journal"));
+        state.open(file.clone());
+        state.edit("new\n".to_owned());
+        let id = state.workspace.active_id().unwrap();
+
+        let jobs = state.prepare_checkpoints();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(state.save_document(id, None), SaveResult::Saved);
+        let journal = state.journal.clone();
+        let written = std::thread::spawn(move || write_checkpoints(&journal, jobs))
+            .join()
+            .unwrap();
+        state.apply_checkpoints(written);
+
+        assert!(
+            journalled_text(&state).is_empty(),
+            "the saved work came back as recoverable"
+        );
+        assert!(!state.checkpointed.contains_key(&id));
+    }
+
+    #[test]
+    fn a_checkpoint_written_on_another_thread_is_recorded_when_it_comes_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut state, id) = journalling(dir.path());
+        let jobs = state.prepare_checkpoints();
+        let journal = state.journal.clone();
+        let written = std::thread::spawn(move || write_checkpoints(&journal, jobs))
+            .join()
+            .unwrap();
+        state.apply_checkpoints(written);
+
+        assert_eq!(journalled_text(&state), ["first"]);
+        assert!(state.workspace.get(id).unwrap().last_checkpoint().is_some());
+        // Recorded, so the next pass has nothing to do.
+        assert!(state.prepare_checkpoints().is_empty());
     }
 
     #[test]
