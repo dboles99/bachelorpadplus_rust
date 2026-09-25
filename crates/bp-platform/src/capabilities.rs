@@ -225,7 +225,11 @@ impl Capability {
                          and reading the registry needs a dependency this crate does not take. \
                          The report is produced from values a caller supplies instead.",
             },
-            (Self::AssociationInstall, Platform::Linux) => Available,
+            (Self::AssociationInstall, Platform::Linux) => Conditional {
+                reason: "Available unless the product runs as a Flatpak, whose sandbox manages \
+                         file associations itself; `editor::set_as_default_availability` asks \
+                         the environment which.",
+            },
             (Self::AssociationInstall, Platform::Windows) => NotImplemented {
                 reason: "Same obstacle as the registration itself: the values are generated, \
                          applying them is not.",
