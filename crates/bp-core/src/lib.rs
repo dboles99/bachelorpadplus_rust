@@ -18,7 +18,9 @@ mod save_state;
 mod workspace;
 
 pub use document::{Document, DocumentId, NO_LOCATION, UNTITLED};
-pub use encoding::{Encoding, LineEnding};
+pub use encoding::{
+    Encoding, LineEnding, Unrepresentable, decode_windows_1252, encode_windows_1252,
+};
 pub use save_state::{CheckpointTime, DiskSaveTime, SaveState};
 pub use workspace::Workspace;
 
