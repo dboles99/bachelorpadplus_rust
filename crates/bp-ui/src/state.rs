@@ -284,6 +284,24 @@ impl AppState {
         self.error = (!notices.is_empty()).then(|| notices.join("; "));
     }
 
+    /// Say so when encrypted documents have recovered work waiting (release
+    /// plan M2-15).
+    ///
+    /// A sealed checkpoint can be read only with its document's passphrase,
+    /// so it is restored when that document is unlocked, never offered at
+    /// startup (ADR-0022). Without this, a user whose encrypted document had
+    /// unsaved work when the power went had no way to know that opening it
+    /// would bring the work back -- or that anything was there at all. The
+    /// count and nothing more: the names are inside the seal, on purpose.
+    pub(crate) fn note_sealed_recovery(&mut self) {
+        let waiting = self.journal.sealed_count();
+        if waiting > 0 {
+            self.add_notice(format!(
+                "{waiting} encrypted document(s) have recovered work; open them to restore it"
+            ));
+        }
+    }
+
     /// Take the user's configuration: the settings it holds, and where to
     /// save changes to them (release plan M1-03).
     ///
@@ -4963,6 +4981,52 @@ mod tests {
             "recovered work is not on disk, so the tab must be dirty or the \
              user can close it and lose it without being asked"
         );
+    }
+
+    #[test]
+    fn a_new_session_says_encrypted_work_is_waiting_without_naming_it() {
+        // Release plan M2-15: it cannot be offered at startup, so it has to
+        // be mentioned, or nobody knows opening the file brings it back.
+        let recovery = tempfile::tempdir().unwrap();
+        let docs = tempfile::tempdir().unwrap();
+        let target = docs.path().join("diary.bpadx");
+        {
+            let mut before = AppState::new();
+            before.journal = bp_history::Journal::new(recovery.path().to_path_buf());
+            before.edit("dear diary".to_owned());
+            let id = before.workspace.active_id().unwrap();
+            before.ask = Some(crate::passphrase::Ask::Set {
+                id,
+                target: target.clone(),
+            });
+            before.answer_passphrase("hunter2");
+            before.answer_passphrase("hunter2");
+            before.set_security(bp_security::Security::Named(bp_security::Profile::Private));
+            before.edit("dear diary, more".to_owned());
+            before.checkpoint_all();
+        }
+
+        let mut after = AppState::new();
+        after.journal = bp_history::Journal::new(recovery.path().to_path_buf());
+        after.error = None;
+        after.note_sealed_recovery();
+
+        let notice = after.error.clone().unwrap_or_default();
+        assert!(notice.contains("1 encrypted document"), "{notice}");
+        assert!(
+            !notice.contains("diary"),
+            "the name is sealed and must stay so: {notice}"
+        );
+    }
+
+    #[test]
+    fn nothing_is_said_when_no_encrypted_work_is_waiting() {
+        let recovery = tempfile::tempdir().unwrap();
+        let mut state = AppState::new();
+        state.journal = bp_history::Journal::new(recovery.path().to_path_buf());
+        state.error = None;
+        state.note_sealed_recovery();
+        assert_eq!(state.error, None);
     }
 
     #[test]
