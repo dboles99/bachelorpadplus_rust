@@ -123,6 +123,8 @@ Hide them. A release does not advertise its backlog in the menu bar. Notebook, O
 
 Batch these: every one is a one-line answer. "Deadline" is the milestone that cannot finish without it.
 
+**Answered 2026-09-25:** 1 (scope, ADR-0030), 2 (Slint royalty-free, ADR-0031 -- the copyright holder is still open), 4 (`io.github.dboles99.BachelorPad`), 5 (DejaVu Sans Mono) and 6 (installer-owned registration), all ADR-0032; 7 (ADR-0033); 16 (D5 option c, via 1). Decision 3, the signing identity, is being applied for by the owner, who is also running the Windows gate (M0-12).
+
 | # | Decision | Recommendation | Unblocks | Deadline |
 |---|---|---|---|---|
 | 1 | **Scope sign-off** (S1–S6 above) | Defer S1, S2, S5, S6; accept S3; take S4 = D5(c) | The whole plan | Before M0 ends |
