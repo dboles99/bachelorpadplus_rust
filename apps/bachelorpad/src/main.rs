@@ -77,13 +77,23 @@ fn main() -> anyhow::Result<()> {
     // An unrecognised theme name is a recoverable mistake: warn and fall back
     // rather than refusing to start over a spelling. Resolved here, alongside
     // the other notices, so every invocation reports the same set.
-    let theme = loaded.config.theme.as_ref().and_then(|name| {
-        let id = ThemeId::from_name(name);
-        if id.is_none() {
-            notices.push(format!("'{name}' is not a known theme; using the default"));
-        }
-        id
-    });
+    let follow_system_theme = loaded
+        .config
+        .theme
+        .as_deref()
+        .is_some_and(|name| name.eq_ignore_ascii_case(bp_theme::SYSTEM_THEME_NAME));
+    let theme = loaded
+        .config
+        .theme
+        .as_ref()
+        .filter(|_| !follow_system_theme)
+        .and_then(|name| {
+            let id = ThemeId::from_name(name);
+            if id.is_none() {
+                notices.push(format!("'{name}' is not a known theme; using the default"));
+            }
+            id
+        });
 
     for notice in &notices {
         tracing::warn!("startup: {notice}");
@@ -112,6 +122,7 @@ fn main() -> anyhow::Result<()> {
             RendererPref::Platform => bp_ui::Renderer::Platform,
         },
         theme,
+        follow_system_theme,
         startup_notice: notices.first().map(|first| {
             if notices.len() > 1 {
                 format!("{first} (+{} more; see the log)", notices.len() - 1)
@@ -122,11 +133,11 @@ fn main() -> anyhow::Result<()> {
         font_size: Some(loaded.config.font_size),
         measure_exit: invocation.measure_exit,
         // Opt-in while the custom editor surface reaches parity with the
-        // widget it replaces (word wrap, input-method composition). Parsed
-        // here beside the other switches rather than through the config
-        // precedence, because it is a thing to try rather than a preference
-        // to keep.
-        editor_view: invocation.editor_view,
+        // widget it replaces (word wrap, input-method composition): the flag
+        // is for trying it once, `editor_view` in config.toml for keeping it.
+        editor_view: invocation.editor_view || loaded.config.editor_view,
+        settings_path: loaded.path.clone(),
+        config: Some(loaded.config),
     })?;
     Ok(())
 }
