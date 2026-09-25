@@ -34,6 +34,7 @@ Adding a decision means adding both.
 | BP-ADR-0026 | 2026-08-19 | A `.sig` sidecar appends to the whole file name and records the signer's key; Windows enforces no key-file permission | Accepted | [ADR-0026](docs/decisions/ADR-0026.md) |
 | BP-ADR-0027 | 2026-08-19 | Large-file thresholds are measured; the line index is sparse; memory mapping is declined with reasons | Accepted | [ADR-0027](docs/decisions/ADR-0027.md) |
 | BP-ADR-0028 | 2026-08-19 | Redaction merges overlapping and adjacent spans, resolves every offset against the original, and states what verification cannot prove | Accepted | [ADR-0028](docs/decisions/ADR-0028.md) |
+| BP-ADR-0029 | 2026-09-25 | The recent list, recovery journal and security history leave the roaming directory, and an old location is adopted -- or kept -- rather than abandoned | Accepted | [ADR-0029](docs/decisions/ADR-0029.md) |
 
 ## Decisions needed before the work they block
 

@@ -364,7 +364,13 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
         // by another route must not be able to hand the editor a 0 pt font.
         initial.font_size = bp_config::zoom(size, 0);
     }
-    initial.error = options.startup_notice.clone();
+    // Both, when there are both: `AppState::new` may already hold a notice
+    // about files it could not move, and a configuration warning must not
+    // silently replace it.
+    initial.error = match (options.startup_notice.clone(), initial.error.take()) {
+        (Some(config), Some(moved)) => Some(format!("{config}; {moved}")),
+        (config, moved) => config.or(moved),
+    };
 
     // Files from the command line. The first one replaces the empty document
     // opened at startup, so `bachelorpad note.txt` shows one tab rather than

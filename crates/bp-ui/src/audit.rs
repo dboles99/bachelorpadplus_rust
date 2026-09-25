@@ -1,60 +1,20 @@
-//! Where the security history lives, and how the shell reads it back.
+//! How the shell reads the security history back.
 //!
 //! `bp-audit` owns everything about *what* a security history is -- the
 //! records, their order, the sealing, and what each profile permits writing
-//! down (ADR-0024). This module owns only the two questions the crate
-//! deliberately refuses to answer, because both are the shell's: which file
-//! on this machine it is, and what a person reading it sees.
+//! down (ADR-0024). This module owns the question the crate deliberately
+//! refuses to answer, because it is the shell's: what a person reading it
+//! sees. *Which file* it is belongs to `bp-config`'s `locations`, with the
+//! recent list and the recovery journal, because all three had to move out of
+//! the roaming directory together.
 //!
 //! It does **not** decide whether an event may be written. That is
 //! `Destination::for_policy`, and duplicating the judgement here is how the
 //! menu and the log come to disagree about what a profile means.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use bp_audit::{AuditLog, Record};
-
-/// The file the security history is appended to.
-///
-/// Beside the recovery journal rather than beside `config.toml`, and for the
-/// same reason: it is machine-specific state rather than settings a user
-/// might copy between machines. `bp-platform` calls this `DirKind::State`,
-/// and both this and `recovery_dir` still hang off the config directory --
-/// which on Windows roams. That is one change owning `bp-config` and
-/// `bp-ui`, recorded in `project/WORK_QUEUE.md`, and it moves both together
-/// or neither.
-#[cfg(not(test))]
-pub(crate) fn audit_path() -> PathBuf {
-    crate::state::recovery_dir().with_file_name("security-history.log")
-}
-
-/// The same, redirected and made unique under test.
-///
-/// The one `cfg(test)` in this crate, and both halves of it were learned the
-/// hard way. Recording happens inside `set_security`, `set_privacy`,
-/// `scan_for_secrets` and two more, so **every** test that touches a security
-/// operation appends to whatever this returns:
-///
-/// * pointed at the real config directory, `cargo test` wrote a live security
-///   history into the user's `%APPDATA%` -- which it did, once, before this
-///   existed;
-/// * pointed at one shared temp file, parallel tests each read the log, each
-///   computed the same next sequence number, and the log then refused to open
-///   as out of order -- so every one of them failed, on a file none of them
-///   was really testing.
-///
-/// A counter rather than a random name, so a failing run names a file that
-/// can be looked at, and the process id so two runs at once cannot collide.
-#[cfg(test)]
-pub(crate) fn audit_path() -> PathBuf {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    let n = NEXT.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!(
-        "bpad-test-security-history-{}-{n}.log",
-        std::process::id()
-    ))
-}
 
 /// The report shown by Security ▸ Security History.
 ///
@@ -150,7 +110,7 @@ mod tests {
         // ordinary state operations, so a test that merely changes a security
         // profile appends -- and pointed at the real path, `cargo test` wrote
         // a live security history into the user's `%APPDATA%`. It did, once.
-        let path = audit_path();
+        let path = crate::state::AppState::new().audit_path;
         assert!(
             path.starts_with(std::env::temp_dir()),
             "the test history must live in the temp directory, not {}",
