@@ -716,6 +716,7 @@ fn wired(
             let _ = crate::dispatch::handle_menu_action(&ui, &menu_cell, id);
         }
     });
+    crate::bind_editing(&ui, &cell);
     crate::bind_settings(&ui, &cell);
     crate::refresh(&ui, &mut cell.borrow_mut(), crate::state::PushText::Yes);
     ui.invoke_focus_editor();
@@ -861,4 +862,90 @@ fn notices_closes_about_and_shows_the_terms_as_a_question_would() {
     assert_eq!(ui.get_dialog_title(), "Notices");
     press(&ui, Key::Escape);
     assert!(!ui.get_dialog_open());
+}
+
+// --- the default view's caret (release plan M1-04) -----------------------
+
+/// The wired window over `text`, caret at the top.
+fn wired_with(text: &str) -> (AppWindow, Rc<std::cell::RefCell<crate::state::AppState>>) {
+    let mut state = crate::state::AppState::new();
+    state.edit(text.to_owned());
+    let (ui, cell) = wired(state);
+    chord(&ui, Key::Control, Key::Home);
+    (ui, cell)
+}
+
+fn numbered(lines: usize) -> String {
+    (1..=lines).map(|i| format!("line {i:03}\n")).collect()
+}
+
+#[test]
+fn the_status_bar_follows_the_caret_in_the_default_view() {
+    let (ui, _) = wired_with("é one\ntwo\n");
+    press(&ui, Key::DownArrow);
+    press(&ui, Key::RightArrow);
+    press(&ui, Key::RightArrow);
+    assert_eq!(ui.get_cursor_label(), "Ln 2, Col 3");
+    // Through an accent, which is two bytes and one column.
+    press(&ui, Key::UpArrow);
+    assert_eq!(ui.get_cursor_label(), "Ln 1, Col 3");
+}
+
+#[test]
+fn ctrl_g_42_lands_on_line_42_in_the_default_view() {
+    let (ui, _) = wired_with(&numbered(100));
+    chord(&ui, Key::Control, "g");
+    assert!(ui.get_goto_open());
+    type_text(&ui, "42");
+    press(&ui, Key::Return);
+
+    // The caret is in the editor, at the start of line 42: typing lands there.
+    press(&ui, Key::Escape);
+    type_text(&ui, "#");
+    assert_eq!(line_of(&ui, '#'), 42);
+    assert!(ui.get_doc_text().contains("#line 042"));
+}
+
+#[test]
+fn ctrl_d_duplicates_the_line_under_the_caret_and_keeps_the_caret_on_it() {
+    let (ui, _) = wired_with("café\nsecond\nthird\n");
+    press(&ui, Key::DownArrow);
+    chord(&ui, Key::Control, "d");
+
+    assert_eq!(ui.get_doc_text(), "café\nsecond\nsecond\nthird\n");
+    type_text(&ui, "X");
+    assert!(
+        ui.get_doc_text().contains("second\nXsecond")
+            || ui.get_doc_text().contains("Xsecond\nsecond"),
+        "the caret left the line it duplicated: {:?}",
+        ui.get_doc_text()
+    );
+}
+
+#[test]
+fn alt_up_moves_the_line_and_the_caret_goes_with_it() {
+    let (ui, _) = wired_with("one\ntwo\nthree\n");
+    press(&ui, Key::DownArrow);
+    press(&ui, Key::DownArrow);
+    chord(&ui, Key::Alt, Key::UpArrow);
+
+    assert_eq!(ui.get_doc_text(), "one\nthree\ntwo\n");
+    assert_eq!(ui.get_cursor_label(), "Ln 2, Col 1");
+}
+
+#[test]
+fn find_selects_the_match_itself_after_accented_text() {
+    // `select` used to pass character offsets to a widget that counts
+    // bytes, so the selection drifted one place per accent before it.
+    let (ui, cell) = wired_with("ééé target\n");
+    ui.set_find_query("target".into());
+    let range = cell
+        .borrow_mut()
+        .find(&crate::state::find_query("target", false, false, false))
+        .expect("a match");
+    crate::dispatch::select(&ui, &mut cell.borrow_mut(), &range);
+
+    // Typing replaces the selection, so what survives shows what was selected.
+    type_text(&ui, "HIT");
+    assert_eq!(ui.get_doc_text(), "ééé HIT\n");
 }

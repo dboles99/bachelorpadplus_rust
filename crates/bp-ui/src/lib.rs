@@ -216,10 +216,10 @@ fn refresh(ui: &AppWindow, state: &mut state::AppState, push_text: state::PushTe
     // Rebuilt rather than set once, because the previews are rendered from
     // the clock: a menu built at startup would still be offering this
     // morning's time this afternoon.
-    ui.set_insert_items(model(menus::insert(state::now(), state.editor_view)));
+    ui.set_insert_items(model(menus::insert(state::now())));
     ui.set_data_items(model(menus::data(format)));
     ui.set_note_items(model(menus::note(state.active_has_content())));
-    ui.set_edit_items(model(menus::edit(state.clips.entries(), state.editor_view)));
+    ui.set_edit_items(model(menus::edit(state.clips.entries())));
     // Rebuilt rather than set once: it shows the *active* document's profile
     // and what that profile permits, both of which change with the tab.
     let encrypted = state
@@ -596,21 +596,6 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
         });
     }
 
-    {
-        let cell = Rc::clone(&state);
-        let weak = ui.as_weak();
-        ui.on_text_edited(move |text| {
-            {
-                cell.borrow_mut().edit(text.to_string());
-            }
-            if let Some(ui) = weak.upgrade() {
-                // PushText::No -- the widget already holds this text. Pushing
-                // it back would clone the document on every keystroke.
-                refresh(&ui, &mut cell.borrow_mut(), state::PushText::No);
-            }
-        });
-    }
-
     // Closing the window must not be a quieter way to lose the same work
     // that closing a tab prompts about.
     //
@@ -639,6 +624,7 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
         });
     }
 
+    bind_editing(&ui, &state);
     bind_settings(&ui, &state);
     about::bind(&ui, &state);
 
@@ -929,22 +915,6 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
     {
         let cell = Rc::clone(&state);
         let weak = ui.as_weak();
-        ui.on_goto_submitted(move || {
-            let Some(ui) = weak.upgrade() else { return };
-            let moved = cell.borrow_mut().go_to_line(&ui.get_goto_line());
-            ui.set_goto_status(cell.borrow().goto_status.as_str().into());
-            if let Some(range) = moved {
-                // The bar stays open: going to a line is often the first of
-                // several, and closing it would make the second one two
-                // keystrokes further away.
-                dispatch::select(&ui, &mut cell.borrow_mut(), &range);
-            }
-        });
-    }
-
-    {
-        let cell = Rc::clone(&state);
-        let weak = ui.as_weak();
         ui.on_passphrase_submitted(move |entered| {
             let Some(ui) = weak.upgrade() else { return };
             let again = cell.borrow_mut().answer_passphrase(&entered);
@@ -1175,6 +1145,72 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
     ui.hide()?;
     drop(disk_timer);
     Ok(())
+}
+
+/// Wire the editor's text, caret and Go to Line callbacks. A function of
+/// its own so the window tests drive exactly what `run_with` wires.
+fn bind_editing(ui: &AppWindow, state: &Rc<RefCell<state::AppState>>) {
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_text_edited(move |text| {
+            {
+                let mut s = cell.borrow_mut();
+                s.edit(text.to_string());
+                // The caret moved with the typing, and the order in which
+                // Slint reports the two is not promised, so it is read again
+                // after the text rather than trusted from before it.
+                if let Some(ui) = weak.upgrade() {
+                    s.follow_widget_caret(ui.get_editor_anchor(), ui.get_editor_cursor());
+                }
+            }
+            if let Some(ui) = weak.upgrade() {
+                // PushText::No -- the widget already holds this text. Pushing
+                // it back would clone the document on every keystroke.
+                refresh(&ui, &mut cell.borrow_mut(), state::PushText::No);
+            }
+        });
+    }
+
+    // The `TextInput` caret moved: copy it into the editor, and say where it
+    // is. Only the one label, not a whole refresh -- this runs on every
+    // arrow key.
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_caret_moved(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let label = {
+                // Pushing new text into the widget moves its caret, and Slint
+                // reports that at once -- inside `refresh`, which has the
+                // state borrowed. Skipped then rather than panicking: the
+                // refresh under way writes the label itself, and the next
+                // move catches the caret up.
+                let Ok(mut s) = cell.try_borrow_mut() else {
+                    return;
+                };
+                s.follow_widget_caret(ui.get_editor_anchor(), ui.get_editor_cursor());
+                s.cursor_label()
+            };
+            ui.set_cursor_label(label.into());
+        });
+    }
+
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_goto_submitted(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let moved = cell.borrow_mut().go_to_line(&ui.get_goto_line());
+            ui.set_goto_status(cell.borrow().goto_status.as_str().into());
+            if let Some(range) = moved {
+                // The bar stays open: going to a line is often the first of
+                // several, and closing it would make the second one two
+                // keystrokes further away.
+                dispatch::select(&ui, &mut cell.borrow_mut(), &range);
+            }
+        });
+    }
 }
 
 /// Wire the Settings sheet's callbacks. Each step changes the draft and
@@ -1529,8 +1565,9 @@ fn offer_utf8(
             }
             let on_screen = cell.borrow().workspace.active_id() == Some(id);
             if on_screen {
-                let at = what.byte_offset..what.byte_offset + what.character.len_utf8();
-                dispatch::select(ui, &mut cell.borrow_mut(), &at);
+                // `select` takes characters; the encoder reports bytes.
+                let start = cell.borrow().byte_to_char(what.byte_offset);
+                dispatch::select(ui, &mut cell.borrow_mut(), &(start..start + 1));
             }
             then(ui, result);
         },

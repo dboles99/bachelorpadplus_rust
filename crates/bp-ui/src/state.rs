@@ -789,15 +789,11 @@ impl AppState {
     ///
     /// Unlike `run_line_action`, these move and duplicate the line the
     /// caret is on rather than rewriting the whole document, so they call
-    /// `Editor` directly. That caret is `bp-editor`'s and `TextInput` never
-    /// exposes it, so this is a no-op outside the custom editor view -- the
-    /// menu already disables these rows there, and a shortcut key that
-    /// reaches here anyway is safer treated as doing nothing than acted on
-    /// against a caret position this crate cannot trust.
+    /// `Editor` directly. Under `TextInput` the caret is the widget's, and
+    /// the caller copies it in first (`follow_widget_caret`) and back out
+    /// after -- release plan M1-04, which retired the "needs --editor-view"
+    /// gate this used to have.
     pub(crate) fn run_line_edit(&mut self, id: i32) {
-        if !self.editor_view {
-            return;
-        }
         // Compared rather than assumed: Duplicate Line always changes the
         // document, but Move Line Up/Down is a deliberate no-op at the
         // first or last line, and `bp-editor` reports that only through its
@@ -816,6 +812,57 @@ impl AppState {
         if self.active_text() != before {
             self.mark_edited();
         }
+    }
+
+    /// Copy the `TextInput` view's caret, given as UTF-8 byte offsets, into
+    /// the active editor, which counts characters.
+    ///
+    /// Everything that needs the caret -- the line operations, Insert
+    /// Date/Time, the status bar's Ln/Col -- reads the editor's, so under the
+    /// default view the widget's is copied in first. A no-op under the custom
+    /// surface, where the editor's caret is the only one.
+    pub(crate) fn follow_widget_caret(&mut self, anchor: i32, cursor: i32) {
+        if self.editor_view {
+            return;
+        }
+        let Some(editor) = self.active_editor_mut() else {
+            return;
+        };
+        let to_char = |byte: i32| {
+            editor
+                .buffer()
+                .byte_to_char(usize::try_from(byte).unwrap_or(0))
+        };
+        let (anchor, cursor) = (to_char(anchor), to_char(cursor));
+        editor.select(anchor, cursor);
+    }
+
+    /// The active editor's selection as a character range, anchor first --
+    /// the caret alone when nothing is selected. What the default view's
+    /// caret is put back to after an operation replaced its text.
+    pub(crate) fn caret_range(&self) -> Option<std::ops::Range<usize>> {
+        let editor = self.active_editor()?;
+        let cursor = editor.cursor();
+        Some(match editor.selection() {
+            Some(selected) if selected.end == cursor => selected,
+            // Selected backwards: the anchor is the far end.
+            Some(selected) => selected.end..selected.start,
+            None => cursor..cursor,
+        })
+    }
+
+    /// Character offset `char_idx` of the active document as a UTF-8 byte
+    /// offset, for `TextInput`, which counts bytes.
+    pub(crate) fn char_to_byte(&self, char_idx: usize) -> usize {
+        self.active_editor()
+            .map_or(char_idx, |editor| editor.buffer().char_to_byte(char_idx))
+    }
+
+    /// UTF-8 byte offset `byte` of the active document as a character
+    /// offset.
+    pub(crate) fn byte_to_char(&self, byte: usize) -> usize {
+        self.active_editor()
+            .map_or(byte, |editor| editor.buffer().byte_to_char(byte))
     }
 
     /// Run a data operation, reporting the outcome in the status bar.
@@ -2046,13 +2093,9 @@ impl AppState {
     /// the line existed, so a number past the end lands at the last line and
     /// says why rather than doing nothing and looking broken.
     ///
-    /// Caret work, so `--editor-view` only: `TextInput`'s caret cannot be
-    /// moved from here (ADR-0018).
+    /// Returns where the caret went, in characters, for `dispatch::select`
+    /// to put either view's caret there.
     pub(crate) fn go_to_line(&mut self, text: &str) -> Option<std::ops::Range<usize>> {
-        if !self.editor_view {
-            self.goto_status = "Go to Line needs --editor-view".to_owned();
-            return None;
-        }
         let trimmed = text.trim();
         if trimmed.is_empty() {
             self.goto_status.clear();
@@ -2190,9 +2233,8 @@ impl AppState {
 
     fn position_label(&self) -> String {
         let lines = self.gutter_lines;
-        if !self.editor_view {
-            return format!("{lines} lines");
-        }
+        // Both views: under `TextInput` the editor's caret follows the
+        // widget's (`follow_widget_caret`), so it is as good an answer there.
         self.active_editor().map_or_else(
             || format!("{lines} lines"),
             |editor| {
@@ -3734,19 +3776,20 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_and_move_line_do_nothing_outside_the_custom_editor_view() {
-        // The row is disabled in that view, but a shortcut key reaches
-        // `run_line_edit` directly and must not act on a caret this crate
-        // cannot trust `TextInput` to have reported correctly.
+    fn duplicate_line_acts_on_the_default_views_caret_once_it_is_copied_in() {
+        // Release plan M1-04. The widget reports its caret in bytes; the
+        // line under it is the one duplicated, accents before it or not.
         let mut state = AppState::new();
-        state.edit("one\ntwo\nthree".to_owned());
+        state.edit("café\nsecond\nthird".to_owned());
         let id = state.workspace.active_id().unwrap();
         state.workspace.get_mut(id).unwrap().record_disk_save(now());
 
+        // Byte 8 is in "second" ("café\n" is six bytes).
+        state.follow_widget_caret(8, 8);
         state.run_line_edit(action::DUPLICATE_LINE);
 
-        assert_eq!(state.active_text(), "one\ntwo\nthree");
-        assert!(!state.is_dirty(id));
+        assert_eq!(state.active_text(), "café\nsecond\nsecond\nthird");
+        assert!(state.is_dirty(id));
     }
 
     // --- CSV / TSV data operations ------------------------------------------
@@ -4312,16 +4355,15 @@ mod tests {
     }
 
     #[test]
-    fn go_to_line_without_the_custom_view_says_why_instead_of_doing_nothing() {
+    fn go_to_line_works_without_the_custom_view_and_returns_characters() {
         let mut state = AppState::new();
-        state.edit("one\ntwo".to_owned());
+        state.edit("éé\ntwo".to_owned());
 
-        assert!(state.go_to_line("2").is_none());
-        assert!(
-            state.goto_status.contains("--editor-view"),
-            "got {:?}",
-            state.goto_status
-        );
+        let at = state.go_to_line("2").expect("a caret");
+
+        assert_eq!(at, 3..3, "line 2 starts at character 3");
+        assert_eq!(state.char_to_byte(3), 5, "which TextInput calls byte 5");
+        assert!(state.goto_status.is_empty(), "{:?}", state.goto_status);
     }
 
     // --- tab context menu -------------------------------------------------

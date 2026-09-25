@@ -422,16 +422,18 @@ mod tests {
     }
 
     #[test]
-    fn the_status_bar_shows_line_and_column_only_when_we_own_the_caret() {
+    fn the_status_bar_shows_line_and_column_in_either_view() {
+        // The default view's caret is the widget's, reported in bytes; it
+        // used to show only a line count, since the caret was unreadable.
         let mut state = AppState::new();
-        state.edit("one\ntwo".to_owned());
-        state.sync_gutter();
-
-        assert_eq!(state.cursor_label(), "2 lines", "TextInput hides its caret");
+        state.edit("éa\nbü".to_owned());
+        // Byte 5 is after "b" on line 2 ("éa\n" is four bytes).
+        state.follow_widget_caret(5, 5);
+        assert_eq!(state.cursor_label(), "Ln 2, Col 2");
 
         state.editor_view = true;
-        state.active_editor_mut().unwrap().set_cursor(5);
-        assert_eq!(state.cursor_label(), "Ln 2, Col 2");
+        state.active_editor_mut().unwrap().set_cursor(1);
+        assert_eq!(state.cursor_label(), "Ln 1, Col 2");
     }
 
     #[test]

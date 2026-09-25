@@ -127,6 +127,22 @@ impl Buffer {
         self.rope.len_bytes()
     }
 
+    /// The character index of UTF-8 byte offset `byte`: the character that
+    /// contains it, so an offset inside a multi-byte character lands on that
+    /// character's start. Past the end is the end.
+    ///
+    /// The bridge between `TextInput`, whose caret and selection are byte
+    /// offsets, and everything in this workspace, which counts characters.
+    pub fn byte_to_char(&self, byte: usize) -> usize {
+        self.rope.byte_to_char(byte.min(self.rope.len_bytes()))
+    }
+
+    /// The UTF-8 byte offset at which character `char_idx` starts. Past the
+    /// end is the end.
+    pub fn char_to_byte(&self, char_idx: usize) -> usize {
+        self.rope.char_to_byte(char_idx.min(self.rope.len_chars()))
+    }
+
     pub fn is_empty(&self) -> bool {
         self.rope.len_chars() == 0
     }
@@ -251,6 +267,26 @@ impl From<&str> for Buffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn byte_and_character_offsets_convert_both_ways_across_multibyte_text() {
+        let buffer = Buffer::from_text("aé€😀b");
+        // a=1 byte, é=2, €=3, 😀=4.
+        let starts = [(0, 0), (1, 1), (3, 2), (6, 3), (10, 4), (11, 5)];
+        for (byte, char_idx) in starts {
+            assert_eq!(buffer.byte_to_char(byte), char_idx, "byte {byte}");
+            assert_eq!(buffer.char_to_byte(char_idx), byte, "char {char_idx}");
+        }
+    }
+
+    #[test]
+    fn an_offset_inside_a_character_or_past_the_end_is_clamped() {
+        let buffer = Buffer::from_text("é€");
+        assert_eq!(buffer.byte_to_char(1), 0, "inside é");
+        assert_eq!(buffer.byte_to_char(4), 1, "inside €");
+        assert_eq!(buffer.byte_to_char(99), 2);
+        assert_eq!(buffer.char_to_byte(99), 5);
+    }
 
     #[test]
     fn an_empty_buffer_has_one_line() {
