@@ -3,6 +3,12 @@
 // No console window on Windows for a release build. Kept for debug builds so
 // `tracing` output stays visible while developing.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+// No `unsafe` here, ever: the Win32 calls a release needs (`AttachConsole`,
+// `MessageBoxW`) belong to `bp-platform-windows`, the one crate ADR-0033
+// allows it in.
+#![forbid(unsafe_code)]
+
+mod logging;
 
 use bp_config::RendererPref;
 use bp_config::cli::{self, Action, Invocation};
@@ -41,7 +47,15 @@ fn main() -> anyhow::Result<()> {
     // rather than refusing to start.
     let filter = tracing_subscriber::EnvFilter::try_new(&loaded.config.log)
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    // To a file as well as the console, and a crash report on panic: a
+    // release build on Windows has no console, so without these a failure
+    // left no trace at all (release plan M0-10).
+    let log_dir = logging::directory();
+    logging::init(filter, log_dir.as_deref().and_then(logging::open_log));
+    logging::install_crash_hook(log_dir);
+    if std::env::var_os(logging::CRASH_TEST_ENV).is_some() {
+        crash_on_purpose();
+    }
 
     // Report configuration problems before the self-check and probe exits, so
     // a broken config is visible however the binary was run -- not only on the
@@ -115,6 +129,14 @@ fn main() -> anyhow::Result<()> {
         editor_view: invocation.editor_view,
     })?;
     Ok(())
+}
+
+/// The deliberate crash `logging::CRASH_TEST_ENV` asks for, so a test can
+/// prove the crash hook writes its report. The one `panic!` in production
+/// code, and the reason it is allowed is its whole job.
+#[allow(clippy::panic)]
+fn crash_on_purpose() -> ! {
+    panic!("deliberate crash test ({})", logging::CRASH_TEST_ENV);
 }
 
 /// Notices for flags that parse but that the shell cannot act on yet.

@@ -79,6 +79,23 @@ pub fn security_history_path_in(platform: Platform, env: &EnvSnapshot) -> Option
     inside(platform, DirKind::State, env, SECURITY_HISTORY_FILE)
 }
 
+/// Where the log file and crash reports go: `logs/` in the state directory.
+///
+/// State, not cache: a crash report is the one record of a failure the user
+/// may be asked to send, and a cache is disposable by definition. Not the
+/// config directory either, which roams (ADR-0029). Never adopted from
+/// anywhere -- nothing wrote logs to disk before this.
+#[must_use]
+pub fn log_dir_in(platform: Platform, env: &EnvSnapshot) -> Option<PathBuf> {
+    inside(platform, DirKind::State, env, "logs")
+}
+
+/// [`log_dir_in`] for this machine.
+#[must_use]
+pub fn log_dir() -> Option<PathBuf> {
+    log_dir_in(Platform::HOST, &EnvSnapshot::from_environment())
+}
+
 /// Where each of the three used to live: beside `config.toml`.
 ///
 /// Kept as a function rather than deleted, because [`adopt`] needs it for as
@@ -405,6 +422,22 @@ mod tests {
                 assert_eq!(legacy, format!("{directory}{}{name}", platform.separator()));
             }
         }
+    }
+
+    #[test]
+    fn logs_live_in_the_state_directory_and_never_in_a_roaming_one() {
+        let env = whole_env();
+        for &platform in Platform::ALL {
+            assert!(starts_in(
+                platform,
+                log_dir_in(platform, &env),
+                DirKind::State
+            ));
+        }
+        assert_eq!(
+            text(log_dir_in(Platform::Linux, &env)),
+            "/home/me/.local/state/bachelorpad/logs"
+        );
     }
 
     #[test]

@@ -595,6 +595,7 @@ dependencies = [
  "bp-config",
  "bp-theme",
  "bp-ui",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
 ]
