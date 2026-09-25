@@ -117,6 +117,7 @@ fn main() -> anyhow::Result<()> {
     tracing::info!("starting BachelorPad+");
     bp_ui::run_with(bp_ui::RunOptions {
         files: invocation.files,
+        line: invocation.line,
         renderer: match loaded.config.renderer {
             RendererPref::Software => bp_ui::Renderer::Software,
             RendererPref::Platform => bp_ui::Renderer::Platform,
@@ -153,19 +154,14 @@ fn crash_on_purpose() -> ! {
 
 /// Notices for flags that parse but that the shell cannot act on yet.
 ///
-/// `--line`, `--readonly` and `--large-file` are understood by `cli::parse`
-/// (specs.md section 19), but `bp_ui::RunOptions` has no field to carry them
-/// to the window. Silently opening a file editable after `--readonly` was
+/// `--readonly` and `--large-file` are understood by `cli::parse` (specs.md
+/// section 19), but `bp_ui::RunOptions` has no field to carry them to the
+/// window yet (release plan M1-06). `--line` has one since M1-04. Silently opening a file editable after `--readonly` was
 /// asked for is the one outcome worse than refusing, so each says in the
 /// status bar that it was not applied. The notice goes when `RunOptions`
 /// grows the field and this function stops listing it.
 fn not_yet_applied(invocation: &Invocation) -> Vec<String> {
     let mut notices = Vec::new();
-    if let Some(line) = invocation.line {
-        notices.push(format!(
-            "--line {line} is not applied yet; the caret starts at the top"
-        ));
-    }
     if invocation.readonly {
         notices.push("--readonly is not applied yet; the files open editable".to_owned());
     }
@@ -208,7 +204,8 @@ mod tests {
             "--large-file",
             "server.log",
         ]));
-        assert_eq!(notices.len(), 3, "{notices:?}");
-        assert!(notices[0].contains("427"));
+        // `--line` is applied now, so only the other two are reported.
+        assert_eq!(notices.len(), 2, "{notices:?}");
+        assert!(notices.iter().all(|n| !n.contains("427")), "{notices:?}");
     }
 }
