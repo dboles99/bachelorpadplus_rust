@@ -17,6 +17,15 @@ ADR-0033), and most of M0 landed before the session ended -- the plan's
 "Progress" note under M0 says exactly which items, which are partial, and
 that M0-07, M0-10 and the owner's Windows gate run (M0-12) are next.
 
+**Seventh session (same day): M0 finished, M1 started.** M1-01 (in-app
+dialogs), M1-10 (Windows-1252), M1-15 (creation dates), the outline half
+of M1-21 and the persistence half of M1-03 are in. The plan's M1 "Progress"
+note has the detail. Next, in order: the `Tools ▸ Settings…` sheet (M1-03's
+other half), M1-05 (placeholders behind `show_planned_menus`), M1-02
+(About), then M1-04 and M1-07. Three agents ran in hand-made worktrees off
+the working branch, each with its own target directory, and nothing went
+wrong -- that is the pattern to keep.
+
 **Before dispatching parallel agents again, read this.** Five ran in
 worktrees this session and two things went wrong that were not their
 fault: `isolation: worktree` created their trees from `main`, not from the

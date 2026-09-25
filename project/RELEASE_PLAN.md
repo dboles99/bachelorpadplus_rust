@@ -215,6 +215,13 @@ Goal: the default view is a complete Notepad; nothing blocks; the release surfac
 
 **Exit:** C1, C2, C4, C5, C8, C11 met on Linux and the Windows gate green; a 1 GB file opens in the viewer; no `MessageDialog` in the code.
 
+**Progress (2026-09-25, session 7).** Landed and through the native Linux gate:
+- **M1-01 done.** Every question is a sheet in the window (`ui/dialog.slint`, `src/dialog.rs`); `rfd` shows file pickers only and `grep MessageDialog` finds nothing but history in comments. Buttons say what they do. The sheet sits outside the shortcut `FocusScope` and holds the focus, so no key reaches the document behind a question. Save, close, quit, reload, Replace All, redaction and registration continue from a continuation instead of blocking. 12 window tests; the keyboard ones were seen to fail with the sheet's focus removed. Two behaviour changes: Close All stops at Cancel, and "Changed on disk" defaults to Cancel. Found on the way and fixed: closing a tab with Don't Save left its recovery checkpoint behind, which offered the discarded work back at the next launch.
+- **M1-10 done.** Library: the cp1252 table and the load fallback. Shell: a Format ▸ Windows-1252 row that refuses text it cannot hold, naming the character and line, and a save that writes nothing and offers "Save as UTF-8" rather than a `?`. Not yet run on Windows.
+- **M1-15 done**, using the name's date, then birth time, then last write. When both timestamps exist the earlier wins, because a Windows copy resets the birth time.
+- **M1-21 half done.** Fenced code is out of the outline. Indented code (four columns) is too, which misses a heading indented inside a list item. The X11 "unknown" row is not done.
+- **M1-03 persistence done; the Settings dialog is not.** View and Format choices are saved into the user's own `config.toml` with comments kept, and only what changed is written, so a `--font-size` is never made permanent. The new settings (`clipboard_record_other_programs`, `editable_limit_mib`, `default_profile`, `editor_view`) take effect from the file. Next: `Tools ▸ Settings…` on the sheet pattern, then M1-05 behind `show_planned_menus`.
+
 ### M2 — Platform integration. Target: 2–3 weeks. Splits by OS.
 
 Goal: the app looks and registers like a native application on each OS, and every capability the docs claim is true.

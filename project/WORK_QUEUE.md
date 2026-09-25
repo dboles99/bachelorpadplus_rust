@@ -111,6 +111,11 @@ so whoever finishes an item updates them as part of it.
 | M0-07 | Clipboard history records the editor's copies only; private copies kept out of OS history | `bp_clipboard::{Origin, keep_out_of_os_history}`, `copied-from-editor` |
 | M0-10 | Log file and crash report | `apps/bachelorpad/src/logging.rs`, `bp_config::locations::log_dir` |
 | M0-09/11 | Atomic recent-list write; `forbid(unsafe_code)` everywhere but `bp-ui`'s generated code | `bp-config`, `bp-security`, the binary |
+| M1-01 | Every question is a sheet in the window; `rfd` keeps the file pickers only | `ui/dialog.slint`, `src/dialog.rs` |
+| M1-10 | Windows-1252 opens, saves back byte for byte, and a character it cannot hold offers UTF-8 | `bp_core::encode_windows_1252`, `bp_files::try_encode`, `lib.rs::offer_utf8` |
+| M1-15 | An opened file keeps its real creation date | `bp_naming::creation_date_for`, `state::created_at` |
+| M1-21 (outline) | The outline ignores fenced code | `bp-semantic` |
+| M1-03 (persistence) | View and Format choices saved into config.toml, comments kept; new settings take effect | `bp_config::save`, `AppState::{configure, remember}` |
 
 Every library half now has its row.
 
