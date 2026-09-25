@@ -22,8 +22,9 @@
 //! unopenable, or -- for a reserved device name -- a save appears to succeed
 //! and the document is gone. The device-name half was one of the two ways it
 //! did not hold, and is now fixed: `bp-naming` tests the stem, as Win32 does.
-//! The other way is still pinned as an ignored test at the bottom of this
-//! file, and is a real defect.
+//! The other way was a long *path* rather than a bad name -- `bp-files` never
+//! applied `\\?\` -- and is fixed too; its test is at the bottom of this
+//! file.
 //!
 //! Nothing here writes outside a `tempfile` directory. The only strings
 //! involved are titles, drawn from a fixed alphabet, and none is a secret.
@@ -165,10 +166,9 @@ fn an_overlong_title_is_cut_to_a_name_both_platforms_call_legal() {
     // and more for everything else -- so the byte budget also satisfies
     // Windows. That is arithmetic nobody had checked across the two crates.
     //
-    // The write is deliberately not attempted here. It fails on Windows for a
-    // reason that has nothing to do with the *name* and everything to do with
-    // the *path*, which is
-    // `a_name_bp_naming_will_generate_can_be_unwritable_on_windows` below.
+    // The write is deliberately not attempted here. Whether it succeeds is a
+    // question about the *path*, not the name, and is
+    // `a_name_bp_naming_will_generate_is_writable_in_a_deep_directory` below.
     for title in [
         &"\u{e9}".repeat(400),
         &"\u{7814}".repeat(400),
@@ -402,22 +402,20 @@ proptest! {
     }
 }
 
-// --- defect two: MAX_PATH -------------------------------------------------
+// --- formerly defect two: MAX_PATH ----------------------------------------
 
+/// A name at `bp-naming`'s own maximum is writable wherever its directory is.
+///
+/// This was a defect, found by this file. `std::fs` applies the `\\?\`
+/// prefix to long paths by itself, which is why opening and creating them
+/// always worked -- but `tempfile`'s `persist` calls `MoveFileExW` with the
+/// path as given, so the rename that makes a save atomic failed with
+/// `os error 3`, and `SaveError` blamed a read-only file for it. `bp-files`
+/// now spells the path with `bp_platform::paths::to_extended_length` when it
+/// needs to. On Linux this runs as a control: the name is legal there and was
+/// always writable.
 #[test]
-#[ignore = "DEFECT: bp-files never applies the \\\\?\\ extended-length prefix, so a \
-            filename at bp-naming's own documented maximum (255 bytes) is unwritable on \
-            Windows inside any directory whose path takes the total past MAX_PATH -- which \
-            the system temp directory alone already does. The name is legal by every rule \
-            bp-platform states; it is the PATH that is too long, and bp-platform already \
-            provides both the diagnosis (paths::needs_extended_length_prefix) and the fix \
-            (paths::to_extended_length) that bp-files does not call. bp-files DOES depend \
-            on bp-platform now -- it asks that crate whether a name is a device before \
-            writing -- so the edge this fix needs already exists and only the call is \
-            missing. Worse than the refusal is the message: SaveError says the file 'may be \
-            read-only, or open in another program', which sends the user to look at the \
-            wrong thing. Left red rather than weakened."]
-fn a_name_bp_naming_will_generate_can_be_unwritable_on_windows() {
+fn a_name_bp_naming_will_generate_is_writable_in_a_deep_directory() {
     // 255 bytes is not an unreasonable name a fuzzer dreamt up: it is exactly
     // what `SemanticName::to_filename` promises to produce for a long title,
     // and long titles are what a semantic filename scheme is *for*.
@@ -442,17 +440,25 @@ fn a_name_bp_naming_will_generate_can_be_unwritable_on_windows() {
         bp_platform::paths::needs_extended_length_prefix(&full),
         "bp-platform does not think this path needs the escape hatch"
     );
-    assert!(
-        bp_platform::paths::to_extended_length(&full).is_some(),
-        "bp-platform cannot even express the fix for this path"
-    );
+    // Only a Windows path has an extended-length spelling; the Linux leg's
+    // `/tmp/...` has none and needs none.
+    if Platform::HOST == Platform::Windows {
+        assert!(
+            bp_platform::paths::to_extended_length(&full).is_some(),
+            "bp-platform cannot even express the fix for this path"
+        );
+    }
 
-    // And bp-files, which has never heard of any of that, refuses.
+    // And bp-files, which now asks for that spelling, writes it.
     atomic_write(&path, b"body\n", SaveOptions::default()).unwrap_or_else(|e| {
         panic!(
             "bp-files could not write a name bp-naming generated and bp-platform \
-             calls legal; bp-platform's own to_extended_length would have made it \
-             writable. The error blames the wrong thing: {e}"
+             calls legal: {e}"
         )
     });
+    assert_eq!(
+        std::fs::read(&path).expect("read back"),
+        b"body\n",
+        "the save reported success and the file is not what was written"
+    );
 }
