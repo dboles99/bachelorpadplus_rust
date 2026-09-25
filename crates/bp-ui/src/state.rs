@@ -122,6 +122,12 @@ pub struct AppState {
     /// that lived in the view would put the caret arithmetic somewhere Rust
     /// cannot see. Config supplies the starting value; zoom moves it.
     pub(crate) font_size: u8,
+    /// Whether typing overwrites (the Insert key).
+    ///
+    /// The window's, not a document's: one key switches it and every tab
+    /// follows, which is what the status bar's `OVR` promises. Each editor is
+    /// told on the way to a command, like the indent and the wrap.
+    pub(crate) overwrite: bool,
     /// What each document's file looked like when we last read or wrote it,
     /// so an edit made by another program can be noticed.
     stamps: HashMap<DocumentId, FileStamp>,
@@ -216,6 +222,7 @@ impl AppState {
             wrap_text: false,
             indent: bp_editor::Indent::default(),
             font_size: bp_config::DEFAULT_FONT_SIZE,
+            overwrite: false,
             stamps: HashMap::new(),
             recent: locations
                 .recent
@@ -1838,6 +1845,18 @@ impl AppState {
     /// caret is reachable only through a property marked internal and
     /// undocumented, so the honest answer there is the thing we do know.
     pub(crate) fn cursor_label(&self) -> String {
+        let position = self.position_label();
+        if self.overwrite {
+            // Shown only when on, as every editor with the mode does: the
+            // exception is what needs pointing out, and `INS` on every
+            // screen would be noise about the default.
+            format!("{position} · OVR")
+        } else {
+            position
+        }
+    }
+
+    fn position_label(&self) -> String {
         let lines = self.gutter_lines;
         if !self.editor_view {
             return format!("{lines} lines");
@@ -1893,10 +1912,18 @@ impl AppState {
             bp_editor::wrap::Wrap::OFF
         };
         let indent = self.indent;
+        let overwrite = self.overwrite;
         if let Some(editor) = self.active_editor_mut() {
             editor.set_indent(indent);
             editor.set_wrap(wrap);
+            editor.set_overwrite(overwrite);
         }
+    }
+
+    /// The Insert key.
+    pub(crate) fn toggle_overwrite(&mut self) {
+        self.overwrite = !self.overwrite;
+        self.sync_wrap();
     }
 
     /// Note that the active document was edited in place, through the caret.

@@ -68,6 +68,8 @@ mod dispatch;
 mod editor_view;
 mod passphrase;
 mod state;
+#[cfg(test)]
+mod window_tests;
 
 /// Crate identity used by workspace smoke tests and diagnostics.
 pub const CRATE_NAME: &str = "bp-ui";
@@ -128,6 +130,7 @@ fn refresh(ui: &AppWindow, state: &mut state::AppState, push_text: state::PushTe
         ui.set_format_label(format.label().into());
         ui.set_cursor_label(cursor.as_str().into());
     }
+    ui.set_overwrite(state.overwrite);
 
     // Something that just failed outranks a standing warning about the file.
     let notice = state
@@ -614,6 +617,20 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
             let _ = dispatch::handle_menu_action(&ui, &cell, id);
         });
     }
+
+    // --- overwrite mode, for the `TextInput` path -----------------------
+    // The custom surface reaches `toggle_overwrite` through its own key
+    // handler; `TextInput` has no Rust key handler, so Insert arrives here.
+    {
+        let cell = Rc::clone(&state);
+        let weak = ui.as_weak();
+        ui.on_toggle_overwrite(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            cell.borrow_mut().toggle_overwrite();
+            refresh(&ui, &mut cell.borrow_mut(), state::PushText::No);
+        });
+    }
+    ui.on_overwrite_end(editor_view::overwrite_end);
 
     // --- the custom editor surface -------------------------------------
     {

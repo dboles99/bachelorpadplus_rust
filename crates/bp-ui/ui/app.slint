@@ -112,6 +112,23 @@ export component AppWindow inherits Window {
     callback close-active-tab();
     callback cycle-theme();
     callback text-edited(string);
+
+    // --- overwrite mode (the Insert key) --------------------------------
+    // Rust owns the flag, so both editor views and the status bar agree on
+    // it; this only mirrors it for the `TextInput` path below.
+    in property <bool> overwrite;
+    callback toggle-overwrite();
+    /// Where typing `typed` at byte `at` of `text` stops overwriting --
+    /// `bp_editor::overwrite_end`, asked from here because `TextInput`
+    /// selects by UTF-8 offset and Slint has no way to measure a character.
+    pure callback overwrite-end(string, int, string) -> int;
+
+    /// How far the `TextInput` view is scrolled, both negative or zero. Read
+    /// by the window tests, which is the only way to assert that the view
+    /// follows the caret -- the failure they pin looked like dead keys.
+    out property <length> editor-scroll-x: flick.viewport-x;
+    out property <length> editor-scroll-y: flick.viewport-y;
+
     /// Menu actions below 100. Ids from 100 up never reach Rust.
     callback menu-action(int);
 
@@ -574,9 +591,15 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                Flickable {
+                flick := Flickable {
                     visible: !root.use-editor-view;
                     viewport-height: max(self.height, editor-row.preferred-height);
+                    // Wide enough for the longest line when nothing wraps,
+                    // or a caret sent to the end of one has nowhere to be
+                    // shown. Not when wrapping: the preferred width of
+                    // wrapping text is its unwrapped width, and asking for it
+                    // would stop the text wrapping at all.
+                    viewport-width: root.wrap-text ? self.width : max(self.width, editor-row.preferred-width);
 
                     editor-row := HorizontalLayout {
                         padding: 10px;
@@ -596,6 +619,10 @@ export component AppWindow inherits Window {
 
                         editor := TextInput {
                             text <=> root.doc-text;
+                            // How far Page Up and Page Down move. Unset, it is
+                            // zero, and `TextInput` refuses a page of zero --
+                            // which is why both keys used to do nothing.
+                            page-height: flick.height - 20px;
                             color: Palette.ink;
                             selection-background-color: Palette.accent;
                             font-family: "Consolas";
@@ -605,6 +632,86 @@ export component AppWindow inherits Window {
                             horizontal-stretch: 1;
                             edited => {
                                 root.text-edited(self.text);
+                            }
+
+                            // Keep the caret on screen. A bare `Flickable`
+                            // does not follow its content's caret, so arrows,
+                            // End and Page Down moved it out of view and
+                            // looked as if they had done nothing. Moves only
+                            // as far as needed, like the custom surface's
+                            // `reveal_caret`.
+                            cursor-position-changed(position) => {
+                                // The caret in viewport coordinates, and a
+                                // line's height with room below it. The
+                                // 10px is the row's padding, so a caret on
+                                // the first line or at a line's start shows
+                                // the margin and gutter it sits beside.
+                                let x = self.x + position.x;
+                                let y = self.y + position.y;
+                                let line = root.font-size * 1.6;
+                                if (y + flick.viewport-y < 0px) {
+                                    flick.viewport-y = min(0px, 10px - y);
+                                } else if (y + line + flick.viewport-y > flick.height) {
+                                    flick.viewport-y = min(0px, flick.height - y - line);
+                                }
+                                // Horizontally, anything that fits in the
+                                // first screen width is shown from the left
+                                // edge, gutter included. Only a caret beyond
+                                // it scrolls the view, and then only far
+                                // enough.
+                                if (x + 10px <= flick.width) {
+                                    flick.viewport-x = 0px;
+                                } else if (x + flick.viewport-x < 0px) {
+                                    flick.viewport-x = min(0px, 10px - x);
+                                } else if (x + 10px + flick.viewport-x > flick.width) {
+                                    flick.viewport-x = min(0px, flick.width - x - 10px);
+                                }
+                            }
+
+                            // Insert and overwrite. `TextInput` has no such
+                            // mode, so it is built from what it does have: in
+                            // overwrite, a typed character first selects the
+                            // character it will replace, and the widget's own
+                            // "typing replaces the selection" does the rest --
+                            // undo, the edited callback and IME all intact.
+                            //
+                            // The caret is read through
+                            // `cursor-position_byte-offset`, which Slint marks
+                            // internal. It is the only way to read it; if an
+                            // upgrade removes it, this fails to compile rather
+                            // than misbehaving.
+                            key-pressed(event) => {
+                                if (event.text == Key.Insert) {
+                                    // The CUA clipboard keys first, as in
+                                    // `bp_editor::keys::command_for`.
+                                    if (event.modifiers.shift && !event.modifiers.control) {
+                                        self.paste();
+                                        return accept;
+                                    }
+                                    if (event.modifiers.control && !event.modifiers.alt) {
+                                        self.copy();
+                                        return accept;
+                                    }
+                                    if (!event.modifiers.alt) {
+                                        root.toggle-overwrite();
+                                        return accept;
+                                    }
+                                    return reject;
+                                }
+                                if (event.text == Key.Delete && event.modifiers.shift && !event.modifiers.control) {
+                                    self.cut();
+                                    return accept;
+                                }
+                                // Typing, or AltGr typing -- never a chord.
+                                if (root.overwrite
+                                        && (!event.modifiers.control || event.modifiers.alt)
+                                        && self.cursor-position_byte-offset == self.anchor-position-byte-offset) {
+                                    let end = root.overwrite-end(self.text, self.cursor-position_byte-offset, event.text);
+                                    if (end > self.cursor-position_byte-offset) {
+                                        self.set-selection-offsets(self.cursor-position_byte-offset, end);
+                                    }
+                                }
+                                return reject;
                             }
                         }
                     }
