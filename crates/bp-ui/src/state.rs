@@ -204,6 +204,9 @@ pub struct AppState {
     /// names no state directory: profiles then last for the session.
     pub(crate) profiles: bp_history::ProfileStore,
     pub(crate) profiles_path: Option<PathBuf>,
+    /// Where the sealed signing key is kept (`bp_config::locations`), or
+    /// `None` when the environment names no data directory.
+    pub(crate) signing_key: Option<PathBuf>,
     /// The tab the context menu was opened on.
     ///
     /// Held rather than passed with the click, because opening the menu and
@@ -468,6 +471,7 @@ impl AppState {
                 .unwrap_or_else(|| PathBuf::from(bp_config::locations::SECURITY_HISTORY_FILE)),
             profiles,
             profiles_path: locations.profiles.clone(),
+            signing_key: locations.signing_key.clone(),
             passphrases: HashMap::new(),
             privacy: bp_security::Privacy::default(),
             ask: None,
@@ -2044,6 +2048,28 @@ impl AppState {
                 });
                 true
             }
+            Ask::Sign { document } => self.sign_with_kept_key(document, entered),
+            Ask::NewKey { document } => {
+                if entered.is_empty() {
+                    self.passphrase_status = "a passphrase is required".to_owned();
+                    self.ask = Some(Ask::NewKey { document });
+                    return true;
+                }
+                self.passphrase_status.clear();
+                self.ask = Some(Ask::ConfirmKey {
+                    document,
+                    first: zeroize::Zeroizing::new(entered.to_owned()),
+                });
+                true
+            }
+            Ask::ConfirmKey { document, first } => {
+                if first.as_str() != entered {
+                    self.passphrase_status = "those did not match -- start again".to_owned();
+                    self.ask = Some(Ask::NewKey { document });
+                    return true;
+                }
+                self.create_key_and_sign(document, &first)
+            }
             Ask::Confirm { id, target, first } => {
                 if first.as_str() != entered {
                     // Back to the first question, not the second. Asking to
@@ -2162,6 +2188,141 @@ impl AppState {
                 self.passphrase_status = e.to_string();
                 true
             }
+        }
+    }
+
+    /// Begin Sign Document (release plan M2-10, D5 option c): ask for the
+    /// kept key's passphrase, or, with no key yet, for a new one.
+    ///
+    /// Returns whether the passphrase bar should open. A signature covers
+    /// the file on disk -- `bp_integrity::sign_file` reads it -- so a
+    /// document that was never saved, or whose tab differs from its file,
+    /// is refused with the reason rather than signed as something other
+    /// than what the user is looking at.
+    pub(crate) fn begin_signing(&mut self) -> bool {
+        use crate::passphrase::Ask;
+        let Some(document) = self
+            .workspace
+            .active()
+            .and_then(Document::path)
+            .map(Path::to_path_buf)
+        else {
+            self.error = Some(
+                "cannot sign — this document has never been saved, and a signature covers a \
+                 file"
+                    .to_owned(),
+            );
+            return false;
+        };
+        if self.active_differs_from_disk() {
+            self.error = Some(
+                "cannot sign — this document has unsaved changes, and a signature covers the \
+                 file as saved; save it first"
+                    .to_owned(),
+            );
+            return false;
+        }
+        let Some(key) = self.signing_key.as_deref() else {
+            self.error = Some(
+                "cannot sign — this environment names no data directory, so there is nowhere \
+                 to keep a signing key"
+                    .to_owned(),
+            );
+            return false;
+        };
+        self.ask = Some(if key.exists() {
+            self.passphrase_status.clear();
+            Ask::Sign { document }
+        } else {
+            // Said on the bar, because it is the moment the user learns a
+            // key is about to exist and that this passphrase is the only
+            // way back to it.
+            self.passphrase_status = format!(
+                "no signing key yet — this creates one at {}, sealed with the passphrase you \
+                 choose; forgetting it means a new key",
+                key.display()
+            );
+            Ask::NewKey { document }
+        });
+        true
+    }
+
+    /// Unseal the kept key and sign. Returns whether the bar stays open: a
+    /// wrong passphrase keeps it, as unlocking a document does.
+    fn sign_with_kept_key(&mut self, document: PathBuf, passphrase: &str) -> bool {
+        let Some(path) = self.signing_key.clone() else {
+            return false;
+        };
+        match bp_integrity::read_sealed_signing_key(&path, passphrase) {
+            Ok(key) => {
+                self.sign(&document, &key);
+                false
+            }
+            Err(bp_integrity::IntegrityError::Sealed {
+                source: bp_crypto::CryptoError::CannotOpen,
+                ..
+            }) => {
+                self.passphrase_status =
+                    "that passphrase does not open the signing key (or the key file is damaged)"
+                        .to_owned();
+                self.ask = Some(crate::passphrase::Ask::Sign { document });
+                true
+            }
+            Err(e) => {
+                self.passphrase_status.clear();
+                self.error = Some(format!("cannot sign — {e}"));
+                false
+            }
+        }
+    }
+
+    /// Make a key, keep it sealed with `passphrase` and its public half
+    /// beside it, then sign. Nothing is signed unless both files were
+    /// written: a signature made with a key that was not kept verifies
+    /// against nothing the user can ever hand anybody.
+    fn create_key_and_sign(&mut self, document: PathBuf, passphrase: &str) -> bool {
+        let Some(path) = self.signing_key.clone() else {
+            return false;
+        };
+        let public = path.with_file_name(bp_config::locations::VERIFYING_KEY_FILE);
+        let made = bp_crypto::SigningKey::generate()
+            .map_err(|e| e.to_string())
+            .and_then(|key| {
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                }
+                bp_integrity::write_sealed_signing_key(&path, &key, passphrase)
+                    .map_err(|e| e.to_string())?;
+                bp_integrity::write_verifying_key(&public, &key.verifying_key())
+                    .map_err(|e| e.to_string())?;
+                Ok(key)
+            });
+        self.passphrase_status.clear();
+        match made {
+            Ok(key) => self.sign(&document, &key),
+            Err(e) => self.error = Some(format!("cannot sign — no signing key was made: {e}")),
+        }
+        false
+    }
+
+    fn sign(&mut self, document: &Path, key: &bp_crypto::SigningKey) {
+        match bp_integrity::sign_file(document, key) {
+            Ok(sidecar) => {
+                self.record_security_event(bp_audit::Event::SignatureMade);
+                let public = self
+                    .signing_key
+                    .as_deref()
+                    .map(|path| path.with_file_name(bp_config::locations::VERIFYING_KEY_FILE));
+                self.error = Some(match public {
+                    Some(public) => format!(
+                        "signed — {} written beside it; the public key to give a recipient is {}",
+                        sidecar.display(),
+                        public.display()
+                    ),
+                    None => format!("signed — {} written beside it", sidecar.display()),
+                });
+            }
+            Err(e) => self.error = Some(format!("cannot sign — {e}")),
         }
     }
 
@@ -3240,6 +3401,7 @@ fn locations() -> bp_config::Locations {
         recovery: Some(root.join(bp_config::locations::RECOVERY_DIR)),
         security_history: Some(root.join(bp_config::locations::SECURITY_HISTORY_FILE)),
         profiles: Some(root.join(bp_config::locations::PROFILES_FILE)),
+        signing_key: Some(root.join(bp_config::locations::SIGNING_KEY_FILE)),
         left_behind: Vec::new(),
     }
 }
@@ -6024,6 +6186,112 @@ mod tests {
             !notice.contains("  "),
             "a wrapped literal leaked its indentation into the status bar: {notice:?}"
         );
+    }
+
+    // --- Sign Document (release plan M2-10) --------------------------------
+
+    /// The saved state, with its signing key kept under `dir` too.
+    fn signing_state(dir: &Path) -> (AppState, PathBuf) {
+        let (mut state, path) = saved_state(dir, "notes.txt", "signed content\n");
+        state.signing_key = Some(
+            dir.join("keys")
+                .join(bp_config::locations::SIGNING_KEY_FILE),
+        );
+        (state, path)
+    }
+
+    #[test]
+    fn the_first_signature_makes_a_sealed_key_asking_for_its_passphrase_twice() {
+        use crate::passphrase::Ask;
+        let dir = tempfile::tempdir().unwrap();
+        let (mut state, path) = signing_state(dir.path());
+
+        assert!(state.begin_signing(), "the bar opens");
+        assert!(matches!(state.ask, Some(Ask::NewKey { .. })));
+        assert!(
+            state.passphrase_status.contains("no signing key yet"),
+            "the user learns a key is about to exist; got {}",
+            state.passphrase_status
+        );
+
+        // A mismatch goes back to the first question and makes nothing.
+        assert!(state.answer_passphrase("correct horse"));
+        assert!(state.answer_passphrase("correct hose"));
+        assert!(matches!(state.ask, Some(Ask::NewKey { .. })));
+        let key_file = dir
+            .path()
+            .join("keys")
+            .join(bp_config::locations::SIGNING_KEY_FILE);
+        assert!(!key_file.exists());
+
+        assert!(state.answer_passphrase("correct horse"));
+        assert!(!state.answer_passphrase("correct horse"), "the bar closes");
+
+        let public = key_file.with_file_name(bp_config::locations::VERIFYING_KEY_FILE);
+        assert!(bp_crypto::is_bpadx(&std::fs::read(&key_file).unwrap()));
+        let verifying = bp_integrity::read_verifying_key(&public).expect("the public half");
+        let verdict = bp_integrity::verify_file(&path, &bp_integrity::Expectation::Key(verifying))
+            .expect("the sidecar reads");
+        assert!(verdict.is_verified(), "signed with the key that was kept");
+        let notice = state.error.clone().unwrap();
+        assert!(notice.starts_with("signed"), "got {notice}");
+        assert!(notice.contains("signing-key.pub"), "got {notice}");
+    }
+
+    #[test]
+    fn a_kept_key_signs_with_its_passphrase_and_a_wrong_one_keeps_the_bar_open() {
+        use crate::passphrase::Ask;
+        let dir = tempfile::tempdir().unwrap();
+        let (mut state, path) = signing_state(dir.path());
+        let key_file = dir
+            .path()
+            .join("keys")
+            .join(bp_config::locations::SIGNING_KEY_FILE);
+        std::fs::create_dir_all(key_file.parent().unwrap()).unwrap();
+        let key = signer(7);
+        bp_integrity::write_sealed_signing_key(&key_file, &key, "correct horse").unwrap();
+
+        assert!(state.begin_signing());
+        assert!(matches!(state.ask, Some(Ask::Sign { .. })));
+        assert!(
+            state.answer_passphrase("battery staple"),
+            "a typo is retried"
+        );
+        assert!(
+            state.passphrase_status.contains("does not open"),
+            "got {}",
+            state.passphrase_status
+        );
+        assert!(!dir.path().join("notes.txt.sig").exists());
+
+        assert!(!state.answer_passphrase("correct horse"));
+        let verdict =
+            bp_integrity::verify_file(&path, &bp_integrity::Expectation::Key(key.verifying_key()))
+                .unwrap();
+        assert!(verdict.is_verified());
+    }
+
+    #[test]
+    fn a_document_with_unsaved_changes_is_not_signed_as_something_else() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut state, _) = signing_state(dir.path());
+        state.edit("changed since it was saved\n".to_owned());
+
+        assert!(!state.begin_signing());
+        assert!(state.ask.is_none());
+        let notice = state.error.clone().unwrap();
+        assert!(notice.contains("unsaved changes"), "got {notice}");
+        assert!(!notice.contains("  "), "{notice:?}");
+    }
+
+    #[test]
+    fn a_document_never_saved_cannot_be_signed() {
+        let mut state = AppState::new();
+        state.edit("never saved\n".to_owned());
+        assert!(!state.begin_signing());
+        let notice = state.error.clone().unwrap();
+        assert!(notice.contains("never been saved"), "got {notice}");
+        assert!(!notice.contains("  "), "{notice:?}");
     }
 
     #[test]

@@ -48,6 +48,16 @@ pub enum IntegrityError {
         source: SignError,
     },
 
+    /// A sealed key file could not be sealed or opened: a wrong passphrase,
+    /// a damaged file, or a file that is not an envelope at all. The
+    /// envelope does not let the first two be told apart, on purpose.
+    #[error("{}: {source}", .path.display())]
+    Sealed {
+        path: PathBuf,
+        #[source]
+        source: bp_crypto::CryptoError,
+    },
+
     /// A manifest is text, and this one was not text.
     #[error("{} is not valid UTF-8, so it is not a manifest this crate wrote", .path.display())]
     NotText { path: PathBuf },

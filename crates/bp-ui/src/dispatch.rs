@@ -588,14 +588,14 @@ pub fn handle_menu_action(
         }
 
         action::SIGN_DOCUMENT => {
-            // The row is greyed, so this is only reachable by a keyboard
-            // route that does not exist yet -- but a silent no-op would be a
-            // bug report nobody could describe, the same reasoning as the
-            // stamp arm above.
-            state.borrow_mut().error = Some(
-                "signing needs a signing key, and there is nowhere to keep one yet".to_owned(),
-            );
-            push = PushText::No;
+            // The passphrase bar does the asking: the kept key's passphrase,
+            // or a new one twice when there is no key yet. Refusals (never
+            // saved, unsaved changes, nowhere to keep a key) are in the
+            // status bar and open nothing.
+            if state.borrow_mut().begin_signing() {
+                ui.invoke_focus_passphrase();
+            }
+            return None;
         }
 
         action::VERIFY_SIGNATURE => {
