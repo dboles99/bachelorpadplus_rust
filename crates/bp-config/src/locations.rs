@@ -122,18 +122,36 @@ impl Locations {
     /// its own under a temporary directory.
     #[must_use]
     pub fn for_host() -> Self {
-        let env = EnvSnapshot::from_environment();
-        let platform = Platform::HOST;
-        let mut locations = Self::in_env(platform, &env);
+        Self::adopted_in(Platform::HOST, &EnvSnapshot::from_environment())
+    }
+
+    /// [`for_host`](Self::for_host) with the platform and environment as
+    /// values, so a test can hand it a temporary tree. Touches the
+    /// filesystem exactly as `for_host` does.
+    ///
+    /// **An environment that names the old location but not the new one
+    /// keeps the old one.** On Windows the two come from different variables
+    /// -- `%APPDATA%` for the old, `%LOCALAPPDATA%` or `%USERPROFILE%` for the
+    /// new -- so the first can resolve while the second cannot. Skipping
+    /// adoption there left the shell on its last-resort relative path, beside
+    /// whatever directory the editor was launched from, with the journal
+    /// that held the unsaved work sitting unread where it always was. The old
+    /// location roams, which is what this module moves away from; losing the
+    /// journal is worse.
+    #[must_use]
+    pub fn adopted_in(platform: Platform, env: &EnvSnapshot) -> Self {
+        let mut locations = Self::in_env(platform, env);
 
         for (slot, name) in [
             (&mut locations.recent, crate::recent::FILE_NAME),
             (&mut locations.recovery, RECOVERY_DIR),
             (&mut locations.security_history, SECURITY_HISTORY_FILE),
         ] {
-            let (Some(current), Some(legacy)) =
-                (slot.as_ref(), legacy_path_in(platform, &env, name))
-            else {
+            let Some(legacy) = legacy_path_in(platform, env, name) else {
+                continue;
+            };
+            let Some(current) = slot.as_ref() else {
+                *slot = Some(legacy);
                 continue;
             };
             let adoption = adopt(&legacy, current);
@@ -565,6 +583,74 @@ mod tests {
             "{adoption:?}"
         );
         assert_eq!(adoption.path_to_use(&current), legacy);
+    }
+
+    /// An environment for the platform running the test, whose settings
+    /// live under `config` and whose per-machine directories live under
+    /// `local` -- or cannot be resolved at all, when `local` is `None`.
+    ///
+    /// Built per host rather than for a fixed platform, because `adopted_in`
+    /// really touches the disk: a Windows temp path is not an absolute path
+    /// by Linux's rule, and the other way round.
+    fn env_for(config: &Path, local: Option<&Path>) -> EnvSnapshot {
+        let text = |p: &Path| p.to_str().expect("a Unicode temp path").to_owned();
+        match Platform::HOST {
+            Platform::Windows => EnvSnapshot {
+                appdata: Some(text(config)),
+                local_appdata: local.map(text),
+                ..EnvSnapshot::default()
+            },
+            Platform::Linux => EnvSnapshot {
+                xdg_config_home: Some(text(config)),
+                xdg_data_home: local.map(|l| text(&l.join("data"))),
+                xdg_state_home: local.map(|l| text(&l.join("state"))),
+                ..EnvSnapshot::default()
+            },
+        }
+    }
+
+    /// A journal holding one checkpoint where an older build kept it.
+    fn an_old_journal_under(config: &Path) -> PathBuf {
+        let journal = config.join("bachelorpad").join(RECOVERY_DIR);
+        fs::create_dir_all(&journal).unwrap();
+        fs::write(journal.join("1.checkpoint"), b"unsaved work").unwrap();
+        journal
+    }
+
+    #[test]
+    fn with_no_new_location_to_move_to_the_old_one_is_kept() {
+        // The old location resolves and the new ones cannot -- on Windows,
+        // `%APPDATA%` without `%LOCALAPPDATA%` or `%USERPROFILE%`. Before,
+        // adoption was skipped and the shell fell back to a path relative to
+        // wherever it was launched, leaving the journal unread.
+        let dir = tempdir().unwrap();
+        let config = dir.path().join("config");
+        let old = an_old_journal_under(&config);
+
+        let locations = Locations::adopted_in(Platform::HOST, &env_for(&config, None));
+
+        assert_eq!(locations.recovery.as_deref(), Some(old.as_path()));
+        assert!(old.join("1.checkpoint").exists(), "nothing was moved");
+        assert!(locations.recent.is_some() && locations.security_history.is_some());
+    }
+
+    #[test]
+    fn an_environment_that_names_both_moves_the_old_journal_across() {
+        let dir = tempdir().unwrap();
+        let config = dir.path().join("config");
+        let local = dir.path().join("local");
+        let old = an_old_journal_under(&config);
+
+        let locations = Locations::adopted_in(Platform::HOST, &env_for(&config, Some(&local)));
+
+        let recovery = locations.recovery.expect("a recovery directory");
+        assert!(recovery.starts_with(&local), "{recovery:?}");
+        assert_eq!(
+            fs::read(recovery.join("1.checkpoint")).unwrap(),
+            b"unsaved work"
+        );
+        assert!(!old.exists(), "a move must not leave a second copy");
+        assert!(locations.left_behind.is_empty());
     }
 
     #[test]

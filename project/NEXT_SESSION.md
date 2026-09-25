@@ -141,7 +141,7 @@ it.
 
 ### 2. ~~Fix the defects the cross-crate tests found~~ — done, all but a decision
 
-**All five defects are fixed; D6 remains, and is a decision.** The sixth
+**Six of the seven defects are fixed; the seventh, D6, is a decision.** The sixth
 session took the last two. The fifth took the one that destroyed documents: `bp_naming::sanitize` now takes the stem before the first dot, the
 way Win32 does, so `con.txt`, `aux.log`, `NUL.dat` and `lpt1.bak` become
 `con File.txt` and its friends rather than names that write to the device.
