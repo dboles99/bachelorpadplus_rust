@@ -25,8 +25,11 @@
 //! nbformat schema, so this is the escape hatch the format itself provides
 //! rather than a private extension bolted on. A notebook we wrote opens in
 //! Jupyter as an ordinary notebook; a notebook Jupyter wrote opens here with
-//! its languages read from, in order: our key, `metadata.vscode.languageId`,
-//! then the notebook's own kernelspec.
+//! its languages read from, in order: our key, `metadata.vscode.languageId`
+//! or `metadata.polyglot_notebook.kernelName`, then the notebook's own
+//! kernelspec. The kernelspec is consulted only for a cell that states no
+//! language at all: a cell that states one we cannot map is not assumed to
+//! be in the kernel's.
 //!
 //! When even that fails -- a `code` cell in a language we cannot name -- the
 //! cell becomes [`CellKind::Raw`] and an [`ImportWarning::UnknownCodeLanguage`]
@@ -682,17 +685,37 @@ fn infer_kind(
         "markdown" => CellKind::Markdown,
         "raw" => CellKind::Raw,
         "code" => {
-            let stated = metadata
-                .get("vscode")
-                .and_then(|v| v.get("languageId"))
-                .or_else(|| {
-                    metadata
-                        .get("polyglot_notebook")
-                        .and_then(|p| p.get("kernelName"))
-                })
-                .and_then(Value::as_str)
-                .and_then(CellKind::from_language_name);
-            match stated.or(notebook_language).filter(|k| k.is_executable()) {
+            // Two different facts hide in "no language we recognise", and
+            // only one of them licenses the kernel's language. A cell that
+            // said *nothing* is written in the notebook's language -- that is
+            // what a kernelspec means. A cell that said something we cannot
+            // map has told us it is *not* in the notebook's language, and
+            // falling back would be a guess that ends in offering its text to
+            // the wrong interpreter. So the kernel is consulted only when
+            // every per-cell tag is absent.
+            //
+            // Every tag is tried before giving up, rather than the first one
+            // found: a .NET Interactive cell carries `vscode.languageId` of
+            // `polyglot-notebook`, which names the extension, and its real
+            // language in `polyglot_notebook.kernelName`.
+            let tags: Vec<&Value> = [
+                metadata.get("vscode").and_then(|v| v.get("languageId")),
+                metadata
+                    .get("polyglot_notebook")
+                    .and_then(|p| p.get("kernelName")),
+            ]
+            .into_iter()
+            .flatten()
+            .filter(|tag| !tag.is_null())
+            .collect();
+            let chosen = if tags.is_empty() {
+                notebook_language
+            } else {
+                tags.iter()
+                    .filter_map(|tag| tag.as_str())
+                    .find_map(CellKind::from_language_name)
+            };
+            match chosen.filter(|k| k.is_executable()) {
                 Some(kind) => kind,
                 None => {
                     warnings.push(ImportWarning::UnknownCodeLanguage { cell_index: index });
@@ -1004,6 +1027,52 @@ mod tests {
         assert_eq!(cell.kind(), CellKind::Raw);
         assert!(!cell.kind().is_executable(), "unknown code must not run");
         assert_eq!(cell.source(), "println(1)", "the text is never lost");
+    }
+
+    #[test]
+    fn a_stated_language_we_cannot_name_is_not_replaced_by_the_kernels() {
+        // The kernel's language is a default for cells that said nothing. A
+        // cell that named a language -- even one we cannot map -- has said it
+        // is not in the kernel's, and running it as Python would be a guess.
+        let import = import_str(
+            r##"{
+              "nbformat": 4,
+              "metadata": { "kernelspec": { "name": "python3", "language": "python" } },
+              "cells": [
+                { "cell_type": "code", "source": "+[-]",
+                  "metadata": { "vscode": { "languageId": "brainfuck" } } },
+                { "cell_type": "code", "source": "x=1", "metadata": {} },
+                { "cell_type": "code", "source": "y=2",
+                  "metadata": { "vscode": { "languageId": null } } }
+              ]
+            }"##,
+        );
+        assert_eq!(
+            import.warnings(),
+            [ImportWarning::UnknownCodeLanguage { cell_index: 0 }]
+        );
+        let kinds: Vec<_> = import.notebook().cells().iter().map(|c| c.kind()).collect();
+        assert_eq!(
+            kinds,
+            vec![CellKind::Raw, CellKind::Python, CellKind::Python],
+            "only the cell that named a foreign language may leave the kernel's"
+        );
+    }
+
+    #[test]
+    fn a_polyglot_cell_is_read_from_its_kernel_name_past_the_extension_id() {
+        // .NET Interactive writes the extension's own id into `languageId`
+        // and the language into `kernelName`; stopping at the first tag
+        // would call every one of its cells unknown.
+        let import = import_str(
+            r##"{ "nbformat": 4, "cells": [
+                 { "cell_type": "code", "source": "Get-Date",
+                   "metadata": {
+                     "vscode": { "languageId": "polyglot-notebook" },
+                     "polyglot_notebook": { "kernelName": "pwsh" } } } ] }"##,
+        );
+        assert!(import.is_lossless(), "{:?}", import.warnings());
+        assert_eq!(import.notebook().cells()[0].kind(), CellKind::PowerShell);
     }
 
     #[test]
