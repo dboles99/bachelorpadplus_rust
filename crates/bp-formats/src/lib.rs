@@ -39,7 +39,15 @@ pub enum Profile {
 }
 
 impl Profile {
-    /// Whether the Data menu's operations apply.
+    /// Whether this profile is data by shape: structured or tabular.
+    ///
+    /// **Not** whether the Data menu can act on a document. That is a
+    /// question about a format and a parser, not about a profile: INI and XML
+    /// are structured data by every reasonable definition and `bp-data` parses
+    /// neither, so a menu gated on this answer would offer rows that all fail.
+    /// This doc used to claim exactly that, and a cross-crate test named the
+    /// trap before anybody fell into it. The shell decides the Data menu per
+    /// [`Format`], in `bp-ui`'s `menus::data`, which is where to look.
     pub const fn is_data(self) -> bool {
         matches!(self, Self::StructuredData | Self::TabularData)
     }
