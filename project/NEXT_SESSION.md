@@ -12,9 +12,19 @@ audit at the end of the sixth session measured the product against the spec
 and against what a release candidate needs on each OS, and the plan built
 from it replaces the "what to do next" of this file: milestones M0 to M5,
 22 decisions for the owner in the order they block work, and the first ten
-items to take. Its M0-01 is a data-loss bug on Linux -- rfd dialogs shell
-out to `zenity`, and without it the startup recovery prompt discards
-recovered work -- so take that first.
+items to take. The owner answered decisions 1-7 the same day (ADR-0030 to
+ADR-0033), and most of M0 landed before the session ended -- the plan's
+"Progress" note under M0 says exactly which items, which are partial, and
+that M0-07, M0-10 and the owner's Windows gate run (M0-12) are next.
+
+**Before dispatching parallel agents again, read this.** Five ran in
+worktrees this session and two things went wrong that were not their
+fault: `isolation: worktree` created their trees from `main`, not from the
+working branch, and sharing one `CARGO_TARGET_DIR` between worktrees made
+cargo reuse one tree's build of a crate in another (it names workspace
+crates by their path relative to the workspace root). Give each agent its
+own branch point explicitly, and never a shared target directory; if disk
+is tight, run fewer agents rather than share.
 
 ---
 

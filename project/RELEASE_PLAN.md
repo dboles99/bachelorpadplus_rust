@@ -180,6 +180,8 @@ Goal: nothing in the current build can destroy or leak a user's work, and the co
 
 **Exit:** C3, C6, C7, C9 (parsing), C10 met on Linux; the Windows gate has run on `main`; the Linux gate runs natively.
 
+**Progress (2026-09-25, end of session 6).** Landed and through the native Linux gate: M0-01 (recovery prompt: Yes/No/Cancel, only No discards), M0-02 (per-instance journal folders under an OS file lock -- both hazards confirmed by failing tests first), M0-03 (DejaVu Sans Mono bundled), M0-04 (size guard; large-file notice), M0-05 (key order kept, Sort Keys its own action, TOML warns; `.ipynb` export still sorted), M0-06 (one CLI parser; `--line`, `--readonly`, `--large-file` are parsed and reported as not yet applied until M1-04/M1-06), M0-08, M0-13 (native gate, seen to fail on a real defect before passing). Partly done: M0-09 (profile gating done; the recent list is not yet written atomically) and M0-11 (`.gitignore` done; the `forbid(unsafe_code)` and lint additions are not). Still open: M0-07 (clipboard privacy), M0-10 (panic hook, log file), M0-12 (the owner's Windows gate run).
+
 ### M1 — Make the shipping view fit and the gate honest. Target: 3–4 weeks. Serves all OSes.
 
 Goal: the default view is a complete Notepad; nothing blocks; the release surface is honest; licensing is in place.

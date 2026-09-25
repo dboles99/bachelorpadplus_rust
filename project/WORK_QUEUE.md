@@ -101,6 +101,13 @@ so whoever finishes an item updates them as part of it.
 | — | `Profile::is_data` says what it answers | `bp-formats` |
 | — | Page Up / Page Down, and a view that follows the caret, in the default view | `app.slint`, `bp-ui` window tests |
 | — | Insert toggles overwrite; Shift+Insert, Ctrl+Insert, Shift+Delete | `bp_editor::{overwritten, Editor::type_text}`, both views |
+| M0-01/02 | Recovered work is never discarded unasked; a second window cannot touch the first's journal | `bp-history` instance folders, `state::recovery_choice` |
+| M0-03 | Bundled DejaVu Sans Mono (ADR-0032) | `bp-ui/fonts`, `app.slint` |
+| M0-04 | Files past 32 MiB are refused before being read | `bp_files::load_with_limit`, `LoadError::TooLarge` |
+| M0-05 | JSON key order kept; Sort Keys sorts; TOML Format warns | `bp-data`, `serde_json/preserve_order` |
+| M0-06 | One command-line parser | `bp_config::cli` |
+| M0-08/09 | Stale readouts fixed; recent list honours the profile | `menus.rs`, `state.rs` |
+| M0-13 | The gate runs natively on a Linux host | `scripts/Invoke-LocalCI.ps1` |
 
 Every library half now has its row.
 
