@@ -1,13 +1,94 @@
 # Next session plan
 
-Rewritten 2026-08-20, at the end of the fifth build session.
+Rewritten 2026-09-25, at the end of the sixth build session.
 
-State: 24 crates, 1,649 tests, green on Windows and Linux. Three of those are
-`#[ignore]`d on purpose, because each one names a real defect and wants a fix
-or a decision rather than a passing assertion. There were four: the one that
-destroyed documents is fixed, and its test runs now.
+State: 24 crates, 1,729 tests, green on Linux -- **the Windows leg was not
+run this session**, see below. One is `#[ignore]`d on purpose because it
+names a decision rather than a defect (D6); the two defects that shared its
+company are fixed.
 
 ---
+
+## What the sixth session did
+
+Tier 0.5 of the queue, the housekeeping item that went with it, and a
+request that arrived mid-session -- **make the cursor keys, Home, End,
+Page Up, Page Down and Insert work** -- which turned out to hide two real
+defects nobody had seen, because nothing had ever tested the default view
+in a window.
+
+| Commit | What |
+| --- | --- |
+| `fix(bp-notebook)` | A cell naming a language we cannot map stays `Raw`, with a warning, even when the notebook names a kernel. ADR-0025 updated |
+| `fix(bp-files)` | A long path is spelled `\\?\` for the rename. **`std::fs` lengthens long paths itself; `tempfile::persist` calls `MoveFileExW` raw**, so only the atomic rename failed. `SaveError::PathTooLong` when it cannot be lengthened |
+| `feat(bp-config)` | ADR-0029: recent list and security history to `DirKind::State`, recovery journal to `DirKind::Data`. Old locations are *adopted* by one rename; a failed rename keeps using the old location. `cargo test` no longer writes into the developer's config directory |
+| `docs(bp-formats)` | `Profile::is_data` says what it answers |
+| `feat(bp-ui)` | Page Up/Down, a view that follows the caret, Insert/overwrite in both views, the CUA clipboard keys, and **window tests** |
+
+**The Windows leg has not run on any of this.** The session's container had
+no PowerShell and no Windows; the Linux leg was run stage by stage by hand
+(fmt, check --locked, clippy, test, launch, log hygiene, fuzz) and is green.
+The long-path fix is Windows behaviour, exercised on Linux only through its
+platform-parameterised half, and the window tests have never met Consolas.
+**Run `./scripts/Invoke-LocalCI.ps1` on Windows first**, before anything
+else.
+
+## The window tests, and what they are for
+
+`crates/bp-ui/src/window_tests.rs` builds the real `AppWindow` on
+`MinimalSoftwareWindow` and dispatches real `WindowEvent::KeyPressed`
+events. No display, no new dependency -- both are public Slint API. Slint's
+platform is per thread, and so is each test. **This is the tool the
+`--editor-view` checklist below has been missing**: most of its rows can now
+be asked of a test rather than of a person. What it found first:
+
+- **Page Up and Page Down did nothing in the default view.** `TextInput`
+  pages by its `page-height`, which defaults to zero, and it refuses a page
+  of zero. Set to the `Flickable`'s height now.
+- **The arrows, End and Ctrl+End moved the caret out of sight.** A bare
+  `Flickable` does not follow its content's caret, so past the bottom row
+  the keys looked dead. `cursor-position-changed` scrolls it now, only as
+  far as needed, and a no-wrap document has a viewport as wide as its
+  longest line.
+
+Both were seen to fail with the fix removed. `AppWindow` gained two `out`
+properties, `editor-scroll-x` and `-y`, so a test can ask where the view is.
+
+**Driving the whole binary on Xvfb works for `--editor-view` and not for
+the default view.** With `libxkbcommon-x11-0` installed and `python-xlib`
+sending XTEST events, the custom surface took clicks, every navigation key,
+overwrite and Ctrl+S end to end, and the saved file was checked. The default
+view's `TextInput` received nothing -- not even the window's own Ctrl+S --
+which looks like the X input-method path `TextInput` enables, with no IM
+server on a bare Xvfb. A harness limit, not a product defect; the headless
+tests above are the better tool for that view anyway.
+
+**That run found one defect it did not fix: `--editor-view` draws its caret
+to the right of the text on Linux.** `EditorSurface` multiplies one measured
+advance by the column, which holds only for a monospace font. It asks for
+`"Consolas"`; Slint resolves a family name literally -- no fontconfig
+aliasing, no generic `monospace` -- so Linux gets a proportional sans and the
+caret drifts further right with every character. This is the "advance
+measurement" row of the checklist below, answered for Linux. The fix is a
+product choice (bundle a monospace font with `import`, or choose the family
+per platform in Rust) and is in the queue as Tier 0.75.
+
+## Insert, and what it had been doing
+
+Under `--editor-view`, Insert had no meaning, so its key code -- U+F727, in
+the private-use block Slint encodes named keys into -- fell through as a
+character and **was typed into the document, invisibly**. So was every other
+key the shell does not name (F1-F12, Menu). `bp_editor::keys::is_toolkit_key`
+refuses the block now, as `TextInput` always did.
+
+Overwrite is one rule in one place: `bp_editor::overwritten` -- one character
+per character typed, never past the end of the line, nothing for a line
+break or a key that is not text. `Editor::type_text` uses it; the `TextInput`
+view asks through `overwrite_end`, selects what it will replace, and lets the
+widget's own "typing replaces the selection" do the rest. That reads the
+caret through `cursor-position_byte-offset`, which Slint marks internal -- the
+only way to read it. An upgrade that removes it fails to compile rather than
+misbehaving. The mode is the window's, shown as `OVR` in the status bar.
 
 ## The shape of the problem has changed
 
@@ -58,10 +139,10 @@ to change anything, and on Windows it writes nothing at all without a Save
 dialog first. It is the only row in this product that touches state outside
 it.
 
-### 2. Fix the defects the cross-crate tests found
+### 2. ~~Fix the defects the cross-crate tests found~~ — done, all but a decision
 
-`project/WORK_QUEUE.md` Tier 0.5. **The one that destroyed documents is
-fixed.** `bp_naming::sanitize` now takes the stem before the first dot, the
+**All five defects are fixed; D6 remains, and is a decision.** The sixth
+session took the last two. The fifth took the one that destroyed documents: `bp_naming::sanitize` now takes the stem before the first dot, the
 way Win32 does, so `con.txt`, `aux.log`, `NUL.dat` and `lpt1.bak` become
 `con File.txt` and its friends rather than names that write to the device.
 Its list gained `CONIN$` and `CONOUT$`, and a property test compares the two
@@ -70,10 +151,10 @@ drift apart quietly. `bp-files` closes the other route into the same failure
 -- the name a user *types*, which sanitising never sees -- by refusing to
 write to a device at all.
 
-Two sit behind it, pinned by `#[ignore]`d tests: `bp-notebook` running code
-it could not name through the kernel's interpreter, and `bp-files` never
-applying `\\?\`. The line-definition disagreement is D6 and wants an
-answer, not a patch.
+The two that sat behind it -- `bp-notebook` running code it could not name
+through the kernel's interpreter, and `bp-files` never applying `\\?\` --
+are fixed and their tests run. The line-definition disagreement is D6 and
+wants an answer, not a patch.
 
 **Write more cross-crate tests as you go.** Eleven files of them have now
 found seven defects that the unit tests had not. That ratio is still the most
@@ -133,39 +214,35 @@ Two things worth keeping from doing it:
 
 ---
 
-## The `--editor-view` checklist, unchanged and still unanswered
+## The `--editor-view` checklist, partly answered by a machine
 
 ```powershell
 cargo run --release -- --editor-view
 ```
 
-This has been the first item for three sessions running and it has not been
-done.
+A person has still not done this. The sixth session drove the binary on a
+virtual X display with synthetic input, on Linux, which answers some rows
+and cannot answer the rest -- a synthetic click lands exactly where it was
+sent, and nobody was looking at the result as a user would.
 
-The custom editor view (ADR-0018) has 147 tests behind its *rules* — motion,
-word boundaries, chords, tab stops, the involution property that caught two
-real defects. Its *behaviour in a window* has been verified to exactly one
-standard: it renders a frame with a real file open and exits without
-panicking.
+| Check | What would be wrong | Sixth session, Xvfb, Linux |
+| --- | --- | --- |
+| Type a character | Keys not reaching the `FocusScope` at all | **Works** |
+| Click mid-line | Caret lands left or right of the pointer — the measured advance is off | **Wrong on Linux**: no Consolas, proportional fallback. See above |
+| Click at the end of a long line | Advance error accumulating across columns | **Wrong on Linux**, same cause, and it does accumulate |
+| Arrow down through a short line and back up | The goal column not surviving | Page Down kept the column; the round trip itself not run |
+| Drag to select | Selection rectangles misplaced, or drag not extending | Not run |
+| Scroll the wheel | Wrong direction, or snapping back to the caret | Not run |
+| **Ctrl+S** | The surface swallowing chords it should reject — this would stop saving | **Works** -- the file on disk had every edit |
+| Ctrl+D, Alt+Up, Alt+Down | Duplicate and move line, shipped this session, never run | Not run |
+| Watch the status bar | Ln/Col is the payoff; it should track the caret | **Works**, and shows `OVR` |
+| Open a tab-indented file | Tab stops wrong, caret off by columns | Not run |
+| Resize the window | Row count not following, blank strip at the bottom | Not run |
+| Home, End, Page Up/Down, Ctrl+Home/End, Insert | Keys unnamed, or landing on the wrong line | **Works** -- each checked by where a typed marker landed in the saved file |
 
-Everything below is unverified, and each is seconds:
-
-| Check | What would be wrong |
-| --- | --- |
-| Type a character | Keys not reaching the `FocusScope` at all |
-| Click mid-line | Caret lands left or right of the pointer — the measured advance is off |
-| Click at the end of a long line | Advance error accumulating across columns |
-| Arrow down through a short line and back up | The goal column not surviving |
-| Drag to select | Selection rectangles misplaced, or drag not extending |
-| Scroll the wheel | Wrong direction, or snapping back to the caret |
-| **Ctrl+S** | The surface swallowing chords it should reject — this would stop saving |
-| Ctrl+D, Alt+Up, Alt+Down | Duplicate and move line, shipped this session, never run |
-| Watch the status bar | Ln/Col is the payoff; it should track the caret |
-| Open a tab-indented file | Tab stops wrong, caret off by columns |
-| Resize the window | Row count not following, blank strip at the bottom |
-
-**The advance measurement and the wheel direction are the two most likely to
-be subtly wrong.** Both are single-line fixes once someone has looked.
+**The advance measurement was one of the two most likely to be subtly wrong,
+and on Linux it is -- not subtly.** On Windows it still wants a look, and
+so does the wheel direction.
 
 Write down what feels wrong, not only what breaks. The default is still
 `TextInput`, so nothing is lost if the answer is bad — but five features
@@ -199,8 +276,8 @@ crates with no way in.
   store, no keyring integration and no decision on file permissions for a key
   on disk. ADR-0026 documents what `bp-integrity` can and cannot enforce per
   platform, which is most of the input needed.
-- **One definition of a line.** `bp-search` counts `
-`; `bp-buffer`'s rope
+- **One definition of a line.** `bp-search` counts
+  `\n`; `bp-buffer`'s rope
   uses ropey's `unicode_lines`. `bp-ui` uses both today, in different views.
 - **What may leave the machine** (phases 8 and 10). Unchanged.
 - **Whether `bp-storage` may record extracted titles** (phase 9). Narrower
@@ -255,7 +332,10 @@ Three sessions of evidence, worth reading before dispatching any:
 
 ## Housekeeping
 
-- **`bp-ui`'s tests create `%APPDATA%achelorpadecovery`.** Empty --
+- ~~**`bp-ui`'s tests create `%APPDATA%\bachelorpad\recovery`.**~~ **Done**
+  with ADR-0029, together with the `recent.toml` item it was paired with.
+  Worse than recorded: the tests were also replacing the developer's own
+  recent-files list with fixture paths. What was recorded: Empty --
   every checkpoint they trigger is refused and refusal deletes -- so it is a
   `mkdir` and nothing more. It is still a test reaching outside a temp
   directory, and it is the same shape as the defect the security history hit

@@ -62,31 +62,16 @@ Adding a decision means adding both.
 
 ## Open items
 
-- **`bp-files` never applies the `\\?\` extended-length prefix**, so a name
-  `bp-naming` is willing to generate can be unwritable. A filename at
-  `SemanticName::to_filename`'s own documented 255-byte maximum fails inside
-  any directory whose path pushes the total past 259 -- the system temp
-  directory alone does it. `bp-platform` has both the diagnosis
-  (`paths::needs_extended_length_prefix`, `path_problems`) and the fix
-  (`paths::to_extended_length`). `bp-files` depends on `bp-platform` now --
-  it asks the same crate whether a name the user typed is a device -- so what
-  was two problems is one: the edge exists and the call does not.
-  The error compounds it: `SaveError` blames a read-only file or another
-  program for what is `os error 3`, sending the user to look at the wrong
-  thing.
-- **`bp-notebook` silently runs unidentified code through the wrong
-  interpreter, and ADR-0025 says the opposite.** `ipynb.rs::infer_kind`
-  computes `stated.or(notebook_language)`, which conflates "the cell said
-  nothing about its language", where falling back to the kernelspec is right,
-  with "the cell named a language we cannot map", where it is a guess. No
-  warning distinguishes them. A cell another tool tagged
-  `vscode.languageId: "brainfuck"` imports as Python and appears in
-  `request_run_all` with the user told nothing. ADR-0025 states that such a
-  cell "becomes `CellKind::Raw` and an `ImportWarning::UnknownCodeLanguage`
-  says so" -- and that holds only for notebooks carrying no kernelspec, which
-  almost no real `.ipynb` is. `CellKind::from_language_name`'s own doc gives
-  the stakes: guessing wrong means offering to run someone's text through the
-  wrong interpreter.
+- **Fixed in the sixth session, and worth knowing how.** Two of the
+  cross-crate tests' defects: `bp-notebook` ran a cell whose stated language
+  it could not map through the kernel's interpreter (it now falls to `Raw`
+  with a warning, as ADR-0025 said all along), and `bp-files` never applied
+  `\\?\`. The second is the instructive one. `std::fs` *does* lengthen a
+  long path on Windows by itself, which is why creating and reading such a
+  file always worked; `tempfile`'s `persist` calls `MoveFileExW` with the path
+  as given, so only the rename -- the step that makes a save atomic -- failed.
+  A dependency that bypasses `std` for one call inherits none of `std`'s
+  platform fixes for that call.
 - **"A flipped bit anywhere in a `.sig` never verifies" is false, correctly.**
   `Sidecar::parse` tolerates trailing whitespace so a signature survives being
   mailed and pasted, so flipping bit 0 of the closing newline yields a
@@ -97,17 +82,11 @@ Adding a decision means adding both.
   signature. Recorded because the naive version is the one somebody will
   write next.
 
-- **The recent-files list roams on Windows, and it is full of absolute
-  paths.** `recent.toml` sits beside `config.toml` in the config directory,
-  which on Windows is `%APPDATA%` and therefore roams between machines --
-  and a recent list is machine-specific absolute paths, which is exactly what
-  `bp_platform::DirKind::roams` warns against. `bp-platform` names the
-  recent-files list as `DirKind::State` for this reason. It was not moved
-  when `bp-config` started delegating, deliberately: it is a product decision
-  with a user-visible effect rather than a deduplication, and `bp-ui`'s
-  `recovery_dir` derives its own path from `config_path`, so moving one
-  without the other would scatter the product's files. Both want doing
-  together, by something that owns both crates.
+- **~~The recent-files list roams on Windows~~ -- settled by ADR-0029.**
+  The list, the recovery journal and the security history all leave the
+  configuration directory together, and an old location is adopted rather
+  than abandoned. The journal went to `Data`, not `State`, which is what
+  `bp-platform`'s own docs said.
 - **Neither `bp-platform-windows` nor `bp-platform-linux` was created**, and
   that is a decision rather than an omission. specs §20 and the crate map
   name them. Everything they would hold is either already a parameterised
@@ -118,13 +97,9 @@ Adding a decision means adding both.
 
 - **`bp-search` and `bp-buffer` do not agree what a line is, and this is
   now a decision rather than a bug report.** `bp_search::Offsets` counts
-  `'
-'`. `bp_buffer::Buffer` is a `ropey::Rope` built with ropey's default
+  `'\n'`. `bp_buffer::Buffer` is a `ropey::Rope` built with ropey's default
   features, which include `unicode_lines`, so ropey also breaks on a bare
-  `
-`, ``, ``, U+0085, U+2028 and U+2029. For `"one
-two
-needle"`
+  `\r`, `\x0B`, `\x0C`, U+0085, U+2028 and U+2029. For `"one\rtwo\rneedle"`
   search reports line 1 and the buffer reports line 3, so a find-in-files
   result scrolls the editor to the wrong line in any file carrying a bare CR.
   The same split exists inside `bp-buffer` — the free `line_count` counts
