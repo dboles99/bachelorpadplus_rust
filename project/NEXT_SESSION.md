@@ -18,18 +18,22 @@ ADR-0033), and most of M0 landed before the session ended -- the plan's
 "Progress" note under M0 says exactly which items, which are partial, and
 that M0-07, M0-10 and the owner's Windows gate run (M0-12) are next.
 
-**Seventh session (same day): M0 finished, most of M1 landed.** See the
-plan's two M1 "Progress" notes. Left in M1:
+**Seventh session (same day): M0 finished, M1 done except the owner's
+decisions.** The plan's M1 "Progress" notes have the detail. What is left
+in M1 waits on the owner: M1-06 (U3), M1-09 (D6), M1-14 (the copyright
+holder) and M1-18 (U5), plus the Windows gate run (M0-12). **Next without
+them: M2** (platform integration, per the plan), starting with whatever
+the Windows gate run turns up.
 
-- **Waiting on the owner:** M1-06, M1-09, M1-14 and M1-18.
-- **Next, in order:**
-  1. M1-07 part two: saves, checkpoints and hashing off the UI thread, with the generation check.
-  2. M1-08.
-  3. M1-12.
-  4. M1-20.
-  5. M1-22, the records sweep.
+Two tools worth knowing about:
 
-Five agents ran in hand-made worktrees off the working branch, each with its own target
+- `scripts/smoke-linux.sh` drives the real binary on Xvfb in both views.
+  Its first run found a defect the window tests could not see.
+- `worker::Background` in `bp-ui` is the pattern for anything slow. Only
+  the newest job's result comes back, the job gets a stop flag, and
+  results arrive over a channel collected on the UI thread.
+
+Eight agents ran in hand-made worktrees off the working branch, each with its own target
 directory, and that pattern held. Watch the disk: a release build in a
 worktree is about 12 GB, and the session hit "no space left" once; build
 the main tree with `CARGO_INCREMENTAL=0` when space is short.
