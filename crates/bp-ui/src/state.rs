@@ -132,6 +132,11 @@ pub struct AppState {
     /// so an edit made by another program can be noticed.
     stamps: HashMap<DocumentId, FileStamp>,
     pub(crate) recent: Recent,
+    /// What `bp-config` could not move out of the old locations, held apart
+    /// from `error` until startup has finished opening files -- `open` and
+    /// `close` both clear `error`, and this is the only notice of a recovery
+    /// journal the product no longer reads. See [`AppState::start_up`].
+    left_behind: Option<String>,
     /// Where `recent` is kept. `None` keeps the list in memory only, which
     /// is what an environment naming no state directory gets.
     recent_file: Option<PathBuf>,
@@ -191,8 +196,41 @@ impl AppState {
     pub(crate) fn new() -> Self {
         let locations = locations();
         let mut state = Self::at(&locations);
-        state.error = describe_left_behind(&locations.left_behind);
+        state.left_behind = describe_left_behind(&locations.left_behind);
         state
+    }
+
+    /// Open the files named on the command line, then say everything startup
+    /// has to say.
+    ///
+    /// The first file replaces the empty document opened at startup, so
+    /// `bachelorpad note.txt` shows one tab rather than an untouched Untitled
+    /// beside it.
+    ///
+    /// The notices are composed *after* the files are open, and that order
+    /// is the point. `open` and `close` both clear `error`, so a notice set
+    /// before them vanished on the most common launch there is -- a file
+    /// double-clicked, or opened through a file association. Every notice is
+    /// kept: the configuration's, then anything left behind by a move, then
+    /// whatever opening the files reported.
+    pub(crate) fn start_up(&mut self, config_notice: Option<String>, files: &[PathBuf]) {
+        if !files.is_empty() {
+            let blank = self.workspace.active_id();
+            for path in files {
+                self.open(path.clone());
+            }
+            if let Some(blank) = blank
+                && self.workspace.len() > 1
+            {
+                self.close(blank);
+            }
+        }
+
+        let notices: Vec<String> = [config_notice, self.left_behind.take(), self.error.take()]
+            .into_iter()
+            .flatten()
+            .collect();
+        self.error = (!notices.is_empty()).then(|| notices.join("; "));
     }
 
     /// A fresh state whose files live at `locations`.
@@ -230,6 +268,7 @@ impl AppState {
                 .map(bp_config::load_recent)
                 .unwrap_or_default(),
             recent_file: locations.recent.clone(),
+            left_behind: None,
             disk_warning: None,
             matches: Vec::new(),
             match_index: 0,
@@ -3284,6 +3323,46 @@ mod tests {
             bp_config::load_recent(&file).paths().contains(&path),
             "the list was not written where the state was told to keep it"
         );
+    }
+
+    #[test]
+    fn a_left_behind_notice_survives_opening_a_file_at_startup() {
+        // The launch a file association makes: one file named, which opens
+        // and then closes the blank tab -- and both used to clear the notice
+        // before anybody could see it.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.txt");
+        std::fs::write(&path, b"hello").unwrap();
+        let mut state = AppState::new();
+        state.left_behind = Some("⚠ an old journal".to_owned());
+
+        state.start_up(Some("config warning".to_owned()), &[path]);
+
+        assert_eq!(state.workspace.len(), 1, "the blank tab was replaced");
+        assert_eq!(
+            state.error.as_deref(),
+            Some("config warning; ⚠ an old journal")
+        );
+    }
+
+    #[test]
+    fn a_file_that_fails_to_open_at_startup_is_reported_beside_the_others() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = AppState::new();
+        state.left_behind = Some("⚠ an old journal".to_owned());
+
+        state.start_up(None, &[dir.path().join("absent.txt")]);
+
+        let error = state.error.expect("something to say");
+        assert!(error.starts_with("⚠ an old journal; "), "{error}");
+        assert!(error.len() > "⚠ an old journal; ".len(), "{error}");
+    }
+
+    #[test]
+    fn a_quiet_startup_says_nothing() {
+        let mut state = AppState::new();
+        state.start_up(None, &[]);
+        assert_eq!(state.error, None);
     }
 
     #[test]
