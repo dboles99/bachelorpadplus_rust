@@ -471,7 +471,7 @@ pub fn linux_plan(
                 .system_file(&artefact.relative_path)
                 .filter(|path| mime_package_covers(path, selection))
                 .map(|path| (path, SKIP_SYSTEM_PACKAGE)),
-            ArtefactKind::RegistryScript => None,
+            ArtefactKind::RegistryScript | ArtefactKind::UnregisterScript => None,
         };
         match provided {
             Some((path, why)) => {
@@ -496,7 +496,7 @@ pub fn linux_plan(
                 args: vec![join(Platform::Linux, &root, &["mime"])],
                 why: WHY_MIME_DATABASE,
             }),
-            ArtefactKind::RegistryScript => None,
+            ArtefactKind::RegistryScript | ArtefactKind::UnregisterScript => None,
         })
         .collect();
 

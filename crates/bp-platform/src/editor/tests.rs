@@ -303,6 +303,11 @@ fn the_windows_registry_script_keeps_the_name_it_always_had() {
             .map(|a| a.relative_path.as_str()),
         Some("bachelorpad-file-types.reg")
     );
+    assert_eq!(
+        plan.artefact(ArtefactKind::UnregisterScript)
+            .map(|a| a.relative_path.as_str()),
+        Some("bachelorpad-file-types-remove.reg")
+    );
     assert!(
         plan.registry_values
             .iter()
