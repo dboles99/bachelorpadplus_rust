@@ -52,8 +52,8 @@ pub mod profiles;
 
 pub use profiles::{DocumentKey, ProfileStore};
 
-use std::collections::BTreeMap;
 use std::collections::hash_map::RandomState;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::{File, OpenOptions, TryLockError};
 use std::hash::{BuildHasher, Hasher};
 use std::path::{Path, PathBuf};
@@ -91,6 +91,18 @@ pub struct Checkpoint {
 pub enum Written {
     Yes,
     Refused(Refusal),
+    /// Nothing was done, because this checkpoint was overtaken before it
+    /// could be committed: the document's journal was discarded (it was
+    /// saved, or closed without saving) or a newer checkpoint of it was
+    /// begun.
+    ///
+    /// Not a failure and not news. The work it held is either on disk in the
+    /// file, deliberately thrown away, or about to be journalled by the newer
+    /// checkpoint -- and writing it anyway is exactly the bug this exists to
+    /// prevent: a stale checkpoint landing after Don't Save would be offered
+    /// as "recovered work" at the next launch. The caller should not record
+    /// a checkpoint time for it.
+    Superseded,
 }
 
 /// Why a checkpoint was not written.
@@ -194,11 +206,213 @@ impl Refusal {
 /// directory. They are recoverable like a dead instance's, claimed through
 /// `legacy.lock`; a copy of the *old* program still running would not honour
 /// that lock, which is a one-release transition risk rather than a design.
+///
+/// # Checkpointing off the UI thread
+///
+/// Sealing a checkpoint runs Argon2, which takes long enough to be felt as a
+/// stall in typing, so [`Journal::checkpoint`] comes apart into three steps
+/// for a shell that wants the expensive one elsewhere:
+///
+/// 1. [`Journal::ticket`], on the thread that owns the document, at the
+///    moment its text is snapshotted. Cheap.
+/// 2. [`Journal::prepare`], on any thread: decide what the policy asks for
+///    and do the serialising and sealing. Touches no files.
+/// 3. [`Journal::commit`], on any thread: write it, but only if the ticket
+///    is still the newest for its document.
+///
+/// The hazard is a checkpoint computed before the user saved or closed the
+/// document landing *after* its journal was discarded, to be offered as
+/// recovered work -- work the user may have explicitly thrown away with
+/// Don't Save. So every discard revokes the outstanding tickets it covers,
+/// and a commit's "is my ticket still the newest?" and its write happen
+/// under the same lock the discard takes. Either the commit finishes first
+/// and the discard removes what it wrote, or the discard comes first and the
+/// commit writes nothing.
 #[derive(Debug, Clone)]
 pub struct Journal {
     dir: PathBuf,
     /// Shared by clones: a clone is the same instance, not a second one.
     instance: Arc<Mutex<Instance>>,
+    /// Which checkpoints may still be committed. Shared by clones for the
+    /// same reason, since the background thread holds a clone.
+    ///
+    /// A mutex of its own rather than a field of `Instance`: a commit holds
+    /// it across `ensure_own`, `glance` and `tidy`, which all lock
+    /// `instance`, and `std`'s mutex is not re-entrant. The order is always
+    /// `tickets` then `instance`, never the reverse, so the two cannot
+    /// deadlock.
+    tickets: Arc<Mutex<Tickets>>,
+}
+
+/// The right to write one document's next checkpoint, from
+/// [`Journal::ticket`].
+///
+/// Taken on the thread that owns the document at the moment its text is
+/// snapshotted, which is what makes "newest" mean "newest snapshot" however
+/// the background work that follows is scheduled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ticket {
+    id: u64,
+    /// Issued from one counter for every document, so it also orders a
+    /// ticket against a discard of a sealed path (see `Tickets`).
+    seq: u64,
+}
+
+impl Ticket {
+    /// The document this ticket is for.
+    #[must_use]
+    pub const fn id(self) -> u64 {
+        self.id
+    }
+}
+
+/// A checkpoint decided and, if the policy wants it sealed, already
+/// encrypted: everything but touching the disk. Made by
+/// [`Journal::prepare`], applied by [`Journal::commit`].
+///
+/// `Send`, so it can be made on a background thread and committed from
+/// wherever that thread's result is collected.
+pub struct Prepared {
+    ticket: Ticket,
+    /// Remove this instance's plaintext checkpoint for the ticket's id
+    /// before anything else: the policy forbids it or wants it sealed.
+    discard_plain: bool,
+    /// Remove the sealed checkpoint with this file name, from this instance
+    /// and every dead one: the policy now journals the document in clear, or
+    /// not at all.
+    discard_sealed: Option<String>,
+    outcome: Outcome,
+}
+
+/// What a [`Prepared`] checkpoint comes to once its discards are done.
+enum Outcome {
+    Refused(Refusal),
+    /// The serialised checkpoint, for `<id>.json`.
+    Plain(Vec<u8>),
+    /// The sealed checkpoint and the file name it goes under.
+    Sealed {
+        name: String,
+        bytes: Vec<u8>,
+    },
+    /// Serialising or sealing failed. Held rather than returned from
+    /// `prepare` so the commit still does the discards first, as
+    /// `checkpoint` always has: a failure to seal must not leave behind the
+    /// plaintext the stricter profile has asked to remove.
+    Failed(std::io::Error),
+}
+
+impl Prepared {
+    /// The document this checkpoint is for.
+    #[must_use]
+    pub const fn id(&self) -> u64 {
+        self.ticket.id
+    }
+}
+
+/// Written by hand so that a stray `{:?}` never prints the document's text,
+/// which the plaintext form holds in full.
+impl std::fmt::Debug for Prepared {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let outcome = match &self.outcome {
+            Outcome::Refused(refusal) => format!("Refused({refusal:?})"),
+            Outcome::Plain(json) => format!("Plain({} bytes)", json.len()),
+            Outcome::Sealed { bytes, .. } => format!("Sealed({} bytes)", bytes.len()),
+            Outcome::Failed(e) => format!("Failed({:?})", e.kind()),
+        };
+        f.debug_struct("Prepared")
+            .field("ticket", &self.ticket)
+            .field("discard_plain", &self.discard_plain)
+            .field("discard_sealed", &self.discard_sealed.is_some())
+            .field("outcome", &outcome)
+            .finish()
+    }
+}
+
+/// The bookkeeping that decides whether a [`Prepared`] checkpoint may still
+/// be committed.
+///
+/// Plaintext checkpoints are filed by document id, so revoking by id is
+/// enough for them: `newest` holds each id's one outstanding ticket, and a
+/// discard removes it. That also revokes a *sealed* checkpoint begun for the
+/// id, which is deliberate -- a discard means the journal for this document
+/// is finished with, in whichever form.
+///
+/// Sealed checkpoints are filed by a digest of the *path*, and
+/// [`Journal::discard_sealed_for`] is given a path, not an id, so the id
+/// cannot be revoked from there. Instead the discard puts up a fence: the
+/// sequence number the next ticket will get. A sealed commit whose ticket is
+/// below the fence for its file name was begun before the discard and is
+/// dropped; one begun after is the user's current work and goes ahead. That
+/// is why sequence numbers come from one counter for every document rather
+/// than one per id -- a fence has to be comparable with any ticket. Mapping
+/// path to id instead would have to be kept in step with Save As and
+/// renames, which change a document's path under the same id.
+#[derive(Debug, Default)]
+struct Tickets {
+    /// The sequence number the next ticket gets.
+    next: u64,
+    /// Each document's newest outstanding ticket. An entry goes when that
+    /// ticket is committed or the document's journal is discarded, so the
+    /// map holds only work in flight.
+    newest: HashMap<u64, u64>,
+    /// Sealed file name to the first sequence number issued after its last
+    /// discard. See the type docs.
+    fences: HashMap<String, u64>,
+}
+
+impl Tickets {
+    fn issue(&mut self, id: u64) -> Ticket {
+        let seq = self.next;
+        self.next += 1;
+        // Replacing the entry is what supersedes the earlier ticket.
+        self.newest.insert(id, seq);
+        Ticket { id, seq }
+    }
+
+    /// Whether `prepared` may be committed now.
+    fn admits(&self, prepared: &Prepared) -> bool {
+        let ticket = prepared.ticket;
+        if self.newest.get(&ticket.id) != Some(&ticket.seq) {
+            return false;
+        }
+        match &prepared.outcome {
+            Outcome::Sealed { name, .. } => self.fences.get(name).is_none_or(|&f| ticket.seq >= f),
+            // Only a sealed *write* can resurrect what a sealed discard
+            // removed. A plaintext commit is revoked by id.
+            _ => true,
+        }
+    }
+
+    /// Mark `ticket` used, so the map keeps only work in flight.
+    fn spend(&mut self, ticket: Ticket) {
+        self.newest.remove(&ticket.id);
+        self.prune();
+    }
+
+    fn revoke(&mut self, id: u64) {
+        self.newest.remove(&id);
+        self.prune();
+    }
+
+    fn revoke_all(&mut self) {
+        self.newest.clear();
+        self.fences.clear();
+    }
+
+    fn fence(&mut self, name: String) {
+        self.fences.insert(name, self.next);
+        self.prune();
+    }
+
+    /// Drop fences no outstanding ticket is old enough to run into. Every
+    /// ticket that can still commit is in `newest`, so a fence at or below
+    /// all of them can never refuse anything again -- and without this the
+    /// map would grow by one entry for every encrypted document ever saved.
+    fn prune(&mut self) {
+        let oldest = self.newest.values().copied().min();
+        self.fences
+            .retain(|_, &mut fence| oldest.is_some_and(|oldest| oldest < fence));
+    }
 }
 
 /// This journal's identity and the locks it holds.
@@ -262,6 +476,7 @@ impl Journal {
         Self {
             dir,
             instance: Arc::new(Mutex::new(instance)),
+            tickets: Arc::new(Mutex::new(Tickets::default())),
         }
     }
 
@@ -275,6 +490,14 @@ impl Journal {
     /// because of an unrelated panic would cost the user their recovery.
     fn instance(&self) -> MutexGuard<'_, Instance> {
         self.instance.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The ticket book, poison or not, for the same reason as `instance`.
+    ///
+    /// Take this *before* anything that locks `instance`, never while
+    /// holding it: see the field's docs.
+    fn tickets(&self) -> MutexGuard<'_, Tickets> {
+        self.tickets.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn own_dir(&self) -> PathBuf {
@@ -446,6 +669,11 @@ impl Journal {
     /// sealed journal -- the second is the easier to forget, and a sealed
     /// copy left behind would be offered at the next unlock holding older
     /// work.
+    ///
+    /// This is [`Journal::ticket`], [`Journal::prepare`] and
+    /// [`Journal::commit`] in one go, on the calling thread. It returns
+    /// [`Written::Superseded`] only if another thread discarded `id`, or took
+    /// a newer ticket for it, while this call was sealing.
     pub fn checkpoint(
         &self,
         id: u64,
@@ -453,96 +681,151 @@ impl Journal {
         recovery: Recovery,
         passphrase: Option<&str>,
     ) -> std::io::Result<Written> {
-        match recovery {
-            Recovery::Plaintext => {}
-            Recovery::Disabled => {
-                self.discard(id)?;
-                self.discard_sealed(checkpoint.path.as_deref())?;
-                return Ok(Written::Refused(Refusal::ProfileForbidsIt));
+        let ticket = self.ticket(id);
+        let prepared = self.prepare(ticket, checkpoint, recovery, passphrase);
+        self.commit(prepared)
+    }
+
+    /// The right to write `id`'s next checkpoint, superseding every earlier
+    /// ticket for it.
+    ///
+    /// Take it on the thread that owns the document, at the moment its text
+    /// is snapshotted, and before any discard that should outrank it -- a
+    /// ticket taken after a discard is new work, and is written. Cheap: it
+    /// touches no files and holds a lock only long enough to count.
+    pub fn ticket(&self, id: u64) -> Ticket {
+        self.tickets().issue(id)
+    }
+
+    /// Decide what `ticket`'s checkpoint will be under `recovery`, and do
+    /// the expensive part: serialising and, for an encrypted journal,
+    /// sealing -- Argon2, which is why this can run on another thread.
+    ///
+    /// Touches no files and takes no lock, so it never delays the thread
+    /// that owns the document. Every decision `checkpoint` documents is made
+    /// here -- the refusals and the discards they imply, plaintext and sealed
+    /// kept in step -- and carried out by [`Journal::commit`].
+    ///
+    /// Does not fail: a serialising or sealing error is carried inside and
+    /// returned by the commit, after the discards the policy asks for, as
+    /// `checkpoint` has always done.
+    #[must_use]
+    pub fn prepare(
+        &self,
+        ticket: Ticket,
+        checkpoint: &Checkpoint,
+        recovery: Recovery,
+        passphrase: Option<&str>,
+    ) -> Prepared {
+        let sealed = checkpoint.path.as_deref().map(sealed_name);
+        let (discard_plain, discard_sealed, outcome) = match recovery {
+            Recovery::Disabled => (true, sealed, Outcome::Refused(Refusal::ProfileForbidsIt)),
+            // The plaintext form goes whatever happens next: this document
+            // was journalled in clear under a looser profile, and tightening
+            // it has to remove that.
+            //
+            // Passphrase first, path second. For a document that is neither
+            // saved nor encrypted both are missing, and "encrypt this
+            // document" is the more useful thing to say -- Encrypt Document
+            // is a Save As, so it fixes the missing path too.
+            Recovery::Encrypted => match (passphrase, sealed) {
+                (None, sealed) => (true, sealed, Outcome::Refused(Refusal::NoPassphrase)),
+                (Some(_), None) => (true, None, Outcome::Refused(Refusal::NeverSaved)),
+                (Some(passphrase), Some(name)) => (true, None, seal(checkpoint, passphrase, name)),
+            },
+            // A document journalled in clear must not also leave a sealed
+            // copy from when its profile was stricter.
+            Recovery::Plaintext => {
+                let outcome = match serde_json::to_vec_pretty(checkpoint) {
+                    Ok(json) => Outcome::Plain(json),
+                    Err(e) => Outcome::Failed(invalid_data(e)),
+                };
+                (false, sealed, outcome)
             }
-            Recovery::Encrypted => {
-                // The plaintext form must go whatever happens next: this
-                // document was journalled in clear under a looser profile,
-                // and tightening it has to remove that.
-                self.discard(id)?;
-                // Passphrase first, path second. For a document that is
-                // neither saved nor encrypted both are true, and "encrypt
-                // this document" is the more useful thing to say -- Encrypt
-                // Document is a Save As, so it fixes the missing path too.
-                let Some(passphrase) = passphrase else {
-                    self.discard_sealed(checkpoint.path.as_deref())?;
-                    return Ok(Written::Refused(Refusal::NoPassphrase));
-                };
-                let Some(path) = checkpoint.path.as_deref() else {
-                    return Ok(Written::Refused(Refusal::NeverSaved));
-                };
-                return self.checkpoint_sealed(path, checkpoint, passphrase);
+        };
+        Prepared {
+            ticket,
+            discard_plain,
+            discard_sealed,
+            outcome,
+        }
+    }
+
+    /// Carry out `prepared`, if its ticket is still the newest for its
+    /// document; otherwise touch nothing and return [`Written::Superseded`].
+    ///
+    /// Atomic: written to a temporary file and renamed, so a crash midway
+    /// leaves the *previous* checkpoint intact rather than a truncated one.
+    ///
+    /// The check and everything that follows it happen under the lock every
+    /// discard takes, so a discard is either wholly before this commit --
+    /// and the commit writes nothing -- or wholly after it, and removes what
+    /// it wrote. The expensive work was done in `prepare`, so the lock is
+    /// held only for a small write, a rename, and removing a dead instance's
+    /// superseded sealed copy.
+    ///
+    /// A superseded refusal touches nothing either. Its discards were
+    /// decided for an older snapshot, and carried out now they could delete
+    /// the checkpoint the newer ticket has just written.
+    pub fn commit(&self, prepared: Prepared) -> std::io::Result<Written> {
+        let mut tickets = self.tickets();
+        if !tickets.admits(&prepared) {
+            return Ok(Written::Superseded);
+        }
+        tickets.spend(prepared.ticket);
+        let result = self.apply(prepared);
+        // Explicitly after `apply`: releasing the ticket book before the
+        // rename is exactly the window a discard must not fall into.
+        drop(tickets);
+        result
+    }
+
+    /// The file work of a commit. Only ever called with the ticket book
+    /// held.
+    fn apply(&self, prepared: Prepared) -> std::io::Result<Written> {
+        let id = prepared.ticket.id;
+        if prepared.discard_plain {
+            remove_if_present(&self.file_for(id))?;
+        }
+        if let Some(name) = &prepared.discard_sealed {
+            self.remove_sealed(name)?;
+        }
+        match prepared.outcome {
+            Outcome::Refused(refusal) => Ok(Written::Refused(refusal)),
+            Outcome::Failed(e) => Err(e),
+            Outcome::Plain(json) => {
+                let own_dir = self.ensure_own()?;
+                let target = own_dir.join(format!("{id}.json"));
+                write_atomically(&target, &target.with_extension("json.tmp"), &json)?;
+                Ok(Written::Yes)
+            }
+            Outcome::Sealed { name, bytes } => {
+                let own_dir = self.ensure_own()?;
+                let target = own_dir.join(&name);
+                write_atomically(&target, &target.with_extension("bpadx.tmp"), &bytes)?;
+                // A dead instance's sealed copy for the same path is
+                // superseded once this one is safely on disk -- see `seal`.
+                // Only after the rename, so there is no moment with neither.
+                self.glance(|survey| {
+                    for place in survey.mine.iter().skip(1) {
+                        remove_if_present(&place.files.join(&name))?;
+                    }
+                    self.tidy();
+                    Ok(Written::Yes)
+                })
             }
         }
-        // A document journalled in clear must not also leave a sealed copy
-        // from when its profile was stricter.
-        self.discard_sealed(checkpoint.path.as_deref())?;
-        let own_dir = self.ensure_own()?;
-        let json = serde_json::to_vec_pretty(checkpoint)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-
-        let target = own_dir.join(format!("{id}.json"));
-        let temp = target.with_extension("json.tmp");
-        std::fs::write(&temp, &json)?;
-        std::fs::rename(&temp, &target)?;
-        Ok(Written::Yes)
     }
 
-    /// Seal a checkpoint with the document's own passphrase.
-    ///
-    /// The whole `Checkpoint` goes inside the ciphertext, including the path
-    /// and the name. Writing either in clear beside it would leave a list of
-    /// which documents have unsaved work sitting in the recovery directory --
-    /// close to the thing the strict profiles exist to prevent (ADR-0022).
-    ///
-    /// A dead instance's sealed copy for the same path is superseded once
-    /// this one is safely on disk. The document was unlocked to get the
-    /// passphrase, and unlocking is when that copy was offered, so keeping
-    /// it would only offer older work at the next unlock. Only after the
-    /// rename, so there is no moment with neither.
-    fn checkpoint_sealed(
-        &self,
-        path: &Path,
-        checkpoint: &Checkpoint,
-        passphrase: &str,
-    ) -> std::io::Result<Written> {
-        let own_dir = self.ensure_own()?;
-        let json = serde_json::to_vec(checkpoint)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-
-        let sealed = bp_crypto::seal(&json, passphrase, bp_crypto::SealOptions::default())
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
-
-        let name = sealed_name(path);
-        let target = own_dir.join(&name);
-        let temp = target.with_extension("bpadx.tmp");
-        std::fs::write(&temp, &sealed)?;
-        std::fs::rename(&temp, &target)?;
-
-        self.glance(|survey| {
-            for place in survey.mine.iter().skip(1) {
-                remove_if_present(&place.files.join(&name))?;
-            }
-            self.tidy();
-            Ok(Written::Yes)
-        })
-    }
-
-    /// Remove the sealed checkpoint for `path`, if there is one, from this
+    /// Remove the sealed checkpoint named `name`, if there is one, from this
     /// instance and from every dead instance -- never from a live one.
-    fn discard_sealed(&self, path: Option<&Path>) -> std::io::Result<()> {
-        let Some(path) = path else {
-            return Ok(());
-        };
-        let name = sealed_name(path);
+    ///
+    /// Revokes nothing: inside a commit the ticket has already been checked,
+    /// and the public discard puts up its fence before calling this.
+    fn remove_sealed(&self, name: &str) -> std::io::Result<()> {
         self.glance(|survey| {
             for place in &survey.mine {
-                remove_if_present(&place.files.join(&name))?;
+                remove_if_present(&place.files.join(name))?;
             }
             self.tidy();
             Ok(())
@@ -585,8 +868,19 @@ impl Journal {
     /// discards it after a successful save, like the plaintext one.
     ///
     /// A live instance's copy is left alone: it is that window's to discard.
+    ///
+    /// Also drops every sealed checkpoint of `path` begun before this call
+    /// and not yet committed: see [`Journal::commit`]. One begun after it is
+    /// new work and is written.
     pub fn discard_sealed_for(&self, path: &Path) -> std::io::Result<()> {
-        self.discard_sealed(Some(path))
+        let name = sealed_name(path);
+        // Fence and removal under one hold of the ticket book, so no commit
+        // can slip between them.
+        let mut tickets = self.tickets();
+        tickets.fence(name.clone());
+        let result = self.remove_sealed(&name);
+        drop(tickets);
+        result
     }
 
     /// How many sealed checkpoints are waiting.
@@ -630,8 +924,21 @@ impl Journal {
     ///
     /// Only this instance's own: a dead instance's document with the same id
     /// is a different document, kept until the user decides about it.
+    ///
+    /// Also drops every checkpoint of `id` begun and not yet committed,
+    /// sealed as well as plaintext: see [`Journal::commit`]. Without that, a
+    /// checkpoint prepared on another thread before Don't Save could land
+    /// after it, and be offered at the next launch as work the user had
+    /// thrown away. The sealed file itself is keyed by path, so it is
+    /// [`Journal::discard_sealed_for`] that removes it.
     pub fn discard(&self, id: u64) -> std::io::Result<()> {
-        remove_if_present(&self.file_for(id))
+        // Revoke and remove under one hold of the ticket book, so no commit
+        // can slip between them.
+        let mut tickets = self.tickets();
+        tickets.revoke(id);
+        let result = remove_if_present(&self.file_for(id));
+        drop(tickets);
+        result
     }
 
     /// Every recoverable checkpoint, newest first: this instance's own and
@@ -665,8 +972,18 @@ impl Journal {
     /// a crash is not a decision about a window that is still open. Sealed
     /// checkpoints are untouched too, as before: they are recovered at
     /// unlock, not at startup.
+    ///
+    /// Every checkpoint begun and not yet committed is dropped, sealed ones
+    /// included, as [`Journal::discard`] would for each id. Dropping a
+    /// sealed one costs at most one autosave interval, which the next
+    /// checkpoint makes up; letting a plaintext one land would undo the
+    /// discard.
     pub fn discard_all(&self) -> std::io::Result<()> {
-        self.glance(|survey| self.discard_plaintext(&survey.mine))
+        let mut tickets = self.tickets();
+        tickets.revoke_all();
+        let result = self.glance(|survey| self.discard_plaintext(&survey.mine));
+        drop(tickets);
+        result
     }
 
     /// Remove dead instances' plaintext checkpoints, keeping this instance's
@@ -783,6 +1100,43 @@ fn instance_name() -> String {
     )
 }
 
+/// Seal a checkpoint with the document's own passphrase, to be filed as
+/// `name`.
+///
+/// The whole `Checkpoint` goes inside the ciphertext, including the path
+/// and the name. Writing either in clear beside it would leave a list of
+/// which documents have unsaved work sitting in the recovery directory --
+/// close to the thing the strict profiles exist to prevent (ADR-0022).
+///
+/// When it is committed, a dead instance's sealed copy for the same path is
+/// superseded. The document was unlocked to get the passphrase, and
+/// unlocking is when that copy was offered, so keeping it would only offer
+/// older work at the next unlock.
+fn seal(checkpoint: &Checkpoint, passphrase: &str, name: String) -> Outcome {
+    let sealed = serde_json::to_vec(checkpoint)
+        .map_err(invalid_data)
+        .and_then(|json| {
+            bp_crypto::seal(&json, passphrase, bp_crypto::SealOptions::default())
+                .map_err(|e| invalid_data(e.to_string()))
+        });
+    match sealed {
+        Ok(bytes) => Outcome::Sealed { name, bytes },
+        Err(e) => Outcome::Failed(e),
+    }
+}
+
+fn invalid_data(e: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, e)
+}
+
+/// Write `bytes` to `temp` and rename it over `target`, so a crash midway
+/// leaves the previous file intact. A journal that can be half-written is
+/// worse than no journal, because it looks recoverable.
+fn write_atomically(target: &Path, temp: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    std::fs::write(temp, bytes)?;
+    std::fs::rename(temp, target)
+}
+
 fn open_lock(path: &Path) -> std::io::Result<File> {
     OpenOptions::new()
         .read(true)
@@ -875,6 +1229,7 @@ pub fn now_unix() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Barrier;
     use tempfile::TempDir;
 
     fn journal() -> (TempDir, Journal) {
@@ -1806,5 +2161,327 @@ mod tests {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].0, 1);
         assert_eq!(pending[0].1.text, "keep me");
+    }
+
+    // --- checkpointing off the UI thread ----------------------------------
+    //
+    // The shell takes a ticket on the UI thread, prepares on a background
+    // thread and commits wherever the result is collected. What matters is
+    // that nothing prepared before a discard lands after it: such a
+    // checkpoint would be offered at the next launch as work the user saved
+    // or threw away.
+
+    /// Every file under `dir` and its contents, to show nothing changed.
+    /// Lock files only by name: Windows refuses reads of a locked file.
+    fn snapshot(dir: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
+        let mut found = BTreeMap::new();
+        let mut dirs = vec![dir.to_path_buf()];
+        while let Some(dir) = dirs.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    dirs.push(path.clone());
+                    found.insert(path, None);
+                } else if path.extension().is_some_and(|x| x == "lock") {
+                    found.insert(path, None);
+                } else {
+                    let bytes = std::fs::read(&path).unwrap();
+                    found.insert(path, Some(bytes));
+                }
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn a_journal_can_be_shared_with_a_background_thread_and_a_prepared_checkpoint_can_cross_to_one()
+    {
+        fn send_and_sync<T: Send + Sync>() {}
+        fn send<T: Send>() {}
+        send_and_sync::<Journal>();
+        send::<Prepared>();
+        send_and_sync::<Ticket>();
+    }
+
+    #[test]
+    fn a_checkpoint_prepared_before_a_discard_is_not_written_by_its_commit() {
+        // Don't Save while the autosave was mid-flight: the discard has to
+        // win, however late the commit arrives.
+        let (_dir, journal) = journal();
+        journal
+            .checkpoint(1, &checkpoint("earlier"), Recovery::Plaintext, None)
+            .unwrap();
+        let ticket = journal.ticket(1);
+        let prepared = journal.prepare(
+            ticket,
+            &checkpoint("thrown away"),
+            Recovery::Plaintext,
+            None,
+        );
+
+        journal.discard(1).unwrap();
+        let written = journal.commit(prepared).unwrap();
+
+        assert_eq!(written, Written::Superseded);
+        assert!(
+            journal.pending().is_empty(),
+            "a checkpoint from before the discard was written after it"
+        );
+    }
+
+    #[test]
+    fn a_sealed_checkpoint_prepared_before_its_path_is_discarded_is_not_written_by_its_commit() {
+        // Sealed checkpoints are filed by path, and a save discards them by
+        // path, so the ticket has to be revoked by path too.
+        let (_dir, journal) = journal();
+        let entry = checkpoint("sealed, then saved");
+        let path = entry.path.clone().unwrap();
+        journal
+            .checkpoint(
+                1,
+                &checkpoint("earlier"),
+                Recovery::Encrypted,
+                Some("hunter2"),
+            )
+            .unwrap();
+        let ticket = journal.ticket(1);
+        let prepared = journal.prepare(ticket, &entry, Recovery::Encrypted, Some("hunter2"));
+
+        journal.discard_sealed_for(&path).unwrap();
+        let written = journal.commit(prepared).unwrap();
+
+        assert_eq!(written, Written::Superseded);
+        assert_eq!(journal.sealed_count(), 0, "the discard was undone");
+        assert_eq!(journal.sealed_pending(&path, "hunter2"), None);
+
+        // A checkpoint begun after the discard is the user's current work.
+        let ticket = journal.ticket(1);
+        let prepared = journal.prepare(ticket, &entry, Recovery::Encrypted, Some("hunter2"));
+        assert_eq!(journal.commit(prepared).unwrap(), Written::Yes);
+        assert_eq!(journal.sealed_pending(&path, "hunter2"), Some(entry));
+    }
+
+    #[test]
+    fn a_newer_ticket_supersedes_an_older_one_whichever_commits_first() {
+        let (_dir, journal) = journal();
+        let older = journal.ticket(1);
+        let newer = journal.ticket(1);
+        let older = journal.prepare(older, &checkpoint("older"), Recovery::Plaintext, None);
+        let newer = journal.prepare(newer, &checkpoint("newer"), Recovery::Plaintext, None);
+
+        assert_eq!(journal.commit(newer).unwrap(), Written::Yes);
+        assert_eq!(journal.commit(older).unwrap(), Written::Superseded);
+        assert_eq!(texts(&journal.pending()), ["newer"]);
+
+        // And the other way round: an older snapshot committed while a newer
+        // one is in flight would only be overwritten a moment later, or --
+        // if the newer turns out to be a refusal -- outlive it.
+        let (_dir, journal) = self::journal();
+        let older = journal.ticket(1);
+        let newer = journal.ticket(1);
+        let older = journal.prepare(older, &checkpoint("older"), Recovery::Plaintext, None);
+        assert_eq!(journal.commit(older).unwrap(), Written::Superseded);
+        let newer = journal.prepare(newer, &checkpoint("newer"), Recovery::Plaintext, None);
+        assert_eq!(journal.commit(newer).unwrap(), Written::Yes);
+        assert_eq!(texts(&journal.pending()), ["newer"]);
+    }
+
+    #[test]
+    fn a_superseded_refusal_does_not_delete_the_newer_checkpoint() {
+        // A refusal's discards were decided for an older snapshot. Carried
+        // out late, they would delete what the newer ticket just wrote.
+        let (_dir, journal) = journal();
+        let ticket = journal.ticket(1);
+        let refusal = journal.prepare(ticket, &checkpoint("old"), Recovery::Disabled, None);
+        journal
+            .checkpoint(1, &checkpoint("keep me"), Recovery::Plaintext, None)
+            .unwrap();
+
+        assert_eq!(journal.commit(refusal).unwrap(), Written::Superseded);
+        assert_eq!(texts(&journal.pending()), ["keep me"]);
+    }
+
+    #[test]
+    fn a_commit_whose_ticket_is_still_newest_writes_exactly_what_checkpoint_would_have() {
+        let entry = checkpoint("the same either way");
+        let path = entry.path.clone().unwrap();
+        let unsaved = Checkpoint {
+            path: None,
+            ..entry.clone()
+        };
+        let cases: [(&Checkpoint, Recovery, Option<&str>); 5] = [
+            (&entry, Recovery::Plaintext, None),
+            (&entry, Recovery::Disabled, None),
+            (&entry, Recovery::Encrypted, None),
+            (&unsaved, Recovery::Encrypted, Some("hunter2")),
+            (&entry, Recovery::Encrypted, Some("hunter2")),
+        ];
+        for (entry, recovery, passphrase) in cases {
+            let (_a, whole) = journal();
+            let (_b, split) = journal();
+            // Something already on disk, so the discards show up too.
+            for journal in [&whole, &split] {
+                journal
+                    .checkpoint(1, &checkpoint("before"), Recovery::Plaintext, None)
+                    .unwrap();
+            }
+
+            let expected = whole.checkpoint(1, entry, recovery, passphrase).unwrap();
+            let ticket = split.ticket(1);
+            let prepared = split.prepare(ticket, entry, recovery, passphrase);
+            let written = split.commit(prepared).unwrap();
+
+            assert_eq!(written, expected, "{recovery:?}");
+            assert_eq!(split.pending(), whole.pending(), "{recovery:?}");
+            assert_eq!(split.sealed_count(), whole.sealed_count(), "{recovery:?}");
+            if let Some(passphrase) = passphrase {
+                assert_eq!(
+                    split.sealed_pending(&path, passphrase),
+                    whole.sealed_pending(&path, passphrase),
+                    "{recovery:?}"
+                );
+            }
+            // Plaintext is deterministic, so compare the very bytes.
+            let bytes = |j: &Journal| std::fs::read(j.own_dir().join("1.json")).ok();
+            assert_eq!(bytes(&split), bytes(&whole), "{recovery:?}");
+        }
+    }
+
+    #[test]
+    fn preparing_a_checkpoint_touches_no_files() {
+        // Not even to create the directory: `prepare` runs on a background
+        // thread and must leave every decision about the disk to `commit`.
+        let (_dir, journal) = journal();
+        for recovery in [Recovery::Plaintext, Recovery::Disabled, Recovery::Encrypted] {
+            let ticket = journal.ticket(1);
+            let _ = journal.prepare(ticket, &checkpoint("x"), recovery, Some("k"));
+        }
+        assert!(!journal.location().exists(), "prepare created the journal");
+
+        // And with checkpoints of both forms on disk that a Disabled policy
+        // would delete, and a fresh sealed one that would replace one.
+        let mut other = checkpoint("sealed");
+        other.path = Some(PathBuf::from("/notes/b.txt"));
+        journal
+            .checkpoint(1, &checkpoint("plain"), Recovery::Plaintext, None)
+            .unwrap();
+        journal
+            .checkpoint(2, &other, Recovery::Encrypted, Some("k"))
+            .unwrap();
+        let before = snapshot(journal.location());
+        for recovery in [Recovery::Plaintext, Recovery::Disabled, Recovery::Encrypted] {
+            for id in [1, 2] {
+                let ticket = journal.ticket(id);
+                let _ = journal.prepare(ticket, &other, recovery, Some("k"));
+            }
+        }
+        assert_eq!(snapshot(journal.location()), before);
+    }
+
+    #[test]
+    fn a_checkpoint_can_be_prepared_on_one_thread_and_committed_on_another() {
+        let (_dir, journal) = journal();
+        let entry = checkpoint("sealed in the background");
+        let path = entry.path.clone().unwrap();
+        let ticket = journal.ticket(1);
+
+        let preparer = journal.clone();
+        let sealing = entry.clone();
+        let prepared = std::thread::spawn(move || {
+            preparer.prepare(ticket, &sealing, Recovery::Encrypted, Some("hunter2"))
+        })
+        .join()
+        .unwrap();
+        let committer = journal.clone();
+        let written = std::thread::spawn(move || committer.commit(prepared).unwrap())
+            .join()
+            .unwrap();
+
+        assert_eq!(written, Written::Yes);
+        assert_eq!(journal.sealed_pending(&path, "hunter2"), Some(entry));
+    }
+
+    #[test]
+    fn a_commit_racing_a_discard_never_leaves_behind_a_checkpoint_taken_before_it() {
+        // Many threads each take a ticket, prepare, and commit at the moment
+        // the owning thread discards. Whichever order the lock gives them,
+        // once the discard has returned and every commit has finished there
+        // must be nothing for that id.
+        let (_dir, journal) = journal();
+        for round in 0..200 {
+            let workers = 4;
+            let ready = Arc::new(Barrier::new(workers + 1));
+            let go = Arc::new(Barrier::new(workers + 1));
+            let handles: Vec<_> = (0..workers)
+                .map(|n| {
+                    let journal = journal.clone();
+                    let (ready, go) = (Arc::clone(&ready), Arc::clone(&go));
+                    std::thread::spawn(move || {
+                        let ticket = journal.ticket(1);
+                        let text = format!("round {round}, worker {n}");
+                        let prepared =
+                            journal.prepare(ticket, &checkpoint(&text), Recovery::Plaintext, None);
+                        ready.wait();
+                        go.wait();
+                        journal.commit(prepared).unwrap()
+                    })
+                })
+                .collect();
+            // Every ticket is taken before the discard begins.
+            ready.wait();
+            go.wait();
+            journal.discard(1).unwrap();
+            let written: Vec<Written> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+            assert!(
+                written.iter().filter(|w| **w == Written::Yes).count() <= 1,
+                "round {round}: more than one ticket was newest: {written:?}"
+            );
+            assert!(
+                journal.pending().is_empty(),
+                "round {round}: a checkpoint from before the discard survived it"
+            );
+        }
+
+        // A ticket taken after the discard is new work, and is written.
+        let ticket = journal.ticket(1);
+        let prepared = journal.prepare(ticket, &checkpoint("after"), Recovery::Plaintext, None);
+        assert_eq!(journal.commit(prepared).unwrap(), Written::Yes);
+        assert_eq!(texts(&journal.pending()), ["after"]);
+    }
+
+    #[test]
+    fn a_discarded_journal_forgets_its_tickets_rather_than_accumulating_them() {
+        // Every encrypted document ever saved would otherwise leave a fence
+        // behind for the life of the process.
+        let (_dir, journal) = journal();
+        for id in 1..50 {
+            let ticket = journal.ticket(id);
+            let prepared = journal.prepare(ticket, &checkpoint("x"), Recovery::Disabled, None);
+            journal.commit(prepared).unwrap();
+            journal
+                .discard_sealed_for(Path::new(&format!("/notes/{id}.txt")))
+                .unwrap();
+        }
+        let tickets = journal.tickets();
+        assert!(tickets.newest.is_empty(), "{:?}", tickets.newest);
+        assert!(tickets.fences.is_empty(), "{:?}", tickets.fences);
+    }
+
+    #[test]
+    fn a_prepared_checkpoint_does_not_print_the_document_text() {
+        let (_dir, journal) = journal();
+        let ticket = journal.ticket(1);
+        let prepared = journal.prepare(
+            ticket,
+            &checkpoint("private words"),
+            Recovery::Plaintext,
+            None,
+        );
+        let shown = format!("{prepared:?}");
+        assert!(!shown.contains("private"), "{shown}");
     }
 }
