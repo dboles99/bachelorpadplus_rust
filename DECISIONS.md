@@ -42,27 +42,20 @@ Adding a decision means adding both.
 
 ## Decisions needed before the work they block
 
-- **Where a signing key lives** (phase 16). `bp-crypto` signs and verifies,
-  and both are tested; Verify Signature is reachable and Sign Document is
-  greyed, because an Ed25519 signing key has to be kept somewhere and this
-  product has no key store, no platform-keyring integration (Windows DPAPI,
-  Linux Secret Service -- phase 18) and no decision on file permissions for a
-  key sitting on disk. specs.md section 15 asks for all three. The row states
-  the gap rather than a key appearing in the config directory because a menu
-  row needed one.
-- **What may leave the machine** (phase 8 layer three, phase 10). Generative
-  providers and embeddings both imply sending document content somewhere.
-  ADR-0006 keeps them optional; ADR-0011 governs what is permitted. Neither
-  says which providers are acceptable.
-- **Whether `bp-storage` may record extracted titles before phase 14 exists**
-  (phase 9). ADR-0019 currently says no, and that is why the crate is built
-  and unreachable. Everything phase 9 wants -- related notes, duplicate
-  detection -- needs something recorded about each document, so this decision
-  gates the phase rather than merely delaying it. Reversing it is allowed;
-  doing so by accident is not.
-- **specs.md section 22's warm-start target** (75 ms) is still unverified —
-  the software renderer's time to first interaction cannot be measured, so
-  half of ADR-0017's target has no number behind it.
+The one list of open questions is
+[`project/DECISIONS_NEEDED.md`](project/DECISIONS_NEEDED.md). It is kept
+current as work happens, and an answered row moves from there into an ADR and
+the table above. This section used to carry its own subset, which went stale
+the moment the queue moved; it no longer duplicates it.
+[`project/RELEASE_PLAN.md`](project/RELEASE_PLAN.md) §4 orders the same
+questions by the milestone each one blocks. Of that list, decisions 1, 2, 4,
+5, 6, 7 and 16 were answered on 2026-09-25 (ADR-0030 to ADR-0033), which
+settles D5, D8, D9 and U2; decision 2's copyright holder is still open, and
+decision 3, the signing identity, is being applied for by the owner.
+
+specs.md section 22's warm-start target (75 ms) is a measurement still owed,
+not a decision; it is under *Open items* below with the rest of ADR-0017's
+unmeasured half.
 
 ## Open items
 
@@ -98,6 +91,10 @@ Adding a decision means adding both.
   the signing-key question. ADR-0001's own warning about `cfg`-gated code
   argues against two crates whose contents each CI leg never compiles.
   Revisit when something genuinely platform-specific has to be linked.
+  Since then D8 and the signing-key question are answered, and ADR-0033
+  (2026-09-25) names `bp-platform-windows` as the one crate allowed
+  `windows-sys` and confined `unsafe`, for when Win32 calls are needed. It
+  has not been created yet.
 
 - **`bp-search` and `bp-buffer` do not agree what a line is, and this is
   now a decision rather than a bug report.** `bp_search::Offsets` counts
@@ -107,9 +104,11 @@ Adding a decision means adding both.
   search reports line 1 and the buffer reports line 3, so a find-in-files
   result scrolls the editor to the wrong line in any file carrying a bare CR.
   The same split exists inside `bp-buffer` — the free `line_count` counts
-  newlines, `Buffer::len_lines` asks the rope — and `bp-ui` uses one for the
-  `TextInput` status bar and the other for the `EditorSurface` one, so the
-  same document reports two line counts depending on which view draws.
+  newlines, `Buffer::len_lines` asks the rope. `bp-ui` used to use one for
+  the `TextInput` status bar and the other for the `EditorSurface` one; it
+  now asks the rope in both views, so the status bar agrees with itself, and
+  the disagreement left is Find in Files, whose line numbers come from
+  `bp-search`.
   Either `bp-search` adopts ropey's break set or `bp-buffer` builds its rope
   without `unicode_lines`; one line definition has to win, and that is an
   ADR. Found by the cross-crate tests, pinned as an ignored test naming it.
@@ -140,28 +139,33 @@ Adding a decision means adding both.
   ships and ADR-0022 seals the journal with the document's own passphrase.
   The remaining hole is narrower, and is the next item: a *plaintext*
   document under those profiles has no key, so it gets no journal at all.
-- **The custom editor view has never been typed into.** Its rules are covered
-  by 147 tests in `bp-editor`; the widget has been verified to exactly one
-  standard, that it renders a frame with a real file open without panicking.
-  Whether keys arrive, whether the caret lands under the pointer and which
-  way the wheel scrolls are all open. `project/NEXT_SESSION.md` has the
-  checklist.
+- **The custom editor view has been driven end to end, but not by a
+  person.** Its rules are covered by some 200 tests in `bp-editor`. The sixth
+  session drove the binary under `--editor-view` on a virtual X display with
+  synthetic input: keys arrive, Ctrl+S saves every edit, Home/End/Page
+  Up/Page Down land where they should, and Ln/Col tracks the caret. The Linux
+  caret drift it found (a proportional fallback for "Consolas") was fixed by
+  bundling DejaVu Sans Mono (ADR-0032, M0-03). Whether the caret lands under
+  the pointer since that fix, and which way the wheel scrolls, are **not yet
+  verified**: the headless window tests send keys, not pointer placement, and
+  no person has run the checklist in `project/NEXT_SESSION.md`.
 
-  This used to carry "nothing depends on the answers yet". **That is no
-  longer true.** Duplicate Line and Move Line Up/Down are enabled only under
-  `--editor-view`, and Go to Line will be, so features now inherit whatever
-  that caret does. The default is still `TextInput`, so nothing is *broken*
-  by the answer being bad -- but a growing set of the product is unusable
-  until somebody gives it.
+  This used to say that caret features depended on the custom view's answer.
+  **That is no longer true.** Go to Line shipped (W5), and since release-plan
+  item M1-04 it, Duplicate Line, Move Line Up/Down, Insert Date/Time and
+  Ln/Col all work in the default `TextInput` view too, which reads the
+  widget's caret. The default is still `TextInput`, so a bad answer here
+  affects only those who opt in.
 - **A clipboard menu row can act on a different entry than the one it
   names.** Row ids are decoded against the clipboard history as it is at the
   moment of the click, not as it was when the menu was built, and a 1.2 s
   poll timer can add an entry in between. Predates the paste-transformation
   rows and applies equally to plain paste. Fixing it properly means freezing
   a snapshot of the history while a menu is open, which is a design question
-  rather than a patch.
-- **Most of the product has not been used.** 542 tests cover the pieces in
-  isolation. One manual pass found two defects no test caught: a menu bar
-  where twelve of fourteen menus swallowed clicks, and Save As defaulting to
-  the process working directory, which wrote real documents into a git
-  checkout. Integrated behaviour needs exercising, not more unit tests.
+  rather than a patch (U5 in `project/DECISIONS_NEEDED.md`).
+- **Most of the product has not been used.** Over 2,000 tests cover the
+  pieces and, since the window tests, some of the seams. One manual pass
+  found two defects no test caught: a menu bar where twelve of fourteen menus
+  swallowed clicks, and Save As defaulting to the process working directory,
+  which wrote real documents into a git checkout. Integrated behaviour needs
+  exercising, not more unit tests.

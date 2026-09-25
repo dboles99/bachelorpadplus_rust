@@ -2,7 +2,7 @@
 
 This is not an MVP roadmap. Each phase contributes to the full v1 target.
 
-Status as of **2026-08-20**. Three words, meaning three different things:
+Status as of **2026-09-25**. Three words, meaning three different things:
 
 - **Done** — the phase's work is finished.
 - **Started** — a real, tested slice exists *and is reachable from the
@@ -63,8 +63,11 @@ YAML, phase 16's redaction and metadata inspector all have menu rows now, the
 audit log's sealed destination has an implementor instead of refusing every
 append, and phases 16 and 18 gained Verify Signature and Set as Default
 Editor. What is still built and unreachable is `bp-buffer`'s large-file
-engine, `bp-notebook`, `bp-research` and `bp-storage` -- so opening a 2 GB
-file still loads 2 GB. `bp-audit` came off that list when Security ▸ Security
+engine, `bp-notebook`, `bp-research` and `bp-storage` -- so a 2 GB file
+still cannot be viewed: the open path refuses anything past the 32 MiB
+editable limit before reading it (M0-04), and the read-only viewer that would
+take it over is release-plan item M1-06. `bp-audit` came off that list when
+Security ▸ Security
 History shipped: five capabilities write into it and one row reads it back.
 
 **Cross-crate tests have found seven defects; six are fixed and one is a decision.** Until the
@@ -121,7 +124,11 @@ and records nothing under `Disabled`. The Security menu sets the profile and
 states what it permits; the status bar shows anything other than the default.
 
 Two limits are deliberate and visible. Profiles requiring an encrypted journal
-cannot be honoured until `bp-crypto` (phase 15), so recovery is refused rather
-than downgraded — the menu says "off until encryption ships". And `bp-storage`
-is still not called by the application: that is ADR-0019's product decision,
-which the profile model makes revisitable rather than reversible by hand.
+are honoured now that `bp-crypto` (phase 15) ships: ADR-0022 seals the journal
+with the document's own passphrase. A *plaintext* document under those
+profiles has no key, so its recovery is refused rather than downgraded — the
+Security menu says "off until the document is encrypted", and Encrypt
+Document is what fixes it. And `bp-storage` is still not called by the
+application: that is ADR-0019's product decision, confirmed for RC1 by
+ADR-0030, which the profile model makes revisitable rather than reversible by
+hand.

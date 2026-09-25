@@ -6,7 +6,7 @@ It begins as a fast Notepad-like editor and progressively adds:
 
 - semantic filenames using `Title_DDMMMYYYY.ext`
 - full-path and last-save visibility
-- rope-based editing and huge-file / memory-mapped modes
+- rope-based editing and a read-only huge-file mode (chunked reads; memory mapping is declined, ADR-0027 and ADR-0030)
 - Markdown, YAML, JSON, JSONL/NDJSON, TOML, CSV/TSV, XML and source-code awareness
 - semantic organization, related notes, duplicate detection and hybrid search
 - Jupyter-compatible notebook behavior and mixed-language execution
@@ -169,10 +169,13 @@ where they are, in use, and says so ([ADR-0029](docs/decisions/ADR-0029.md)).
   now counted rather than remembered.** `bp-research`, `bp-notebook` and
   `bp-storage` have zero reverse dependencies anywhere in the application:
   nothing in `bp-ui`, in `apps/bachelorpad`, or in any other `bp-*` crate
-  names them. `bp-notebook` is reached only by the fuzz harness. `bp-audit`
+  names them. `bp-notebook` is reached only by the fuzz harness and the
+  cross-crate tests, `bp-storage` only by the latter. `bp-audit`
   came off this list when Security ▸ Security History shipped. Add `bp-buffer`'s
-  large-file engine -- depended on, but `LargeFile` and `SizeClass` appear
-  nowhere outside their own crate, so opening a 2 GB file still loads 2 GB --
+  large-file engine -- depended on, and its `SizeClass` now drives the open
+  path's size guard, but the `LargeFile` viewer appears nowhere outside its
+  own crate, so a file past the 32 MiB editable limit is refused with a
+  notice rather than opened (the viewer is release-plan item M1-06) --
   and it is over ten thousand lines defended by 237 unit tests that no user
   can reach. It is still the largest thing standing between this
   repository and a product.
@@ -180,9 +183,9 @@ where they are, in use, and says so ([ADR-0029](docs/decisions/ADR-0029.md)).
   | Crate | Lines | Tests | Reached by |
   | --- | --- | --- | --- |
   | `bp-research` | 5,208 | 161 | nothing |
-  | `bp-notebook` | 3,514 | 55 | the fuzz harness only |
+  | `bp-notebook` | 3,514 | 55 | the fuzz harness and cross-crate tests only |
   | `bp-buffer` ▸ `large.rs` | 1,198 | — | nothing |
-  | `bp-storage` | 721 | 21 | nothing, by decision (ADR-0019) |
+  | `bp-storage` | 721 | 21 | nothing, by decision (ADR-0019; kept unwired for RC1 by ADR-0030) |
 
   `bp-integrity`, `bp-platform` and `bp-redaction` came off this list --
   Verify Signature, Set as Default Editor, redaction and the metadata
