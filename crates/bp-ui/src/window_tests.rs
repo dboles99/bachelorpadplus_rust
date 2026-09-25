@@ -949,3 +949,34 @@ fn find_selects_the_match_itself_after_accented_text() {
     type_text(&ui, "HIT");
     assert_eq!(ui.get_doc_text(), "ééé HIT\n");
 }
+
+#[test]
+fn ctrl_tab_and_ctrl_shift_tab_walk_the_tabs_and_wrap() {
+    let mut state = crate::state::AppState::new();
+    state.edit("first".to_owned());
+    state.new_document();
+    state.edit("second".to_owned());
+    state.new_document();
+    state.edit("third".to_owned());
+    let (ui, _) = wired(state);
+    assert_eq!(ui.get_doc_text(), "third");
+
+    chord(&ui, Key::Control, Key::Tab);
+    assert_eq!(
+        ui.get_doc_text(),
+        "first",
+        "past the last wraps to the first"
+    );
+    chord(&ui, Key::Control, Key::Tab);
+    assert_eq!(ui.get_doc_text(), "second");
+
+    ui.window().dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Shift.into(),
+    });
+    chord(&ui, Key::Control, Key::Tab);
+    ui.window().dispatch_event(WindowEvent::KeyReleased {
+        text: Key::Shift.into(),
+    });
+    assert_eq!(ui.get_doc_text(), "first", "Ctrl+Shift+Tab went forward");
+    assert!(!ui.get_doc_text().contains('\t'), "a tab was typed");
+}
