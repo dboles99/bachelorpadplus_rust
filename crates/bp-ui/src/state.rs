@@ -1880,6 +1880,58 @@ impl AppState {
         }
     }
 
+    /// Open every file in `paths`, as File ▸ Open with several chosen does.
+    ///
+    /// Returns whether the passphrase bar should open. Only one passphrase
+    /// can be asked at a time, so the first encrypted file asks and any
+    /// further ones are named in the status bar to open one by one --
+    /// better than guessing that one passphrase fits them all. What each
+    /// open reports is kept, rather than each wiping the last.
+    pub(crate) fn open_many(&mut self, paths: Vec<PathBuf>) -> bool {
+        let mut notices = Vec::new();
+        let mut asking = false;
+        let mut locked_later = Vec::new();
+        for path in paths {
+            let encrypted = std::fs::read(&path).is_ok_and(|bytes| bp_crypto::is_bpadx(&bytes));
+            if encrypted && asking {
+                locked_later.push(path.file_name().map_or_else(
+                    || path.display().to_string(),
+                    |n| n.to_string_lossy().into_owned(),
+                ));
+                continue;
+            }
+            asking |= self.open_maybe_encrypted(path);
+            notices.extend(self.error.take());
+        }
+        if !locked_later.is_empty() {
+            notices.push(format!(
+                "also encrypted, open separately: {}",
+                locked_later.join(", ")
+            ));
+        }
+        self.error = (!notices.is_empty()).then(|| notices.join("; "));
+        asking
+    }
+
+    /// Make the next tab active, or the previous one, wrapping at either
+    /// end (Ctrl+Tab and Ctrl+Shift+Tab).
+    pub(crate) fn cycle_tab(&mut self, forward: bool) {
+        let ids: Vec<DocumentId> = self.workspace.iter().map(Document::id).collect();
+        let Some(at) = self
+            .workspace
+            .active_id()
+            .and_then(|active| ids.iter().position(|&id| id == active))
+        else {
+            return;
+        };
+        let next = if forward {
+            (at + 1) % ids.len()
+        } else {
+            (at + ids.len() - 1) % ids.len()
+        };
+        self.workspace.set_active(ids[next]);
+    }
+
     /// Answer whatever the passphrase bar was asking.
     ///
     /// Returns whether the bar should stay open: a wrong passphrase keeps it
@@ -3671,6 +3723,42 @@ mod tests {
         let mut second = AppState::at(&places);
         second.open(path);
         assert_eq!(second.security(), bp_security::Security::default());
+    }
+
+    #[test]
+    fn opening_several_files_keeps_every_notice_and_asks_one_passphrase() {
+        let dir = tempfile::tempdir().unwrap();
+        let plain = dir.path().join("plain.txt");
+        std::fs::write(&plain, "text\n").unwrap();
+        let missing = dir.path().join("missing.txt");
+        let sealed = |name: &str| {
+            let path = dir.path().join(name);
+            let bytes =
+                bp_crypto::seal(b"secret", "pass", bp_crypto::SealOptions::default()).unwrap();
+            std::fs::write(&path, bytes).unwrap();
+            path
+        };
+        let (one, two) = (sealed("one.bpadx"), sealed("two.bpadx"));
+        let mut state = AppState::new();
+
+        let asking = state.open_many(vec![plain.clone(), missing, one, two]);
+
+        assert!(asking, "the first encrypted file should ask");
+        assert!(
+            state
+                .workspace
+                .iter()
+                .any(|d| d.path() == Some(plain.as_path()))
+        );
+        let notice = state.error.clone().unwrap_or_default();
+        assert!(
+            notice.contains("missing.txt"),
+            "the failed open was lost: {notice}"
+        );
+        assert!(
+            notice.contains("two.bpadx"),
+            "the second locked file vanished: {notice}"
+        );
     }
 
     #[test]

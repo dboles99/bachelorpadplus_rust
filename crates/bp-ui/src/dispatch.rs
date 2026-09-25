@@ -110,10 +110,11 @@ fn reveal(dir: &std::path::Path) -> Result<(), String> {
 }
 
 /// Open a file, starting in a sensible directory.
-pub(crate) fn pick_file(state: &crate::state::AppState) -> Option<PathBuf> {
+pub(crate) fn pick_files(state: &crate::state::AppState) -> Vec<PathBuf> {
     rfd::FileDialog::new()
         .set_directory(state.dialog_directory())
-        .pick_file()
+        .pick_files()
+        .unwrap_or_default()
 }
 
 /// Choose a save location, starting in a sensible directory with the
@@ -323,16 +324,16 @@ pub fn handle_menu_action(
     match id {
         action::NEW => state.borrow_mut().new_document(),
         action::OPEN => {
-            let chosen = pick_file(&state.borrow());
-            if let Some(path) = chosen {
-                // An encrypted file does not become a tab until it is
-                // unlocked: a tab nobody can read looks like an empty
-                // document, and saving it would write emptiness over the
-                // real one.
-                if state.borrow_mut().open_maybe_encrypted(path) {
-                    ui.invoke_focus_passphrase();
-                    return None;
-                }
+            let chosen = pick_files(&state.borrow());
+            // An encrypted file does not become a tab until it is unlocked:
+            // a tab nobody can read looks like an empty document, and saving
+            // it would write emptiness over the real one.
+            let asking = state.borrow_mut().open_many(chosen);
+            if asking {
+                // Refreshed first, so the bar shows this question's prompt.
+                refresh(ui, &mut state.borrow_mut(), PushText::Yes);
+                ui.invoke_focus_passphrase();
+                return None;
             }
         }
         action::SAVE => {

@@ -127,6 +127,8 @@ export component AppWindow inherits Window {
     /// on that tab rather than on whichever happens to be active.
     callback tab-context-target(int);
     callback close-active-tab();
+    /// Ctrl+Tab (true) and Ctrl+Shift+Tab (false).
+    callback cycle-tab(bool);
     callback cycle-theme();
     callback text-edited(string);
     /// The `TextInput` view's caret and selection anchor, as UTF-8 byte
@@ -474,6 +476,20 @@ export component AppWindow inherits Window {
             keys: @keys(Control + "0");
             activated => {
                 root.dispatch(34);
+            }
+        }
+        // Next and previous tab. Caught here, in the capture phase, before
+        // the editor would take Tab as a character to insert.
+        KeyBinding {
+            keys: @keys(Control + Tab);
+            activated => {
+                root.cycle-tab(true);
+            }
+        }
+        KeyBinding {
+            keys: @keys(Control + Shift + Tab);
+            activated => {
+                root.cycle-tab(false);
             }
         }
         // Settings (bp-ui/src/menus.rs id 230), on the key most desktop

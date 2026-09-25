@@ -267,11 +267,6 @@ fn ui_query(ui: &AppWindow) -> bp_search::Query {
     )
 }
 
-/// Open a file, starting in a sensible directory.
-pub(crate) fn pick_file(state: &state::AppState) -> Option<PathBuf> {
-    dispatch::pick_file(state)
-}
-
 /// Whatever the OS clipboard holds, if it holds text.
 /// Read the OS clipboard, if it holds text.
 ///
@@ -493,11 +488,17 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
         s.new_document();
     });
 
-    wire!(on_open_document, |s| {
-        if let Some(path) = pick_file(&s) {
-            s.open(path);
-        }
-    });
+    // Ctrl+O, the same as the menu row -- which, unlike the handler that
+    // used to be here, knows an encrypted file from a plain one.
+    {
+        let cell = Rc::clone(&state);
+        let weak = ui.as_weak();
+        ui.on_open_document(move || {
+            if let Some(ui) = weak.upgrade() {
+                let _ = dispatch::handle_menu_action(&ui, &cell, menus::action::OPEN);
+            }
+        });
+    }
 
     {
         let cell = Rc::clone(&state);
@@ -1147,9 +1148,21 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
     Ok(())
 }
 
-/// Wire the editor's text, caret and Go to Line callbacks. A function of
-/// its own so the window tests drive exactly what `run_with` wires.
+/// Wire the editor's text, caret, Go to Line and tab-cycling callbacks. A
+/// function of its own so the window tests drive exactly what `run_with`
+/// wires.
 fn bind_editing(ui: &AppWindow, state: &Rc<RefCell<state::AppState>>) {
+    // Ctrl+Tab and Ctrl+Shift+Tab.
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_cycle_tab(move |forward| {
+            let Some(ui) = weak.upgrade() else { return };
+            cell.borrow_mut().cycle_tab(forward);
+            refresh(&ui, &mut cell.borrow_mut(), state::PushText::Yes);
+        });
+    }
+
     {
         let cell = Rc::clone(state);
         let weak = ui.as_weak();
