@@ -2,6 +2,7 @@
 name = "bp-platform"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 # No third-party dependencies, on purpose. Everything this crate needs from

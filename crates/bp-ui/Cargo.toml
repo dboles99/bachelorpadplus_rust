@@ -2,6 +2,7 @@
 name = "bp-ui"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [lints]
@@ -44,10 +45,38 @@ bp-semantic = { path = "../bp-semantic" }
 bp-files = { path = "../bp-files" }
 bp-naming = { path = "../bp-naming" }
 bp-theme = { path = "../bp-theme" }
-arboard = "3"
+# Text only: the editor reads and writes plain text and never an image.
+# `image-data` (a default) would pull in the `image` crate and, on Windows,
+# GDI bindings for a feature nothing here calls. `wayland-data-control` is not
+# a default and was never on: under Wayland the clipboard goes through
+# XWayland, as before. Turning it on is a behaviour change with its own
+# trade-offs (compositors without the data-control protocol), not hygiene.
+arboard = { version = "3", default-features = false }
 # Passphrases and decrypted document bytes are wiped rather than dropped.
 zeroize.workspace = true
-slint = "1.17"
+# Exactly what the shell uses, so nothing ships that nothing calls. Slint's
+# defaults add `system-tray` -- a tray icon this editor does not have, and on
+# Linux a D-Bus StatusNotifier stack behind it.
+#
+# * `std`, `compat-1-2` -- the baseline; Slint refuses to build without
+#   `compat-1-2`.
+# * `backend-winit` -- the windowing backend on Windows and Linux (X11 and
+#   Wayland both). It is what `backend-default` resolves to on these targets,
+#   named directly so a change to Slint's default is not a silent change here.
+# * `renderer-software` -- the default renderer (ADR-0017, `Renderer::Software`
+#   in `run_with`), and what `window_tests.rs` draws with.
+# * `renderer-femtovg` -- `Renderer::Platform` (`--renderer platform`), the
+#   GPU path Slint picks when not told otherwise. Kept so that option, and the
+#   fallback when the software renderer cannot be selected, still work.
+# * `accessibility` -- AccessKit, so screen readers can read the window.
+slint = { version = "1.17", default-features = false, features = [
+    "std",
+    "compat-1-2",
+    "backend-winit",
+    "renderer-software",
+    "renderer-femtovg",
+    "accessibility",
+] }
 # Native file dialogs -- and only those. Every message dialog is drawn in the
 # window instead (`ui/dialog.slint`, release plan M1-01): on Linux rfd shows
 # one by running zenity, which many desktops do not have. xdg-portal rather
