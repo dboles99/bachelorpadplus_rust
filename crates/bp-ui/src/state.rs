@@ -2205,13 +2205,58 @@ impl AppState {
     /// Prefers a title extracted from the document's own content — that is
     /// the "Semantic Filing Apparatus" doing its job — and falls back to the
     /// document's title when there is nothing to extract.
+    ///
+    /// Free in the folder the dialog opens in (release plan M1-17): a name
+    /// that is taken gets the grammar's collision suffix, so accepting the
+    /// suggestion never offers to overwrite some other file. The document's
+    /// own file does not count as taken -- saving over it is what saving is.
     pub(crate) fn suggested_filename(&self, id: DocumentId) -> String {
-        self.semantic_filename(id).unwrap_or_else(|| {
+        let suggested = self.semantic_filename(id).unwrap_or_else(|| {
             self.workspace.get(id).map_or_else(
                 || "Untitled.txt".to_owned(),
                 |doc| SemanticName::new(doc.title(), doc.created_at().date(), "txt").to_filename(),
             )
+        });
+        let Some(name) = SemanticName::parse(&suggested) else {
+            return suggested;
+        };
+        let dir = self.dialog_directory();
+        let own = self.workspace.get(id).and_then(Document::path);
+        name.resolve_collision(|candidate| {
+            let path = dir.join(candidate);
+            path.exists() && Some(path.as_path()) != own
         })
+        .map_or(suggested, |free| free.to_filename())
+    }
+
+    /// Where Save as New Revision would write `id`: the same name with the
+    /// next revision suffix, in the same folder, and free.
+    ///
+    /// A name already in the grammar keeps its title and date and gains or
+    /// bumps its `_vN`. Any other name is brought into the grammar first --
+    /// `notes.txt` becomes `notes_v2_<date>.txt` -- because a revision
+    /// suffix has nowhere defined to go on a name without the grammar's
+    /// date anchor. `None` for a document with no file: there is nothing to
+    /// be a revision of.
+    pub(crate) fn next_revision_path(&self, id: DocumentId) -> Option<PathBuf> {
+        let doc = self.workspace.get(id)?;
+        let path = doc.path()?;
+        let dir = path.parent()?;
+        let file_name = path.file_name()?.to_string_lossy();
+        let current = SemanticName::parse(&file_name).unwrap_or_else(|| {
+            let stem = path
+                .file_stem()
+                .map_or_else(String::new, |s| s.to_string_lossy().into_owned());
+            let extension = path
+                .extension()
+                .map_or_else(|| "txt".to_owned(), |e| e.to_string_lossy().into_owned());
+            SemanticName::new(&stem, doc.created_at().date(), &extension)
+        });
+        let revision = current
+            .revision()
+            .map_or(bp_naming::FIRST_REVISION, |n| n.saturating_add(1));
+        let next = current.with_revision(Some(revision)).with_collision(None);
+        bp_files::resolve_in_dir(dir, &next)
     }
 
     /// Forget an encrypted document's passphrase.
@@ -3759,6 +3804,80 @@ mod tests {
             notice.contains("two.bpadx"),
             "the second locked file vanished: {notice}"
         );
+    }
+
+    #[test]
+    fn the_suggested_name_steps_round_a_file_that_already_has_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = AppState::new();
+        let path = dir.path().join("here.txt");
+        std::fs::write(&path, "# Budget\n").unwrap();
+        state.open(path);
+        let id = state.workspace.active_id().unwrap();
+        let first = state.suggested_filename(id);
+        std::fs::write(dir.path().join(&first), "somebody else's").unwrap();
+
+        let second = state.suggested_filename(id);
+
+        assert_ne!(first, second, "a taken name was offered again");
+        let parsed = SemanticName::parse(&second).expect("still in the grammar");
+        assert_eq!(parsed.collision(), Some(bp_naming::FIRST_COLLISION));
+    }
+
+    #[test]
+    fn a_documents_own_file_is_not_a_collision_for_its_suggestion() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Budget_02MAR2026.txt");
+        std::fs::write(&path, "# Budget\n").unwrap();
+        let mut state = AppState::new();
+        state.open(path);
+        let id = state.workspace.active_id().unwrap();
+
+        assert_eq!(state.suggested_filename(id), "Budget_02MAR2026.txt");
+    }
+
+    #[test]
+    fn a_new_revision_bumps_the_suffix_and_skips_one_that_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Budget_v2_02MAR2026.txt");
+        std::fs::write(&path, "text\n").unwrap();
+        std::fs::write(dir.path().join("Budget_v3_02MAR2026.txt"), "taken").unwrap();
+        let mut state = AppState::new();
+        state.open(path);
+        let id = state.workspace.active_id().unwrap();
+
+        let next = state.next_revision_path(id).expect("a path");
+
+        assert_eq!(
+            next.file_name().unwrap(),
+            "Budget_v3_02MAR2026_02.txt",
+            "v3 is the next revision; the file already called that is not overwritten"
+        );
+    }
+
+    #[test]
+    fn a_plain_name_is_brought_into_the_grammar_for_its_first_revision() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.md");
+        std::fs::write(&path, "text\n").unwrap();
+        let mut state = AppState::new();
+        state.open(path);
+        let id = state.workspace.active_id().unwrap();
+
+        let next = state.next_revision_path(id).expect("a path");
+        let name = next.file_name().unwrap().to_string_lossy().into_owned();
+        let parsed = SemanticName::parse(&name).expect("in the grammar");
+
+        assert_eq!(parsed.title(), "notes");
+        assert_eq!(parsed.revision(), Some(2));
+        assert_eq!(parsed.extension(), "md");
+    }
+
+    #[test]
+    fn an_untitled_document_has_no_revision_to_save() {
+        let state = AppState::new();
+        let id = state.workspace.active_id().unwrap();
+        assert_eq!(state.next_revision_path(id), None);
     }
 
     #[test]

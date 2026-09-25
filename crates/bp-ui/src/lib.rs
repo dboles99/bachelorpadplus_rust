@@ -1519,10 +1519,20 @@ fn save_or_pick(
 /// Save As: ask where, save there, and refresh.
 pub(crate) fn save_as(ui: &AppWindow, cell: &Rc<RefCell<state::AppState>>, id: DocumentId) {
     let chosen = dispatch::pick_save_path(&cell.borrow(), id);
-    let Some(path) = chosen else {
-        refresh(ui, &mut cell.borrow_mut(), state::PushText::Yes);
-        return;
-    };
+    match chosen {
+        Some(path) => save_to(ui, cell, id, path),
+        None => refresh(ui, &mut cell.borrow_mut(), state::PushText::Yes),
+    }
+}
+
+/// Save `id` to `path` -- which it then belongs to, as after Save As --
+/// offering UTF-8 if its encoding cannot hold it, and refresh.
+pub(crate) fn save_to(
+    ui: &AppWindow,
+    cell: &Rc<RefCell<state::AppState>>,
+    id: DocumentId,
+    path: PathBuf,
+) {
     let result = cell.borrow_mut().save_document(id, Some(path.clone()));
     offer_utf8(ui, cell, id, result, Some(path), refresh_after(cell));
 }
