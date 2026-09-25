@@ -18,6 +18,8 @@ import { MenuLabel } from "menu.slint";
 import { Palette } from "types.slint";
 
 export component PassphraseBar inherits Rectangle {
+    accessible-role: form;
+    accessible-label: "Passphrase";
     in property <bool> open;
     /// What this is asking for -- unlocking an existing document, setting a
     /// new passphrase, or confirming one just typed. The caller words it,

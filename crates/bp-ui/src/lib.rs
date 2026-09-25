@@ -245,6 +245,13 @@ fn refresh(ui: &AppWindow, state: &mut state::AppState, push_text: state::PushTe
 
 /// Menus whose contents never change. Set once, not on every refresh.
 fn set_static_menus(ui: &AppWindow) {
+    // Keyboard movement through any menu: the search lives in Rust, where
+    // it is tested, because Slint has no loops.
+    ui.global::<MenuNav>().on_next(|items, from, delta| {
+        use slint::Model as _;
+        let enabled: Vec<bool> = items.iter().map(|item| item.enabled).collect();
+        menus::next_live_row(&enabled, from, delta)
+    });
     let model = |items: Vec<MenuItem>| slint::ModelRc::new(slint::VecModel::from(items));
     ui.set_help_items(model(menus::help()));
     ui.set_notebook_items(model(menus::planned_menu("Notebook")));

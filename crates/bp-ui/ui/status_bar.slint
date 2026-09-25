@@ -36,6 +36,11 @@ export component StatusBar inherits Rectangle {
     callback cycle-theme();
 
     height: 44px;
+    // The status line is where the app answers -- "saved", a refusal, a
+    // count -- so a screen reader is told when it changes, without
+    // interrupting (release plan M2-14).
+    accessible-role: content-info;
+    accessible-label: "Status";
     background: Palette.panel;
 
     VerticalLayout {
@@ -114,6 +119,7 @@ export component StatusBar inherits Rectangle {
                 horizontal-stretch: 55;
             }
             if root.error-message != "": Text {
+                accessible-live-region: polite;
                 text: root.error-message;
                 color: Palette.accent;
                 font-size: 12px;

@@ -1148,3 +1148,111 @@ fn a_line_past_the_end_lands_on_the_last_and_says_so() {
     assert!(notice.contains("--line 500"), "{notice}");
     assert!(ui.get_status_notice().contains("--line 500"));
 }
+
+// --- the menu bar from the keyboard (release plan M2-14) -----------------
+
+#[test]
+fn f10_opens_the_first_menu_and_enter_chooses_its_first_row() {
+    let (ui, cell) = wired(crate::state::AppState::new());
+    crate::set_static_menus(&ui);
+    let before = cell.borrow().workspace.len();
+
+    press(&ui, Key::F10);
+    press(&ui, Key::Return);
+
+    // File's first row is New.
+    assert_eq!(
+        cell.borrow().workspace.len(),
+        before + 1,
+        "Enter did not choose New"
+    );
+}
+
+#[test]
+fn the_arrows_move_through_a_menu_and_right_moves_to_the_next_one() {
+    let (ui, cell) = wired(crate::state::AppState::new());
+    crate::set_static_menus(&ui);
+    let before = cell.borrow().workspace.len();
+
+    // File, then Right to Edit, then Left back to File: New again.
+    press(&ui, Key::F10);
+    press(&ui, Key::RightArrow);
+    press(&ui, Key::LeftArrow);
+    press(&ui, Key::Return);
+    assert_eq!(cell.borrow().workspace.len(), before + 1);
+}
+
+#[test]
+fn escape_closes_a_menu_and_typing_reaches_the_document_again() {
+    let (ui, _) = wired(crate::state::AppState::new());
+    crate::set_static_menus(&ui);
+    press(&ui, Key::F10);
+    type_text(&ui, "x");
+    assert_eq!(
+        ui.get_doc_text(),
+        "",
+        "a key typed into an open menu reached the document"
+    );
+
+    press(&ui, Key::Escape);
+    type_text(&ui, "Q");
+    assert_eq!(ui.get_doc_text(), "Q");
+}
+
+#[test]
+fn alt_and_a_letter_open_that_menu() {
+    // Alt+H opens Help; its first row is Keyboard Shortcuts, a question.
+    let (ui, _) = wired(crate::state::AppState::new());
+    crate::set_static_menus(&ui);
+    chord(&ui, Key::Alt, "h");
+    press(&ui, Key::Return);
+    assert!(ui.get_dialog_open());
+    assert_eq!(ui.get_dialog_title(), "Keyboard shortcuts");
+}
+
+#[test]
+fn alt_and_a_letter_open_that_menu_in_the_custom_view_too() {
+    let mut state = crate::state::AppState::new();
+    state.editor_view = true;
+    let (ui, cell) = wired(state);
+    ui.set_use_editor_view(true);
+    crate::set_static_menus(&ui);
+    ui.invoke_focus_editor();
+    let before = cell.borrow().workspace.len();
+    chord(&ui, Key::Alt, "f");
+    press(&ui, Key::Return);
+    assert_eq!(
+        cell.borrow().workspace.len(),
+        before + 1,
+        "Alt+F then Enter did not choose New"
+    );
+}
+
+#[test]
+fn every_interactive_shell_element_says_what_it_is_to_a_screen_reader() {
+    // Release plan M2-14. A role deleted in a restyle is silent: nothing on
+    // screen changes, and only a screen-reader user notices.
+    let ui = concat!(env!("CARGO_MANIFEST_DIR"), "/ui/");
+    for (file, needles) in [
+        (
+            "menu.slint",
+            &["accessible-role: button", "accessible-role: list-item"][..],
+        ),
+        ("tab.slint", &["accessible-role: tab"][..]),
+        (
+            "status_bar.slint",
+            &["accessible-role: content-info", "accessible-live-region"][..],
+        ),
+        ("dialog.slint", &["accessible-role: button"][..]),
+        ("find_bar.slint", &["accessible-role: search"][..]),
+        (
+            "app.slint",
+            &["accessible-role: navigation", "accessible-role: tab-list"][..],
+        ),
+    ] {
+        let source = std::fs::read_to_string(format!("{ui}{file}")).expect(file);
+        for needle in needles {
+            assert!(source.contains(needle), "{file} lost `{needle}`");
+        }
+    }
+}

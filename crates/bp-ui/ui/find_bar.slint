@@ -50,6 +50,8 @@ component FindToggle inherits Rectangle {
 }
 
 export component FindBar inherits Rectangle {
+    accessible-role: search;
+    accessible-label: "Find and replace";
     in property <bool> open;
     in-out property <string> find-query;
     in-out property <string> replace-query;

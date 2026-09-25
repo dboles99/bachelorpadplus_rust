@@ -18,6 +18,16 @@ export component Tab inherits Rectangle {
     /// `for`, and its children have no ids to measure from outside.
     callback context-menu(length);
 
+    // Heard as "notes.txt, tab, selected" (release plan M2-14). Unsaved is
+    // in the description, since the dot that shows it on screen is not text.
+    accessible-role: tab;
+    accessible-label: root.label;
+    accessible-description: root.dirty ? "unsaved changes" : "";
+    accessible-item-selected: root.active;
+    accessible-action-default => {
+        root.selected();
+    }
+
     height: 30px;
     width: 190px;
     background: root.active ? Palette.panel : Palette.shell;
