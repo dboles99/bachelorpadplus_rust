@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  The Windows application manifest (release plan M2-02), embedded by build.rs.
+
+  * ComCtl32 v6: the themed common controls the native file dialogs use.
+  * supportedOS: Windows 10 and 11 share one GUID; without it Windows runs
+    the program under compatibility shims and lies about its own version.
+  * PerMonitorV2: crisp on every monitor, and told when it moves between
+    two with different scaling. winit asks for the same at startup; the
+    manifest makes it true before the first window exists.
+  * longPathAware: paths past 259 characters work where the machine allows
+    them (LongPathsEnabled); see `bp_platform::paths::to_extended_length`
+    for where it does not.
+  * activeCodePage UTF-8: the "ANSI" code page is UTF-8 for this process,
+    so anything that still goes through an A function cannot mangle a
+    file name.
+  * asInvoker: never ask for elevation. An editor has no business running
+    as administrator.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls"
+                        version="6.0.0.0" processorArchitecture="*"
+                        publicKeyToken="6595b64144ccf1df" language="*"/>
+    </dependentAssembly>
+  </dependency>
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!-- Windows 10 and Windows 11 -->
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+    </application>
+  </compatibility>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+    </windowsSettings>
+  </application>
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+</assembly>

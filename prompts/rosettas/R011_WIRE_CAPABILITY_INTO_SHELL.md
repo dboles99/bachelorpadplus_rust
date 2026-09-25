@@ -77,9 +77,12 @@ Each of these has already cost somebody a debugging session.
    pump events, and a re-entrant callback on a live `borrow_mut()` panics.
    Compute what you need, end the borrow, then show the dialog.
 
-8. **Do not enable rfd's `common-controls-v6`.** It has been tried. The binary
-   fails to start with `STATUS_ENTRYPOINT_NOT_FOUND` before `main`. The
-   comment in `crates/bp-ui/Cargo.toml` says so; leave it there.
+8. **Do not add rfd's `common-controls-v6`; there is nothing for it to do.**
+   It only switches rfd's message dialogs to `TaskDialogIndirect`, and every
+   message dialog is in-window (M1-01). It embeds no manifest: the
+   `STATUS_ENTRYPOINT_NOT_FOUND` it once caused was a binary with no
+   ComCtl32 v6 declaration. `apps/bachelorpad/app.manifest` declares v6 now
+   (M2-02). The comment in `crates/bp-ui/Cargo.toml` has the detail.
 
 9. **The log-hygiene gate stage is real.** A `tracing::*!` macro mentioning an
    identifier that carries document text or secrets fails the build. Log

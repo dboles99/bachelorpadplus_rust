@@ -49,9 +49,10 @@ rather than making you fix problems one at a time. The exit code is non-zero
 if any stage failed.
 
 The `launch` stage exists because neither `cargo build` nor `cargo test` ever
-loads the linked executable. Enabling one rfd feature — which embedded a
-side-by-side manifest — produced a binary that failed with
-`STATUS_ENTRYPOINT_NOT_FOUND` before `main`, with the whole gate green.
+loads the linked executable. Enabling one rfd feature — which imported a
+ComCtl32 v6 function the binary had no manifest to load — produced a binary
+that failed with `STATUS_ENTRYPOINT_NOT_FOUND` before `main`, with the whole
+gate green.
 Anything that changes link-time features, manifests or linked libraries needs
 this stage.
 
