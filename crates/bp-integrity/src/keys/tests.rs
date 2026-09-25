@@ -35,6 +35,68 @@ fn a_signing_key_round_trips_through_a_file_and_signs_identically() {
     );
 }
 
+// --- the sealed signing key (M2-10) ------------------------------------------
+
+#[test]
+fn a_sealed_signing_key_round_trips_with_its_passphrase_and_signs_identically() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("signing-key.bpadx");
+    let original = key();
+
+    write_sealed_signing_key(&path, &original, "correct horse").unwrap();
+    let reloaded = read_sealed_signing_key(&path, "correct horse").unwrap();
+
+    assert_eq!(
+        sign_document(&original, DOCUMENT).to_bytes(),
+        sign_document(&reloaded, DOCUMENT).to_bytes()
+    );
+}
+
+#[test]
+fn a_sealed_key_file_holds_no_copy_of_the_seed() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("signing-key.bpadx");
+    let original = key();
+    write_sealed_signing_key(&path, &original, "correct horse").unwrap();
+
+    let on_disk = fs::read(&path).unwrap();
+    let seed = original.to_bytes();
+    assert!(bp_crypto::is_bpadx(&on_disk), "it is an envelope");
+    assert!(
+        !on_disk
+            .windows(SIGNING_KEY_LEN)
+            .any(|window| window == seed.as_ref()),
+        "the seed must not appear in the clear"
+    );
+}
+
+#[test]
+fn a_sealed_key_does_not_open_with_the_wrong_passphrase() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("signing-key.bpadx");
+    write_sealed_signing_key(&path, &key(), "correct horse").unwrap();
+
+    let refused = read_sealed_signing_key(&path, "battery staple").unwrap_err();
+    assert!(
+        matches!(
+            refused,
+            IntegrityError::Sealed {
+                source: bp_crypto::CryptoError::CannotOpen,
+                ..
+            }
+        ),
+        "got {refused:?}"
+    );
+}
+
+#[test]
+fn an_empty_passphrase_seals_nothing() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("signing-key.bpadx");
+    assert!(write_sealed_signing_key(&path, &key(), "").is_err());
+    assert!(!path.exists(), "a refused key must not reach the disk");
+}
+
 #[test]
 fn a_key_file_is_exactly_the_thirty_two_seed_bytes() {
     // The stated stable encoding. A header, a newline or a hex spelling here

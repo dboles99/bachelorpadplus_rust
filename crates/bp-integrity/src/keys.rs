@@ -185,6 +185,57 @@ pub fn read_signing_key(path: &Path) -> Result<SigningKey, IntegrityError> {
     })
 }
 
+/// Write a signing key sealed in a passphrase `.bpadx` envelope (release
+/// plan M2-10, decision 16 / D5 option c).
+///
+/// The seed never reaches the disk in the clear: it is sealed with
+/// `bp-crypto`'s document envelope, the same Argon2id-and-AEAD format an
+/// encrypted document uses, so the passphrase protects it on every
+/// platform -- including Windows, where the file's permissions protect
+/// nothing this crate narrowed. The file is still written with owner-only
+/// permissions where the platform allows it; the returned value says
+/// which, as [`write_signing_key`]'s does.
+///
+/// The passphrase is the only way back to the key. Forgetting it means a
+/// new key, and everything signed with the old one then verifies only
+/// against the old public key, which the caller should have written beside
+/// it with [`write_verifying_key`].
+pub fn write_sealed_signing_key(
+    path: &Path,
+    key: &SigningKey,
+    passphrase: &str,
+) -> Result<KeyFileProtection, IntegrityError> {
+    let seed = key.to_bytes();
+    let sealed = bp_crypto::seal(seed.as_ref(), passphrase, bp_crypto::SealOptions::default())
+        .map_err(|source| IntegrityError::Sealed {
+            path: path.to_owned(),
+            source,
+        })?;
+    write_atomically(path, &sealed, Restrict::Yes).map_err(IntegrityError::write(path))?;
+    Ok(freshly_written_protection())
+}
+
+/// Read back a key [`write_sealed_signing_key`] wrote.
+///
+/// A wrong passphrase is [`IntegrityError::Sealed`] carrying
+/// `CryptoError::CannotOpen`, which cannot be told apart from a damaged
+/// file -- that is the envelope's design, not this function's shortcut.
+/// The opened seed is in a `Zeroizing` buffer from the moment it exists.
+pub fn read_sealed_signing_key(
+    path: &Path,
+    passphrase: &str,
+) -> Result<SigningKey, IntegrityError> {
+    let sealed = std::fs::read(path).map_err(IntegrityError::read(path))?;
+    let seed = bp_crypto::open(&sealed, passphrase).map_err(|source| IntegrityError::Sealed {
+        path: path.to_owned(),
+        source,
+    })?;
+    SigningKey::from_bytes(&seed).map_err(|source| IntegrityError::NotAKeyFile {
+        path: path.to_owned(),
+        source,
+    })
+}
+
 /// Write a verifying key to `path` as hex text.
 ///
 /// Deliberately *not* narrowed -- on Unix it is widened to `0644`. A public

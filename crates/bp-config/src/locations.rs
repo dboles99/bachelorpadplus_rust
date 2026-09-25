@@ -62,6 +62,17 @@ pub const SECURITY_HISTORY_FILE: &str = "security-history.log";
 /// for any document: the file itself lists no names (`bp_history::profiles`).
 pub const PROFILES_FILE: &str = "document-profiles.json";
 
+/// The signing key's file name, under the data directory (release plan
+/// M2-10): the seed sealed in a passphrase `.bpadx` envelope.
+///
+/// Data, not state or config: a signing key is not recomputable -- losing it
+/// is losing the identity every earlier signature names -- and it must not
+/// roam, which the config directory does on Windows (ADR-0029).
+pub const SIGNING_KEY_FILE: &str = "signing-key.bpadx";
+
+/// The public half, beside it, in the hex form a recipient pastes.
+pub const VERIFYING_KEY_FILE: &str = "signing-key.pub";
+
 /// A name inside one of the product's directories.
 ///
 /// Joined with the named platform's separator, for the reason
@@ -97,6 +108,13 @@ pub fn security_history_path_in(platform: Platform, env: &EnvSnapshot) -> Option
 #[must_use]
 pub fn profiles_path_in(platform: Platform, env: &EnvSnapshot) -> Option<PathBuf> {
     inside(platform, DirKind::State, env, PROFILES_FILE)
+}
+
+/// Where the sealed signing key lives. Its public half is
+/// [`VERIFYING_KEY_FILE`] in the same directory.
+#[must_use]
+pub fn signing_key_path_in(platform: Platform, env: &EnvSnapshot) -> Option<PathBuf> {
+    inside(platform, DirKind::Data, env, SIGNING_KEY_FILE)
 }
 
 /// Where the log file and crash reports go: `logs/` in the state directory.
@@ -140,6 +158,10 @@ pub struct Locations {
     /// environment names no state directory, in which case a profile lasts
     /// for the session only.
     pub profiles: Option<PathBuf>,
+    /// The sealed signing key. `None` when the environment names no data
+    /// directory, in which case Sign Document says there is nowhere to keep
+    /// one. Never adopted from anywhere: nothing wrote a key before.
+    pub signing_key: Option<PathBuf>,
     /// Anything [`adopt`] could not move, to be reported rather than lost.
     pub left_behind: Vec<Adoption>,
 }
@@ -153,6 +175,7 @@ impl Locations {
             recovery: recovery_dir_in(platform, env),
             security_history: security_history_path_in(platform, env),
             profiles: profiles_path_in(platform, env),
+            signing_key: signing_key_path_in(platform, env),
             left_behind: Vec::new(),
         }
     }
@@ -384,6 +407,7 @@ mod tests {
                 locations.recovery,
                 locations.security_history,
                 locations.profiles,
+                locations.signing_key,
             ] {
                 let path = text(path);
                 for &kind in DirKind::ALL {
@@ -415,6 +439,10 @@ mod tests {
             assert!(
                 starts_in(platform, locations.recovery, DirKind::Data),
                 "{platform:?}: unsaved work belongs with data, not state"
+            );
+            assert!(
+                starts_in(platform, locations.signing_key, DirKind::Data),
+                "{platform:?}: a signing key is not recomputable, so it is data"
             );
         }
     }

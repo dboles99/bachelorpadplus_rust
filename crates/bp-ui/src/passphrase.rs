@@ -34,6 +34,19 @@ pub(crate) enum Ask {
         target: PathBuf,
         first: Zeroizing<String>,
     },
+    /// Sign Document with the key already kept: its passphrase unseals it
+    /// (release plan M2-10). `document` is the file on disk that is signed.
+    Sign { document: PathBuf },
+    /// Sign Document with no key yet: the first of two entries of the new
+    /// key's passphrase.
+    NewKey { document: PathBuf },
+    /// The second entry, compared against the first -- for the reason
+    /// [`Ask::Confirm`] exists, and more so: a mistyped key passphrase costs
+    /// the signing identity rather than one document.
+    ConfirmKey {
+        document: PathBuf,
+        first: Zeroizing<String>,
+    },
 }
 
 impl Ask {
@@ -46,6 +59,9 @@ impl Ask {
             // that the first entry was accepted, and a user who thinks the
             // first did not register types something else the second time.
             Self::Confirm { .. } => "Confirm passphrase",
+            Self::Sign { .. } => "Signing key passphrase",
+            Self::NewKey { .. } => "New signing key passphrase",
+            Self::ConfirmKey { .. } => "Confirm signing key passphrase",
         }
     }
 
@@ -54,6 +70,9 @@ impl Ask {
             Self::Unlock(_) => "Unlock",
             Self::Set { .. } => "Next",
             Self::Confirm { .. } => "Encrypt",
+            Self::Sign { .. } => "Sign",
+            Self::NewKey { .. } => "Next",
+            Self::ConfirmKey { .. } => "Create Key and Sign",
         }
     }
 }

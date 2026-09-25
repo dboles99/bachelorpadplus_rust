@@ -843,20 +843,23 @@ pub fn security(
         // digest you are about to read down a telephone is useless unless you
         // already know which of the two the other end took.
         row("Hash Document (SHA-256)", "", action::HASH_DOCUMENT),
-        // Greyed with a reason, deliberately not `planned`. `bp_crypto`'s
-        // signing half exists and is tested; what does not exist is anywhere
-        // to keep a signing key, and inventing a key store on the way to a
-        // menu row would be a worse answer than the row saying so. The reason
-        // is in the label because the greying is the only thing on screen.
+        // Live for a saved document (release plan M2-10): the key is kept
+        // sealed in a passphrase envelope in the data directory, made on
+        // first use. Greyed for a document never saved, with the reason on
+        // the row, because a signature covers a file.
         row_enabled(
-            "Sign Document — no signing key yet",
+            if has_path {
+                "Sign Document..."
+            } else {
+                "Sign Document — save it first"
+            },
             "",
             action::SIGN_DOCUMENT,
-            false,
+            has_path,
         ),
-        // Live even though signing is not: verifying needs the other party's
-        // signature and, to say more than "intact", their public key. It is
-        // the half of the feature that needs nothing stored.
+        // Verifying needs the other party's signature and, to say more than
+        // "intact", their public key. It is the half of the feature that
+        // needs nothing stored.
         //
         // Greyed rather than `planned` for a document that has never been
         // saved, and the reason is on the row: `bp_integrity::verify_file`
@@ -1983,35 +1986,40 @@ mod tests {
     }
 
     #[test]
-    fn signing_is_greyed_with_a_reason_rather_than_listed_as_not_existing() {
-        // `planned` means "this does not exist yet"; `bp_crypto::sign_document`
-        // does exist and is tested. What is missing is somewhere to keep a
-        // key, which is a different sentence -- and it has to be on the row,
-        // because the greying is all the user gets.
-        let items = security_menu();
-        let row = items
+    fn signing_is_live_for_a_saved_document_and_says_why_not_otherwise() {
+        // A signature covers a file, so an unsaved document cannot be
+        // signed; the reason is on the row because the greying is all the
+        // user gets. It is still a real row, never a planned one.
+        let saved = security_menu();
+        let row = saved
             .iter()
             .find(|i| i.action == action::SIGN_DOCUMENT)
             .expect("a signing row");
+        assert!(row.enabled, "a saved document can be signed");
 
-        assert!(!row.enabled, "there is nowhere to keep a signing key yet");
-        assert_ne!(
-            row.action,
-            action::NONE,
-            "a real capability with a missing prerequisite is not a planned row"
+        let unsaved = security(
+            bp_security::Security::default(),
+            false,
+            bp_security::Privacy::Off,
+            true,
+            false,
         );
+        let row = unsaved
+            .iter()
+            .find(|i| i.action == action::SIGN_DOCUMENT)
+            .expect("a signing row");
+        assert!(!row.enabled);
         assert!(
-            row.label.contains("key"),
+            row.label.contains("save"),
             "the row must say why it is greyed; got '{}'",
             row.label
         );
     }
 
     #[test]
-    fn verifying_is_live_even_though_signing_is_not() {
+    fn verifying_is_live_for_a_saved_document() {
         // Verification needs the other party's public key and their `.sig`,
-        // both supplied by the user. Greying it alongside signing would hide
-        // the half of the feature that needs nothing stored.
+        // both supplied by the user, and nothing stored here.
         let items = security_menu();
         assert!(
             items
