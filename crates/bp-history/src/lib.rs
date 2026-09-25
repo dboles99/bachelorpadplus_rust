@@ -40,8 +40,17 @@
 //! not a pid. What this crate does not do is decide *what to ask the user*:
 //! it reports what is recoverable and what is held elsewhere, and the shell
 //! words the prompt.
+//!
+//! [`profiles`] is the other thing this crate keeps per document between
+//! sessions: the security profile each document was given, filed under the
+//! same path digest as the sealed journal, so that a Confidential document
+//! reopens Confidential rather than lapsing to Standard.
 
 #![forbid(unsafe_code)]
+
+pub mod profiles;
+
+pub use profiles::{DocumentKey, ProfileStore};
 
 use std::collections::BTreeMap;
 use std::collections::hash_map::RandomState;

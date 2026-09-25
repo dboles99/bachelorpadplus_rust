@@ -12,12 +12,20 @@
 //! | --- | --- | --- |
 //! | recent files | [`DirKind::State`] | a per-machine convenience list |
 //! | security history | [`DirKind::State`] | a log of this machine's events |
+//! | document profiles | [`DirKind::State`] | this machine's paths, as digests |
 //! | recovery journal | [`DirKind::Data`] | unsaved work -- not recomputable, not disposable |
 //!
 //! The journal is `Data` rather than `State` because `bp-platform` says so in
 //! as many words, and because the XDG specification reserves `$XDG_STATE_HOME`
 //! for things "not important or portable enough" for the data directory.
 //! Unsaved work is the most important thing this product writes.
+//!
+//! The document-profile store (`bp_history::profiles`) is the newest of
+//! these and never lived anywhere else, so it is placed but never adopted.
+//! State rather than data: losing it returns documents to their default
+//! profile, which is a real loss but a recoverable one, and it is keyed by
+//! digests of this machine's paths, which mean nothing on any other machine
+//! and so must not roam.
 //!
 //! # Moving is not free, and one of the three holds unsaved work
 //!
@@ -47,6 +55,12 @@ pub const RECOVERY_DIR: &str = "recovery";
 
 /// The security history's file name, under the state directory.
 pub const SECURITY_HISTORY_FILE: &str = "security-history.log";
+
+/// The document-profile store's file name, under the state directory.
+///
+/// Beside the security history, and named for what it holds rather than
+/// for any document: the file itself lists no names (`bp_history::profiles`).
+pub const PROFILES_FILE: &str = "document-profiles.json";
 
 /// A name inside one of the product's directories.
 ///
@@ -79,6 +93,12 @@ pub fn security_history_path_in(platform: Platform, env: &EnvSnapshot) -> Option
     inside(platform, DirKind::State, env, SECURITY_HISTORY_FILE)
 }
 
+/// Where the document-profile store lives.
+#[must_use]
+pub fn profiles_path_in(platform: Platform, env: &EnvSnapshot) -> Option<PathBuf> {
+    inside(platform, DirKind::State, env, PROFILES_FILE)
+}
+
 /// Where the log file and crash reports go: `logs/` in the state directory.
 ///
 /// State, not cache: a crash report is the one record of a failure the user
@@ -105,7 +125,8 @@ pub fn legacy_path_in(platform: Platform, env: &EnvSnapshot, name: &str) -> Opti
     crate::beside_the_config_file(platform, env, name)
 }
 
-/// The three locations the shell needs, resolved and adopted.
+/// The locations the shell needs, resolved and, where an older build left
+/// something, adopted.
 #[derive(Debug)]
 pub struct Locations {
     /// The recent-files list. `None` when the environment names no state
@@ -115,6 +136,10 @@ pub struct Locations {
     pub recovery: Option<PathBuf>,
     /// The security history.
     pub security_history: Option<PathBuf>,
+    /// The security profile each document was given. `None` when the
+    /// environment names no state directory, in which case a profile lasts
+    /// for the session only.
+    pub profiles: Option<PathBuf>,
     /// Anything [`adopt`] could not move, to be reported rather than lost.
     pub left_behind: Vec<Adoption>,
 }
@@ -127,6 +152,7 @@ impl Locations {
             recent: crate::recent::recent_path_in(platform, env),
             recovery: recovery_dir_in(platform, env),
             security_history: security_history_path_in(platform, env),
+            profiles: profiles_path_in(platform, env),
             left_behind: Vec::new(),
         }
     }
@@ -357,6 +383,7 @@ mod tests {
                 locations.recent,
                 locations.recovery,
                 locations.security_history,
+                locations.profiles,
             ] {
                 let path = text(path);
                 for &kind in DirKind::ALL {
@@ -384,6 +411,7 @@ mod tests {
                 locations.security_history,
                 DirKind::State
             ));
+            assert!(starts_in(platform, locations.profiles, DirKind::State));
             assert!(
                 starts_in(platform, locations.recovery, DirKind::Data),
                 "{platform:?}: unsaved work belongs with data, not state"
@@ -400,6 +428,23 @@ mod tests {
         assert!(
             text(locations.security_history).ends_with(r"\bachelorpad\state\security-history.log")
         );
+        assert!(text(locations.profiles).ends_with(r"\bachelorpad\state\document-profiles.json"));
+    }
+
+    #[test]
+    fn the_profile_store_sits_beside_the_security_history() {
+        let env = whole_env();
+        for &platform in Platform::ALL {
+            let locations = Locations::in_env(platform, &env);
+            let history = text(locations.security_history);
+            let profiles = text(locations.profiles);
+            let directory = |p: &str| {
+                p.rsplit_once(platform.separator())
+                    .map(|(d, _)| d.to_owned())
+            };
+            assert_eq!(directory(&profiles), directory(&history), "{platform:?}");
+            assert!(profiles.ends_with(PROFILES_FILE));
+        }
     }
 
     #[test]
@@ -447,6 +492,7 @@ mod tests {
             assert_eq!(locations.recent, None);
             assert_eq!(locations.recovery, None);
             assert_eq!(locations.security_history, None);
+            assert_eq!(locations.profiles, None);
         }
     }
 
@@ -665,6 +711,10 @@ mod tests {
         assert_eq!(locations.recovery.as_deref(), Some(old.as_path()));
         assert!(old.join("1.checkpoint").exists(), "nothing was moved");
         assert!(locations.recent.is_some() && locations.security_history.is_some());
+        // Never beside the config file: that directory roams, and the store
+        // never lived there, so there is nothing to keep using. A profile
+        // lasts for the session instead.
+        assert_eq!(locations.profiles, None);
     }
 
     #[test]
