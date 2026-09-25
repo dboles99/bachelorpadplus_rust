@@ -626,3 +626,75 @@ fn declining_utf8_leaves_the_file_and_the_encoding_as_they_were() {
     );
     assert!(cell.borrow().is_dirty(id));
 }
+
+// --- settings chosen in the window (release plan M1-03) -----------------
+
+/// The window, with the shell's state configured from `config.toml` at
+/// `path` -- as `main` does -- and `args` as the command line.
+fn configured(
+    path: &std::path::Path,
+    args: &[&str],
+) -> (AppWindow, Rc<std::cell::RefCell<crate::state::AppState>>) {
+    let ui = window();
+    let args: Vec<String> = args.iter().map(|a| (*a).to_owned()).collect();
+    let loaded = bp_config::load_from(Some(path), &bp_config::Env::default(), &args);
+    let mut state = crate::state::AppState::new();
+    state.configure(&loaded.config, loaded.path.clone());
+    (ui, Rc::new(std::cell::RefCell::new(state)))
+}
+
+#[test]
+fn a_view_choice_is_saved_into_the_users_config_with_their_comments_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "# mine, do not lose\ntheme = \"Dark\"  # at night\n").unwrap();
+    let (ui, cell) = configured(&path, &[]);
+
+    crate::dispatch::handle_menu_action(&ui, &cell, crate::menus::action::TOGGLE_WRAP);
+    crate::dispatch::handle_menu_action(&ui, &cell, crate::menus::action::TAB_WIDTH_8);
+
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.contains("# mine, do not lose"), "{written}");
+    assert!(
+        written.contains("theme = \"Dark\"  # at night"),
+        "{written}"
+    );
+    assert!(written.contains("word_wrap = true"), "{written}");
+    assert!(written.contains("tab_width = 8"), "{written}");
+
+    // And it is what the next launch reads.
+    let (_, next) = configured(&path, &[]);
+    let next = next.borrow();
+    assert!(next.wrap_text);
+    assert_eq!(next.indent.width, 8);
+}
+
+#[test]
+fn a_command_line_override_is_not_saved_when_something_else_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "").unwrap();
+    let (ui, cell) = configured(&path, &["--font-size", "20"]);
+    assert_eq!(cell.borrow().font_size, 20);
+
+    crate::dispatch::handle_menu_action(&ui, &cell, crate::menus::action::TOGGLE_GUTTER);
+
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.contains("line_numbers = false"), "{written}");
+    assert!(
+        !written.contains("font_size"),
+        "a one-off --font-size was made permanent: {written}"
+    );
+}
+
+#[test]
+fn picking_the_system_theme_is_saved_as_following_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let (ui, cell) = configured(&path, &[]);
+
+    crate::dispatch::handle_menu_action(&ui, &cell, crate::menus::action::THEME_SYSTEM);
+
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.contains("theme = \"System\""), "{written}");
+}

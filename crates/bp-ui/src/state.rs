@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use bp_config::Recent;
 use bp_core::{Document, DocumentId, Encoding, LineEnding, UNTITLED, Workspace};
 use bp_files::{
-    DiskState, EncodeError, FileStamp, LineEndingPolicy, SaveOptions, atomic_write, load,
-    try_encode,
+    DiskState, EncodeError, FileStamp, LineEndingPolicy, SaveOptions, atomic_write,
+    load_with_limit, try_encode,
 };
 use bp_formats::Format;
 use bp_naming::SemanticName;
@@ -129,6 +129,22 @@ pub struct AppState {
     /// that lived in the view would put the caret arithmetic somewhere Rust
     /// cannot see. Config supplies the starting value; zoom moves it.
     pub(crate) font_size: u8,
+    /// Whether the clipboard history records copies made in other programs
+    /// (`clipboard_record_other_programs`). Off unless the user opted in:
+    /// recording everything put whatever a password manager copied into the
+    /// Edit menu's previews.
+    pub(crate) record_other_programs: bool,
+    /// Past this many bytes a file opens nowhere editable
+    /// (`editable_limit_mib`, 32 MiB unless configured).
+    pub(crate) editable_limit: u64,
+    /// The profile a document gets when nothing else says otherwise
+    /// (`default_profile`).
+    pub(crate) default_profile: bp_security::Profile,
+    /// Where settings chosen in the window are saved, and what the file last
+    /// said. `None` when there is nowhere to save them -- a test, or an
+    /// environment naming no configuration directory -- and then a change
+    /// lasts for the session, as every change did before.
+    pub(crate) settings: Option<SavedSettings>,
     /// Whether typing overwrites (the Insert key).
     ///
     /// The window's, not a document's: one key switches it and every tab
@@ -250,6 +266,67 @@ impl AppState {
         self.error = (!notices.is_empty()).then(|| notices.join("; "));
     }
 
+    /// Take the user's configuration: the settings it holds, and where to
+    /// save changes to them (release plan M1-03).
+    ///
+    /// Called before `start_up` opens anything, so every document opened at
+    /// startup gets the configured default profile. The untitled document
+    /// `new` made is given it here.
+    pub(crate) fn configure(&mut self, config: &bp_config::Config, save_to: Option<PathBuf>) {
+        self.show_gutter = config.line_numbers;
+        self.wrap_text = config.word_wrap;
+        self.indent = bp_editor::Indent {
+            spaces: config.indent_spaces,
+            width: usize::from(config.tab_width),
+        };
+        self.font_size = bp_config::zoom(config.font_size, 0);
+        self.record_other_programs = config.clipboard_record_other_programs;
+        self.editable_limit = config.editable_limit_bytes();
+        self.default_profile = profile_named(config.default_profile);
+        let ids: Vec<DocumentId> = self.workspace.iter().map(Document::id).collect();
+        for id in ids {
+            self.give_default_profile(id);
+        }
+        self.settings = save_to.map(|path| SavedSettings {
+            path,
+            baseline: config.clone(),
+        });
+    }
+
+    /// Give a document that has just appeared the configured default
+    /// profile. Straight onto the document rather than through
+    /// `set_security`: a default is not a change the user made, and the
+    /// security history records changes.
+    fn give_default_profile(&mut self, id: DocumentId) {
+        if self.default_profile == bp_security::Profile::Standard {
+            return;
+        }
+        if let Some(doc) = self.workspace.get_mut(id) {
+            doc.set_security(bp_security::Security::Named(self.default_profile));
+        }
+    }
+
+    /// Save a setting the user just chose, so it is there next time.
+    ///
+    /// `change` applies it to a copy of what the file last said, and only
+    /// the difference is written (`bp_config::Settings::between`). Never a
+    /// snapshot of everything in force: that would write a one-off
+    /// `--font-size` from the command line into the file for good. A failure
+    /// is a status-bar line, never fatal -- the setting still applies for
+    /// this session.
+    pub(crate) fn remember(&mut self, change: impl FnOnce(&mut bp_config::Config)) {
+        let Some(saved) = &mut self.settings else {
+            return;
+        };
+        let mut after = saved.baseline.clone();
+        change(&mut after);
+        let difference = bp_config::Settings::between(&saved.baseline, &after);
+        match bp_config::save(&saved.path, &difference) {
+            Ok(()) => saved.baseline = after,
+            Err(e) => self.error = Some(e.to_string()),
+        }
+    }
+
     /// A fresh state whose files live at `locations`.
     fn at(locations: &bp_config::Locations) -> Self {
         let mut workspace = Workspace::new();
@@ -277,6 +354,10 @@ impl AppState {
             wrap_text: false,
             indent: bp_editor::Indent::default(),
             font_size: bp_config::DEFAULT_FONT_SIZE,
+            record_other_programs: false,
+            editable_limit: bp_files::EDITABLE_LIMIT_BYTES,
+            default_profile: bp_security::Profile::Standard,
+            settings: None,
             overwrite: false,
             stamps: HashMap::new(),
             recent: locations
@@ -379,6 +460,7 @@ impl AppState {
                 }
                 None => self.workspace.open_new(now()),
             };
+            self.give_default_profile(id);
             self.editors.insert(id, bp_editor::Editor::new(&entry.text));
             // Recovered work is by definition not on disk yet.
             if let Some(doc) = self.workspace.get_mut(id) {
@@ -798,7 +880,7 @@ impl AppState {
         else {
             return;
         };
-        match load(&path) {
+        match load_with_limit(&path, self.editable_limit) {
             Ok(file) => {
                 if let Some(doc) = self.workspace.get_mut(id) {
                     doc.set_encoding(file.encoding);
@@ -955,14 +1037,16 @@ impl AppState {
         self.error = None;
         let id = self.workspace.open_new(now());
         self.editors.insert(id, bp_editor::Editor::default());
+        self.give_default_profile(id);
     }
 
     pub(crate) fn open(&mut self, path: PathBuf) {
         self.error = None;
         let path2 = path.clone();
-        match load(&path) {
+        match load_with_limit(&path, self.editable_limit) {
             Ok(file) => {
                 let id = self.workspace.open_path(path, created_at(&path2));
+                self.give_default_profile(id);
                 if let Some(doc) = self.workspace.get_mut(id) {
                     doc.set_encoding(file.encoding);
                     doc.set_line_ending(file.line_ending);
@@ -1735,6 +1819,7 @@ impl AppState {
                 // file only this program can open.
                 let text = String::from_utf8_lossy(&plain).into_owned();
                 let id = self.workspace.open_path(path.clone(), created_at(&path));
+                self.give_default_profile(id);
 
                 // Unsaved work from a crashed session, if there is any. This
                 // is the only moment it can be read: the journal is sealed
@@ -2849,12 +2934,27 @@ fn locations() -> bp_config::Locations {
     }
 }
 
-/// Whether the clipboard history records what *other* programs copy.
-///
-/// Off, and a constant until Settings exists to make it a choice (release
-/// plan M1-03). Recording everything was the old behaviour, and it put
-/// whatever a password manager copied into the Edit menu's previews.
-pub(crate) const RECORD_OTHER_PROGRAMS: bool = false;
+/// Where settings chosen in the window are saved, and what the file last
+/// said about them.
+#[derive(Debug, Clone)]
+pub(crate) struct SavedSettings {
+    pub(crate) path: PathBuf,
+    /// The configuration as last read or written. Changes are measured from
+    /// this, so a command-line override that was never changed in the
+    /// window is never saved.
+    pub(crate) baseline: bp_config::Config,
+}
+
+/// The security profile `bp-config` names. By name, because `bp-config`
+/// does not depend on `bp-security`; a name one knows and the other does
+/// not is Standard, the profile that changes nothing.
+pub(crate) fn profile_named(profile: bp_config::SecurityProfile) -> bp_security::Profile {
+    bp_security::Profile::all()
+        .iter()
+        .copied()
+        .find(|p| p.name().eq_ignore_ascii_case(profile.name()))
+        .unwrap_or_default()
+}
 
 /// What an answer to the startup "Unsaved work recovered" prompt means.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3266,6 +3366,70 @@ mod tests {
             time::macros::date!(2020 - 01 - 15),
             "a file last written in 2020 cannot have been created today"
         );
+    }
+
+    #[test]
+    fn every_profile_the_config_can_name_is_a_profile_the_shell_has() {
+        // By name across two crates that do not depend on each other. A
+        // name that fell through would quietly give Standard to somebody who
+        // asked for Maximum.
+        for &profile in bp_config::SecurityProfile::ALL {
+            assert_eq!(
+                profile_named(profile).name().to_ascii_lowercase(),
+                profile.name().to_ascii_lowercase(),
+                "{profile:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn configure_seeds_the_view_and_the_default_profile_reaches_every_new_document() {
+        let config = bp_config::Config {
+            word_wrap: true,
+            line_numbers: false,
+            tab_width: 2,
+            indent_spaces: true,
+            clipboard_record_other_programs: true,
+            default_profile: bp_config::SecurityProfile::Confidential,
+            editable_limit_mib: 1,
+            ..bp_config::Config::default()
+        };
+        let mut state = AppState::new();
+        state.configure(&config, None);
+
+        assert!(state.wrap_text && !state.show_gutter);
+        assert_eq!((state.indent.spaces, state.indent.width), (true, 2));
+        assert!(state.record_other_programs);
+        assert_eq!(state.editable_limit, 1024 * 1024);
+
+        let confidential = bp_security::Security::Named(bp_security::Profile::Confidential);
+        let untitled = state.workspace.active_id().unwrap();
+        assert_eq!(
+            state.workspace.get(untitled).unwrap().security(),
+            confidential
+        );
+        state.new_document();
+        let fresh = state.workspace.active_id().unwrap();
+        assert_eq!(state.workspace.get(fresh).unwrap().security(), confidential);
+    }
+
+    #[test]
+    fn a_file_past_the_configured_limit_opens_no_tab() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.log");
+        std::fs::write(&path, vec![b'x'; 2 * 1024 * 1024]).unwrap();
+        let config = bp_config::Config {
+            editable_limit_mib: 1,
+            ..bp_config::Config::default()
+        };
+        let mut state = AppState::new();
+        state.configure(&config, None);
+        let before = state.workspace.len();
+
+        state.open(path);
+
+        assert_eq!(state.workspace.len(), before);
+        assert!(state.error.is_some(), "refused without saying why");
     }
 
     #[test]

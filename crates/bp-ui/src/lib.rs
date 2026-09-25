@@ -330,6 +330,13 @@ pub struct RunOptions {
     pub renderer: Renderer,
     /// Starting theme. `None` uses the built-in default.
     pub theme: Option<ThemeId>,
+    /// Follow the desktop's light or dark preference rather than `theme`.
+    pub follow_system_theme: bool,
+    /// The resolved configuration, and where to save settings chosen in the
+    /// window (release plan M1-03). `None` for both keeps the built-in
+    /// defaults and saves nothing, which is what `run()` and the tests want.
+    pub config: Option<bp_config::Config>,
+    pub settings_path: Option<PathBuf>,
     /// Shown in the status bar at startup, where configuration problems go.
     /// A warning the user cannot see is a warning they will hit again.
     pub startup_notice: Option<String>,
@@ -382,9 +389,13 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
 
     let ui = AppWindow::new()?;
     let mut initial = state::AppState::new();
+    if let Some(config) = &options.config {
+        initial.configure(config, options.settings_path.clone());
+    }
     if let Some(theme) = options.theme {
         initial.theme = theme;
     }
+    initial.follow_system_theme = options.follow_system_theme;
     if let Some(size) = options.font_size {
         // Clamped again rather than trusted. `bp-config` bounds what it
         // parses, but `RunOptions` is a public API and a caller reaching it
@@ -497,6 +508,9 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
 
     wire!(on_cycle_theme, |s| {
         s.theme = s.theme.next();
+        s.follow_system_theme = false;
+        let name = s.theme.name();
+        s.remember(|c| c.theme = Some(name.to_owned()));
     });
 
     {
@@ -1085,8 +1099,9 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
                         } else {
                             bp_clipboard::Origin::Elsewhere
                         };
+                        let record_other_programs = s.record_other_programs;
                         s.clips
-                            .observe(&text, policy, origin, state::RECORD_OTHER_PROGRAMS)
+                            .observe(&text, policy, origin, record_other_programs)
                     };
                     last_seen = Some(text);
                     cleared || added

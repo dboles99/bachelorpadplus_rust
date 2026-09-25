@@ -320,10 +320,13 @@ pub fn handle_menu_action(
                 _ => ThemeId::Green,
             };
             s.follow_system_theme = false;
+            let name = s.theme.name();
+            s.remember(|c| c.theme = Some(name.to_owned()));
         }
         action::THEME_SYSTEM => {
             let mut s = state.borrow_mut();
             s.follow_system_theme = true;
+            s.remember(|c| c.theme = Some(bp_theme::SYSTEM_THEME_NAME.to_owned()));
             match ThemeId::for_system(s.system_dark) {
                 Some(theme) => s.theme = theme,
                 // Not an error, and not a guess: a desktop that will not say
@@ -342,11 +345,15 @@ pub fn handle_menu_action(
         action::TOGGLE_GUTTER => {
             let mut s = state.borrow_mut();
             s.show_gutter = !s.show_gutter;
+            let on = s.show_gutter;
+            s.remember(|c| c.line_numbers = on);
             push = PushText::No;
         }
         action::TOGGLE_WRAP => {
             let mut s = state.borrow_mut();
             s.wrap_text = !s.wrap_text;
+            let on = s.wrap_text;
+            s.remember(|c| c.word_wrap = on);
             push = PushText::No;
         }
 
@@ -357,10 +364,14 @@ pub fn handle_menu_action(
             let mut s = state.borrow_mut();
             let steps = if id == action::ZOOM_IN { 1 } else { -1 };
             s.font_size = bp_config::zoom(s.font_size, steps);
+            let size = s.font_size;
+            s.remember(|c| c.font_size = size);
             push = PushText::No;
         }
         action::ZOOM_RESET => {
-            state.borrow_mut().font_size = bp_config::DEFAULT_FONT_SIZE;
+            let mut s = state.borrow_mut();
+            s.font_size = bp_config::DEFAULT_FONT_SIZE;
+            s.remember(|c| c.font_size = bp_config::DEFAULT_FONT_SIZE);
             push = PushText::No;
         }
 
@@ -593,15 +604,19 @@ pub fn handle_menu_action(
         action::INDENT_TABS | action::INDENT_SPACES => {
             let mut s = state.borrow_mut();
             s.indent.spaces = id == action::INDENT_SPACES;
+            let spaces = s.indent.spaces;
+            s.remember(|c| c.indent_spaces = spaces);
             push = PushText::No;
         }
         action::TAB_WIDTH_2 | action::TAB_WIDTH_4 | action::TAB_WIDTH_8 => {
             let mut s = state.borrow_mut();
-            s.indent.width = match id {
+            let width: u8 = match id {
                 action::TAB_WIDTH_2 => 2,
                 action::TAB_WIDTH_8 => 8,
                 _ => 4,
             };
+            s.indent.width = usize::from(width);
+            s.remember(|c| c.tab_width = width);
             push = PushText::No;
         }
 
