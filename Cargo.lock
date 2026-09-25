@@ -591,6 +591,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bp-config",
+ "bp-platform-windows",
  "bp-theme",
  "bp-ui",
  "tempfile",
@@ -929,6 +930,14 @@ dependencies = [
  "bp-formats",
  "proptest",
  "tempfile",
+]
+
+[[package]]
+name = "bp-platform-windows"
+version = "0.1.0"
+dependencies = [
+ "bp-platform",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

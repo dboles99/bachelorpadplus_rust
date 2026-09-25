@@ -13,6 +13,11 @@ anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 bp-config = { path = "../../crates/bp-config" }
+# The Win32 calls a release needs -- attaching to the parent's console for
+# `--version`/`--help`, and a message box for a crash nobody would otherwise
+# see -- as safe functions (ADR-0033). A no-op crate on every other platform,
+# so this binary stays `forbid(unsafe_code)` and free of `cfg` for them.
+bp-platform-windows = { path = "../../crates/bp-platform-windows" }
 bp-theme = { path = "../../crates/bp-theme" }
 bp-ui = { path = "../../crates/bp-ui" }
 
