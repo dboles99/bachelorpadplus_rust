@@ -188,6 +188,11 @@ pub struct AppState {
     /// file. It is not configurable from outside: the production value is
     /// set once, from [`locations`], and nothing changes it.
     pub(crate) audit_path: PathBuf,
+    /// Each document's security profile, kept between sessions (release plan
+    /// M1-19), and where that is saved. `None` for the path when this system
+    /// names no state directory: profiles then last for the session.
+    pub(crate) profiles: bp_history::ProfileStore,
+    pub(crate) profiles_path: Option<PathBuf>,
     /// The tab the context menu was opened on.
     ///
     /// Held rather than passed with the click, because opening the menu and
@@ -313,6 +318,34 @@ impl AppState {
         }
     }
 
+    /// Give a document the profile the user last set on the file at `path`,
+    /// if there is one. After `give_default_profile`, so a profile set on
+    /// this very file beats the default for new ones.
+    fn recall_profile(&mut self, id: DocumentId, path: &Path) {
+        if let Some(security) = self.profiles.get(path)
+            && let Some(doc) = self.workspace.get_mut(id)
+        {
+            doc.set_security(security);
+        }
+    }
+
+    /// Keep `security` as the profile of the file at `path` for next time.
+    ///
+    /// The document's own setting, never the one Privacy Mode clamps it to:
+    /// Privacy Mode is a session's override, and saving what it forced would
+    /// leave a document stricter than the user ever set it once the mode is
+    /// off. A failure to save is a status line; the profile still applies.
+    fn keep_profile(&mut self, path: &Path, security: bp_security::Security) {
+        self.profiles.set(path, security);
+        if let Some(store) = &self.profiles_path
+            && let Err(e) = self.profiles.save(store)
+        {
+            self.error = Some(format!(
+                "this document's profile will not be remembered next time: {e}"
+            ));
+        }
+    }
+
     /// Save a setting the user just chose, so it is there next time.
     ///
     /// `change` applies it to a copy of what the file last said, and only
@@ -336,6 +369,13 @@ impl AppState {
 
     /// A fresh state whose files live at `locations`.
     fn at(locations: &bp_config::Locations) -> Self {
+        // A store that cannot be read is empty, and says so: documents then
+        // open with the default profile, which the notice tells the user,
+        // rather than the editor refusing to start over a lost preference.
+        let (profiles, profiles_notice) = locations.profiles.as_deref().map_or(
+            (bp_history::ProfileStore::new(), None),
+            bp_history::ProfileStore::load,
+        );
         let mut workspace = Workspace::new();
         let id = workspace.open_new(now());
         let mut editors = HashMap::new();
@@ -354,7 +394,7 @@ impl AppState {
             theme: ThemeId::default(),
             follow_system_theme: false,
             system_dark: None,
-            error: None,
+            error: profiles_notice,
             gutter: String::new(),
             gutter_lines: usize::MAX,
             show_gutter: true,
@@ -394,6 +434,8 @@ impl AppState {
                 .security_history
                 .clone()
                 .unwrap_or_else(|| PathBuf::from(bp_config::locations::SECURITY_HISTORY_FILE)),
+            profiles,
+            profiles_path: locations.profiles.clone(),
             passphrases: HashMap::new(),
             privacy: bp_security::Privacy::default(),
             ask: None,
@@ -471,6 +513,9 @@ impl AppState {
                 None => self.workspace.open_new(now()),
             };
             self.give_default_profile(id);
+            if let Some(path) = doc_path(&self.workspace, id) {
+                self.recall_profile(id, &path);
+            }
             self.editors.insert(id, bp_editor::Editor::new(&entry.text));
             // Recovered work is by definition not on disk yet.
             if let Some(doc) = self.workspace.get_mut(id) {
@@ -1057,6 +1102,7 @@ impl AppState {
             Ok(file) => {
                 let id = self.workspace.open_path(path, created_at(&path2));
                 self.give_default_profile(id);
+                self.recall_profile(id, &path2);
                 if let Some(doc) = self.workspace.get_mut(id) {
                     doc.set_encoding(file.encoding);
                     doc.set_line_ending(file.line_ending);
@@ -1135,10 +1181,20 @@ impl AppState {
 
         match atomic_write(&target, &bytes, SaveOptions::default()) {
             Ok(_) => {
+                let mut moved_to = None;
                 if let Some(doc) = self.workspace.get_mut(id) {
+                    if doc.path() != Some(target.as_path()) {
+                        moved_to = Some(doc.security());
+                    }
                     doc.set_path(target.clone());
                     // Only now, after a verified write, is the document clean.
                     doc.record_disk_save(now());
+                }
+                // A first save or a Save As: the profile goes with the
+                // document to its new file. The old file keeps its own entry
+                // -- it still exists, with the same text in it.
+                if let Some(security) = moved_to {
+                    self.keep_profile(&target, security);
                 }
                 // Both forms of journal go once the work is on disk. The
                 // sealed one is keyed by path rather than by session id, so
@@ -1703,6 +1759,12 @@ impl AppState {
         if previous == security {
             return;
         }
+        // Remembered for the file, so reopening a Confidential document is
+        // Confidential. An untitled document has no file to remember it
+        // for yet; its first save does it.
+        if let Some(path) = doc.path().map(Path::to_path_buf) {
+            self.keep_profile(&path, security);
+        }
 
         let policy = security.policy_under(self.privacy);
         if self.clips.enforce(policy.clipboard) {
@@ -1830,6 +1892,7 @@ impl AppState {
                 let text = String::from_utf8_lossy(&plain).into_owned();
                 let id = self.workspace.open_path(path.clone(), created_at(&path));
                 self.give_default_profile(id);
+                self.recall_profile(id, &path);
 
                 // Unsaved work from a crashed session, if there is any. This
                 // is the only moment it can be read: the journal is sealed
@@ -1896,9 +1959,14 @@ impl AppState {
                 // concerned -- there is no second flag.
                 self.passphrases
                     .insert(id, zeroize::Zeroizing::new(passphrase.to_owned()));
+                let mut security = None;
                 if let Some(doc) = self.workspace.get_mut(id) {
                     doc.set_path(target.to_path_buf());
                     doc.record_disk_save(now());
+                    security = Some(doc.security());
+                }
+                if let Some(security) = security {
+                    self.keep_profile(target, security);
                 }
                 self.mark_in_step(id, target);
                 self.passphrase_status.clear();
@@ -2940,6 +3008,7 @@ fn locations() -> bp_config::Locations {
         recent: Some(root.join("recent.toml")),
         recovery: Some(root.join(bp_config::locations::RECOVERY_DIR)),
         security_history: Some(root.join(bp_config::locations::SECURITY_HISTORY_FILE)),
+        profiles: Some(root.join(bp_config::locations::PROFILES_FILE)),
         left_behind: Vec::new(),
     }
 }
@@ -3440,6 +3509,123 @@ mod tests {
 
         assert_eq!(state.workspace.len(), before);
         assert!(state.error.is_some(), "refused without saying why");
+    }
+
+    /// A session, and the state directory a restart of it would use.
+    fn two_sessions() -> (AppState, bp_config::Locations) {
+        let places = locations();
+        (AppState::at(&places), places)
+    }
+
+    #[test]
+    fn reopening_a_confidential_document_is_confidential() {
+        // Release plan M1-19. The profile used to last only as long as the
+        // tab: the next session opened the same file as Standard, with a
+        // plaintext journal and clipboard history back on and nothing on
+        // screen to say so.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("salaries.txt");
+        std::fs::write(&path, "private\n").unwrap();
+        let confidential = bp_security::Security::Named(bp_security::Profile::Confidential);
+        let (mut first, places) = two_sessions();
+        first.open(path.clone());
+        first.set_security(confidential);
+        drop(first);
+
+        let mut second = AppState::at(&places);
+        second.open(path);
+        assert_eq!(second.security(), confidential);
+    }
+
+    #[test]
+    fn save_as_takes_the_profile_to_the_new_file_and_leaves_the_old_one_its_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("draft.txt");
+        let new = dir.path().join("final.txt");
+        std::fs::write(&old, "text\n").unwrap();
+        let private = bp_security::Security::Named(bp_security::Profile::Private);
+        let (mut first, places) = two_sessions();
+        first.open(old.clone());
+        first.set_security(private);
+        let id = first.workspace.active_id().unwrap();
+        assert_eq!(
+            first.save_document(id, Some(new.clone())),
+            SaveResult::Saved
+        );
+        drop(first);
+
+        let mut second = AppState::at(&places);
+        second.open(new);
+        assert_eq!(second.security(), private, "the new file lost it");
+        second.open(old);
+        assert_eq!(second.security(), private, "the old file lost its own");
+    }
+
+    #[test]
+    fn an_untitled_documents_profile_is_kept_from_its_first_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.txt");
+        let maximum = bp_security::Security::Named(bp_security::Profile::Maximum);
+        let (mut first, places) = two_sessions();
+        first.set_security(maximum);
+        first.edit("secret\n".to_owned());
+        let id = first.workspace.active_id().unwrap();
+        assert_eq!(
+            first.save_document(id, Some(path.clone())),
+            SaveResult::Saved
+        );
+        drop(first);
+
+        let mut second = AppState::at(&places);
+        second.open(path);
+        assert_eq!(second.security(), maximum);
+    }
+
+    #[test]
+    fn privacy_mode_is_not_mistaken_for_the_documents_own_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plain.txt");
+        std::fs::write(&path, "text\n").unwrap();
+        let (mut first, places) = two_sessions();
+        first.open(path.clone());
+        first.set_privacy(bp_security::Privacy::On);
+        let id = first.workspace.active_id().unwrap();
+        first.edit("changed\n".to_owned());
+        assert_eq!(
+            first.save_document(id, Some(path.clone())),
+            SaveResult::Saved
+        );
+        drop(first);
+
+        let mut second = AppState::at(&places);
+        second.open(path);
+        assert_eq!(second.security(), bp_security::Security::default());
+    }
+
+    #[test]
+    fn a_default_profile_is_given_but_never_remembered_as_the_files_own() {
+        // Only a choice the user makes is kept. Were the default written
+        // down, changing the default later would not reach files opened
+        // under the old one.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plain.txt");
+        std::fs::write(&path, "text\n").unwrap();
+        let config = bp_config::Config {
+            default_profile: bp_config::SecurityProfile::Private,
+            ..bp_config::Config::default()
+        };
+        let (mut first, places) = two_sessions();
+        first.configure(&config, None);
+        first.open(path.clone());
+        assert_eq!(
+            first.security(),
+            bp_security::Security::Named(bp_security::Profile::Private)
+        );
+        drop(first);
+
+        let mut second = AppState::at(&places);
+        second.open(path);
+        assert_eq!(second.security(), bp_security::Security::default());
     }
 
     #[test]
