@@ -716,6 +716,7 @@ fn wired(
             let _ = crate::dispatch::handle_menu_action(&ui, &menu_cell, id);
         }
     });
+    crate::bind_files(&ui, &cell);
     crate::bind_editing(&ui, &cell);
     crate::bind_settings(&ui, &cell);
     crate::refresh(&ui, &mut cell.borrow_mut(), crate::state::PushText::Yes);
@@ -1071,4 +1072,62 @@ fn closing_the_results_stops_the_search_and_drops_what_it_would_have_said() {
         !ui.get_results_open(),
         "a stopped search reopened the panel"
     );
+}
+
+// --- Ctrl+S end to end (release plan M1-12) -------------------------------
+
+#[test]
+fn ctrl_s_writes_what_was_typed_and_the_document_is_clean_after() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("notes.txt");
+    std::fs::write(&path, "first line\n").unwrap();
+    let mut state = crate::state::AppState::new();
+    state.open(path.clone());
+    let (ui, cell) = wired(state);
+    chord(&ui, Key::Control, Key::End);
+    type_text(&ui, "typed here");
+    assert!(
+        ui.get_is_dirty(),
+        "typing did not mark the document unsaved"
+    );
+
+    chord(&ui, Key::Control, "s");
+
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "first line\ntyped here"
+    );
+    assert!(!ui.get_is_dirty(), "the window still says unsaved");
+    let id = cell.borrow().workspace.active_id().unwrap();
+    assert!(!cell.borrow().is_dirty(id));
+}
+
+#[test]
+fn ctrl_s_over_a_file_changed_on_disk_asks_and_escape_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("shared.txt");
+    std::fs::write(&path, "ours\n").unwrap();
+    let mut state = crate::state::AppState::new();
+    state.open(path.clone());
+    let (ui, _cell) = wired(state);
+    chord(&ui, Key::Control, Key::End);
+    type_text(&ui, "more");
+    // Somebody else writes the file, a little later by the clock.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    std::fs::write(&path, "theirs, longer than ours\n").unwrap();
+
+    chord(&ui, Key::Control, "s");
+    assert!(
+        ui.get_dialog_open(),
+        "saved over their change without asking"
+    );
+    assert_eq!(ui.get_dialog_title(), "Changed on disk");
+    press(&ui, Key::Return);
+
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "theirs, longer than ours\n",
+        "Enter is Cancel here, and their change must survive it"
+    );
+    assert!(ui.get_is_dirty());
 }
