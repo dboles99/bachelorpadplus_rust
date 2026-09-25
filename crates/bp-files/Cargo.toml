@@ -10,6 +10,11 @@ workspace = true
 [dependencies]
 bp-core = { path = "../bp-core" }
 bp-naming = { path = "../bp-naming" }
+# The measured size classes (ADR-0027). Loading must refuse what the editor
+# cannot hold *before* reading it, and the thresholds that say so live with
+# the large-file engine that measured them rather than being copied here.
+# `bp-buffer` depends on nothing in the workspace, so this adds no cycle.
+bp-buffer = { path = "../bp-buffer" }
 # The platform's rules about names, as data. `bp-naming` sanitises the names
 # *we* generate; this is for the ones the user types into a Save dialog, which
 # nothing had ever checked. `bp-platform` carries no third-party dependencies,

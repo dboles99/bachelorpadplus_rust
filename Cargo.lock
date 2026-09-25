@@ -835,6 +835,7 @@ dependencies = [
 name = "bp-files"
 version = "0.1.0"
 dependencies = [
+ "bp-buffer",
  "bp-core",
  "bp-naming",
  "bp-platform",

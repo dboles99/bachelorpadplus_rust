@@ -27,7 +27,7 @@ mod utf16;
 mod watch;
 
 pub use encode::{LineEndingPolicy, LineEndingSurvey, encode};
-pub use load::{LoadError, LoadedFile, load};
+pub use load::{EDITABLE_LIMIT_BYTES, LoadError, LoadedFile, load, load_with_limit};
 pub use save::{Overwrite, SaveError, SaveOptions, SaveOutcome, atomic_write, resolve_in_dir};
 pub use watch::{DiskState, FileStamp, check};
 
