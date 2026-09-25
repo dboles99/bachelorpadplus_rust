@@ -70,7 +70,12 @@ anyhow = "1"
 csv = "1"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `preserve_order` keeps an object's keys in the order they were written.
+# Without it `serde_json::Map` is a `BTreeMap`, and every round trip through
+# a `Value` -- Data > Format, Minify, every conversion -- silently re-sorts
+# the user's keys. Sorting is an operation (`bp_data::json_sort_keys`), not
+# a side effect of parsing.
+serde_json = { version = "1", features = ["preserve_order"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 # `local-offset` is needed because every timestamp we show the user (last
