@@ -2,10 +2,11 @@
 
 Rewritten 2026-09-25, at the end of the sixth build session.
 
-State: 24 crates, 1,729 tests, green on Linux -- **the Windows leg was not
-run this session**, see below. One is `#[ignore]`d on purpose because it
-names a decision rather than a defect (D6); the two defects that shared its
-company are fixed.
+State: 24 crates, 1,729 tests at the end of the sixth session and over
+2,000 after the seventh, green on Linux -- **the Windows leg has not been
+run on either session's work** (release-plan M0-12), see below. One is
+`#[ignore]`d on purpose because it names a decision rather than a defect
+(D6); the two defects that shared its company are fixed.
 
 **Start from [`project/RELEASE_PLAN.md`](RELEASE_PLAN.md).** A five-agent
 audit at the end of the sixth session measured the product against the spec
@@ -52,19 +53,22 @@ Page Up, Page Down and Insert work** -- which turned out to hide two real
 defects nobody had seen, because nothing had ever tested the default view
 in a window.
 
-| Commit | What |
-| --- | --- |
-| `fix(bp-notebook)` | A cell naming a language we cannot map stays `Raw`, with a warning, even when the notebook names a kernel. ADR-0025 updated |
-| `fix(bp-files)` | A long path is spelled `\\?\` for the rename. **`std::fs` lengthens long paths itself; `tempfile::persist` calls `MoveFileExW` raw**, so only the atomic rename failed. `SaveError::PathTooLong` when it cannot be lengthened |
-| `feat(bp-config)` | ADR-0029: recent list and security history to `DirKind::State`, recovery journal to `DirKind::Data`. Old locations are *adopted* by one rename; a failed rename keeps using the old location. `cargo test` no longer writes into the developer's config directory |
-| `docs(bp-formats)` | `Profile::is_data` says what it answers |
-| `feat(bp-ui)` | Page Up/Down, a view that follows the caret, Insert/overwrite in both views, the CUA clipboard keys, and **window tests** |
+The commits themselves are in `git log`, which is the record; this file
+no longer keeps a hand-made table of them, because the last one missed the
+two fixes that landed after it (the ADR-0029 migration races and errors).
+What each landed item did is in the release plan's "Progress" notes and the
+Done table of `project/WORK_QUEUE.md`. In short: a notebook cell naming a
+language it cannot map stays `Raw` (ADR-0025); a long path is spelled `\\?\`
+for the atomic rename; the recent list, security history and recovery
+journal left the roaming directory (ADR-0029); and Page Up/Down, a view that
+follows the caret, Insert/overwrite, the CUA clipboard keys and the window
+tests arrived in `bp-ui`.
 
 **The Windows leg has not run on any of this.** The session's container had
 no PowerShell and no Windows; the Linux leg was run stage by stage by hand
 (fmt, check --locked, clippy, test, launch, log hygiene, fuzz) and is green.
 The long-path fix is Windows behaviour, exercised on Linux only through its
-platform-parameterised half, and the window tests have never met Consolas.
+platform-parameterised half, and the window tests have never run on Windows.
 **Run `./scripts/Invoke-LocalCI.ps1` on Windows first**, before anything
 else.
 
@@ -128,10 +132,12 @@ misbehaving. The mode is the window's, shown as `OVR` in the status bar.
 ## The shape of the problem has changed
 
 For three sessions the largest gap was that capabilities did not exist. It is
-now the opposite. **Three crates are built, tested and unreachable** — the
-large-file engine, notebooks and research — and the queue's Tier 0 is
-nothing but wiring. Building another library is the easy, comfortable move
-and it is the wrong one.
+now the opposite. **Three crates and one module are built, tested and
+unreachable** — `bp-notebook`, `bp-research`, `bp-storage` and `bp-buffer`'s
+large-file viewer — and the queue's Tier 0 is nothing but wiring. (ADR-0030
+has since kept the three crates out of RC1, so of these only the viewer,
+M1-06, is release work.) Building another library is the easy, comfortable
+move and it is the wrong one.
 
 An audit at the end of the fifth session put a number on that: `bp-research`,
 `bp-notebook` and `bp-storage` have **zero reverse dependencies anywhere in
@@ -212,7 +218,7 @@ not:
 | --- | --- |
 | JSONL sniff calls a pretty-printed array "JSON Lines" | `bp_formats::looks_like_json_lines` requires `closes_what_it_opens(first)` |
 | The encoder is `pub(crate)` in the shell | `crates/bp-files/src/encode.rs` |
-| YAML has no way in | `bp-ui/src/state.rs:593` calls `bp_data::yaml_validate` |
+| YAML has no way in | `bp-ui/src/state.rs` calls `bp_data::yaml_validate` (and `yaml_format`, `yaml_minify`, `yaml_to_json`) |
 | `bp-audit`'s sealed destination has no implementor | `bp-audit/src/passphrase.rs:185` |
 | README: five crates built and unreachable | Names `bp-integrity` and `bp-platform`, which have rows; omits `bp-audit` and `bp-storage`, which do not |
 | ROADMAP phase 18: **Built, unwired** | File ▸ Set as Default Editor shipped in the fifth session |
@@ -263,8 +269,8 @@ sent, and nobody was looking at the result as a user would.
 | Check | What would be wrong | Sixth session, Xvfb, Linux |
 | --- | --- | --- |
 | Type a character | Keys not reaching the `FocusScope` at all | **Works** |
-| Click mid-line | Caret lands left or right of the pointer — the measured advance is off | **Wrong on Linux**: no Consolas, proportional fallback. See above |
-| Click at the end of a long line | Advance error accumulating across columns | **Wrong on Linux**, same cause, and it does accumulate |
+| Click mid-line | Caret lands left or right of the pointer — the measured advance is off | **Was wrong on Linux**: no Consolas, proportional fallback. The cause is removed by the bundled DejaVu Sans Mono (M0-03, ADR-0032); **not yet re-checked** |
+| Click at the end of a long line | Advance error accumulating across columns | **Was wrong on Linux**, same cause, and it did accumulate. Same fix; **not yet re-checked** |
 | Arrow down through a short line and back up | The goal column not surviving | Page Down kept the column; the round trip itself not run |
 | Drag to select | Selection rectangles misplaced, or drag not extending | Not run |
 | Scroll the wheel | Wrong direction, or snapping back to the caret | Not run |
@@ -276,13 +282,15 @@ sent, and nobody was looking at the result as a user would.
 | Home, End, Page Up/Down, Ctrl+Home/End, Insert | Keys unnamed, or landing on the wrong line | **Works** -- each checked by where a typed marker landed in the saved file |
 
 **The advance measurement was one of the two most likely to be subtly wrong,
-and on Linux it is -- not subtly.** On Windows it still wants a look, and
-so does the wheel direction.
+and on Linux it was -- not subtly.** The font is bundled now, so it should
+hold on both OSes, but a person has to look: the headless window tests send
+keys and never place the pointer. So does the wheel direction.
 
 Write down what feels wrong, not only what breaks. The default is still
-`TextInput`, so nothing is lost if the answer is bad — but five features
-shipped in the last two sessions are enabled only here, and they all inherit
-whatever that caret does.
+`TextInput`, so nothing is lost if the answer is bad — and since M1-04 the
+caret features (Go to Line, Duplicate and Move Line, Insert Date/Time, Ln/Col)
+work in the default view too, so they no longer inherit whatever this caret
+does.
 
 ---
 
@@ -301,23 +309,18 @@ recorded here so nobody re-derives them:
   policy, Privacy Mode clamps it for the session, and phase 15 shipping means
   the profiles wanting an encrypted journal are honoured rather than refused.
 
-The replacement for all three is Tier 0 of `project/WORK_QUEUE.md`: four
-crates with no way in.
+The replacement for all three was Tier 0 of `project/WORK_QUEUE.md`: three
+crates and one module with no way in. The release plan has since replaced
+it as the thing to start from.
 
 ## Decisions still waiting on a human
 
-- **Where a signing key lives** (phase 16). This is the one blocking a row
-  that is otherwise finished — Sign Document greys because there is no key
-  store, no keyring integration and no decision on file permissions for a key
-  on disk. ADR-0026 documents what `bp-integrity` can and cannot enforce per
-  platform, which is most of the input needed.
-- **One definition of a line.** `bp-search` counts
-  `\n`; `bp-buffer`'s rope
-  uses ropey's `unicode_lines`. `bp-ui` uses both today, in different views.
-- **What may leave the machine** (phases 8 and 10). Unchanged.
-- **Whether `bp-storage` may record extracted titles** (phase 9). Narrower
-  than it was — the security half is answered by phase 14 — but ADR-0019's
-  product judgement still stands.
+The one list is [`project/DECISIONS_NEEDED.md`](DECISIONS_NEEDED.md), kept
+current as work happens; [`RELEASE_PLAN.md`](RELEASE_PLAN.md) §4 orders the
+same questions by the milestone each blocks. This section used to keep its
+own four-item copy, which fell behind the queue; it no longer duplicates it.
+The ones holding up M1 today are U3 (M1-06), D6 (M1-09), the copyright holder
+(M1-14) and U5 (M1-18).
 
 ## Working with agents in this repository
 
@@ -396,9 +399,14 @@ Three sessions of evidence, worth reading before dispatching any:
   moved on — the comparison that answers the question is against the commit
   the work landed in, not against `HEAD`. It also removes the sixfold copy of
   `fuzz/corpus/yaml/` that was breaking editor tooling.
-- **All 59 commits live on `feat/phase-01-foundation-ui`.** `main` has none of
-  them and 44 are unpushed, so a sixteen-phase product exists in exactly one
-  place under a branch named for phase one.
+- ~~**All 59 commits live on `feat/phase-01-foundation-ui`.**~~ **Merged**:
+  `31f6858 Merge phases 1-19 into main (PR #1)`. The work since -- the sixth
+  and seventh sessions -- is on `claude/compassionate-wright-wwclxq`, open as
+  [PR #3](https://github.com/dboles99/bachelorpadplus_rust/pull/3) into
+  `main`. The local branch was 54 commits ahead of the last-fetched
+  `origin/main` when this was written; `git fetch` then
+  `git log --oneline origin/main..HEAD` gives today's count. The audit of
+  2026-09-25 recommends merging only after the Windows gate run (M0-12).
 - ~~**The panic discipline is real and unenforced.**~~ **Enforced now.**
   There was not one `unwrap()`, `panic!`, `todo!` or `unimplemented!` in
   production library code across all 24 crates before the lints were switched
@@ -445,8 +453,10 @@ Three sessions of evidence, worth reading before dispatching any:
 
 ## How to work in this repository
 
-- `./scripts/Invoke-LocalCI.ps1 -Linux` is the gate. There is no hosted CI
-  (ADR-0016) and Actions is disabled at the repository level.
+- `./scripts/Invoke-LocalCI.ps1` is the gate: on Windows add `-Linux` for the
+  WSL leg; on a Linux host `pwsh -NoProfile -File scripts/Invoke-LocalCI.ps1`
+  runs every stage natively (M0-13). There is no hosted CI (ADR-0016) and
+  Actions is disabled at the repository level.
 - `./scripts/Install-GitHooks.ps1` once per clone; the hooks run the gate.
 - Every commit in this repository has passed the gate. Keep it that way.
 - `docs/decisions/` is the register; add an ADR when a decision has

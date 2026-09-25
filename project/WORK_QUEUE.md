@@ -129,19 +129,24 @@ so whoever finishes an item updates them as part of it.
 
 Every library half now has its row.
 
-## Tier 0 — three crates with no way in
+## Tier 0 — three crates and one module with no way in
 
-Still the largest block of ready work, and every item is the same shape: a
-tested library and a missing menu row. Read
+`bp-notebook`, `bp-research` and `bp-storage` are named by no `Cargo.toml` in
+the application (only `tests/integration`, and for `bp-notebook` the fuzz
+harness), and `bp-buffer`'s large-file viewer (`LargeFile`) is used nowhere
+outside its own crate -- only its size classes are, for the open path's size
+guard. ADR-0030 keeps all three crates unwired for RC1, so of this tier only
+the large-file row is release work. Every item is the same shape: a tested
+library and a missing way in. Read
 `prompts/rosettas/R011_WIRE_CAPABILITY_INTO_SHELL.md` before taking any of
 them. **Only one agent may add to `AppWindow` in `app.slint` at a time**, so
 batch by menu.
 
 | Item | What exists |
 | --- | --- |
-| The open path uses the large-file engine | `bp_buffer::{LargeFile, SizeClass, Access}` (ADR-0027). Opening a 2 GB file currently loads 2 GB. Needs a read-only-because-huge state in the shell, which is a real UI decision, so this is the biggest of the wiring items rather than the cheapest |
-| Notebook mode | `bp-notebook` (ADR-0025). A new view, not a menu row |
-| Research mode | `bp-research`. Same: a mode, not a row |
+| The open path uses the large-file engine | `bp_buffer::{LargeFile, SizeClass, Access}` (ADR-0027). Since M0-04 a file past the 32 MiB editable limit is refused before it is read, with a notice, rather than loaded whole; nothing can view it yet. Needs a read-only-because-huge state in the shell, which is a real UI decision (U3), so this is the biggest of the wiring items rather than the cheapest. Release-plan item M1-06 |
+| Notebook mode | `bp-notebook` (ADR-0025). A new view, not a menu row. Deferred to 1.1 by ADR-0030 |
+| Research mode | `bp-research`. Same: a mode, not a row. Not in RC1 (ADR-0030) |
 
 ## Tier 0.5 — what the cross-crate tests found
 
@@ -152,18 +157,17 @@ that is now documented rather than set:
 
 | Item | Shape |
 | --- | --- |
-| `bp-search` and `bp-buffer` disagree what a line is | **An ADR, not a patch — D6.** Either `bp-search` adopts ropey's break set or `bp-buffer` drops `unicode_lines`. One definition has to win, and `bp-ui` uses both today, in different views. The one `#[ignore]`d test left in `tests/integration` pins it |
+| `bp-search` and `bp-buffer` disagree what a line is | **An ADR, not a patch — D6.** Either `bp-search` adopts ropey's break set or `bp-buffer` drops `unicode_lines`. One definition has to win. `bp-ui` now counts with the rope in both views, so the disagreement left is Find in Files against the editor. The one `#[ignore]`d test left in `tests/integration` pins it |
 
 ## Tier 0.75 — what the window tests found
 
 `bp-ui` has tests that drive the real window now (`src/window_tests.rs`),
 on a headless software renderer with real key events. They found two
-defects in their first hour, both fixed. Found alongside them, or since, and
-not fixed:
+defects in their first hour, both fixed. Found alongside them, or since:
 
 | Item | Shape |
 | --- | --- |
-| **`--editor-view` draws its caret right of the text on Linux** | `EditorSurface` measures one advance and multiplies it by the column, which holds only for a monospace font. It asks for `"Consolas"`; Slint resolves a family name literally (no fontconfig aliasing, no generic `monospace`), so on Linux it falls back to a proportional sans and the caret drifts further right with every character. Found by driving the app on Xvfb. Fix is a product choice: bundle a monospace font with `import`, or pick the family per platform in Rust. Windows is unaffected |
+| ~~**`--editor-view` draws its caret right of the text on Linux**~~ | **Fixed by M0-03**: DejaVu Sans Mono is bundled with `import` and named by every text element that used to ask for Consolas, on every OS (ADR-0032). Not yet re-checked by a person on Linux; the window tests send keys and do not place the pointer. What was recorded: `EditorSurface` measures one advance and multiplies it by the column, which holds only for a monospace font. It asks for `"Consolas"`; Slint resolves a family name literally (no fontconfig aliasing, no generic `monospace`), so on Linux it falls back to a proportional sans and the caret drifts further right with every character. Found by driving the app on Xvfb. Fix is a product choice: bundle a monospace font with `import`, or pick the family per platform in Rust. Windows is unaffected. (Answered as U2: bundle one.) |
 | **`--editor-view` loses every key typed before the first click** | Launch `bachelorpad --editor-view file.txt`, type, press Ctrl+S: nothing is typed and nothing is saved. Click in the text and the same keys work; the default view takes keys at once. `app.slint` has `forward-focus: editor` -- the `TextInput`, hidden in this view -- and nothing calls `focus-editor` on launch. The window tests call it themselves, so they cannot see this. The keys are dropped, not stored invisibly (checked). Found by `scripts/smoke-linux.sh`, which reports it as `XFAIL`; delete its `KNOWN_DEFECTS` entry with the fix. The cause is in `.slint`, so every platform is probably affected; seen on X11 |
 
 ## Tier 1 — pure wiring (the capability exists and is tested)
@@ -212,10 +216,10 @@ All of it, in one pass. What is worth carrying forward:
 | --- | --- |
 | ~~Word wrap in the editor surface~~ | **Done.** `bp_editor::wrap` owns the breaking rule; `view`'s wrapped half maps rows to characters; `Editor` moves Up and Down by visual row. The shell anchors scrolling to a line *and* a row within it, and Slint reports the column count because it owns the font. |
 | **Input-method composition** | **Slint 1.17.1, and this was checked rather than assumed.** `FocusScope` returns `EventResult::Reject` for `UpdateComposition` and `CommitComposition` in *both* `capture_key_event` and `key_event` (`i-slint-core/items/input_items.rs`), and exposes no callback for either. `TextInput` is the only item in the whole toolkit that consumes them, and `input_method_request` is a backend-internal trait, not an application hook. There is no route to pre-edit text from a `FocusScope`. Revisit on a Slint upgrade. |
-| **Security ▸ Sign Document** | **D5 — where a signing key lives.** `bp_integrity::sign_file` exists, is tested, and writes the very sidecar the Verify row now reads, so this is a key store away from working. The row is greyed with the reason on it rather than `planned`. Verifying shipped without it, because verifying needs nothing stored. |
+| **Security ▸ Sign Document** | **No longer blocked: D5 is answered** (ADR-0030, a seed sealed in a passphrase `.bpadx` envelope); the work is release-plan item M2-10. Until then, as recorded: **D5 — where a signing key lives.** `bp_integrity::sign_file` exists, is tested, and writes the very sidecar the Verify row now reads, so this is a key store away from working. The row is greyed with the reason on it rather than `planned`. Verifying shipped without it, because verifying needs nothing stored. |
 | Anything writing to `bp-storage` | **Still a decision, but a narrower one.** Phase 14 exists now and `record_document` honours the policy, so the security half is answered. What remains is ADR-0019's product judgement plus a design pass. Do not "just wire it up". |
 | `bp-organize` | The above, plus a design pass. |
-| ~~YAML support~~ | **Done and unreachable.** ADR-0023 picked `saphyr`; `bp-data` validates, formats, minifies and converts, with nesting, alias expansion and duplicate keys all bounded. No `bp-ui` code calls any of it. This is now a wiring item, not a blocked one. |
+| ~~YAML support~~ | **Done and wired.** ADR-0023 picked `saphyr`; `bp-data` validates, formats, minifies and converts, with nesting, alias expansion and duplicate keys all bounded, and the Data menu reaches all of it: `bp-ui`'s `state.rs` calls `bp_data::yaml_validate`, `yaml_format`, `yaml_minify` and `yaml_to_json`. |
 | Markdown preview | Slint has no HTML view. Needs a rendering decision first. |
 | ~~`.bpadx` encryption~~ | **Done.** ADR-0021 settled the envelope and it ships; ADR-0022 seals the recovery journal with it. |
 | Print | Platform work with no cross-platform story yet. |
@@ -224,6 +228,11 @@ All of it, in one pass. What is worth carrying forward:
 ## Not a queue item
 
 The first thing in `NEXT_SESSION.md` is a person typing into `--editor-view`
-and writing down what feels wrong. No agent can do that, and W1, W5, W6 and W7
-are all worth less until somebody has — they are caret-dependent, and nobody
-has yet confirmed the caret lands where the pointer does.
+and writing down what feels wrong. No agent can do that. Whether the caret
+lands where the pointer does has been answered once, for Linux on Xvfb: it
+did not, because "Consolas" fell back to a proportional font (X1). The
+bundled DejaVu Sans Mono (M0-03, ADR-0032) removes that cause, but nobody
+has re-checked it since -- the headless window tests do not place the
+pointer -- so it is **not yet verified** on either OS. It matters less than
+it did: since M1-04, W1, W5 and W8 also work in the default `TextInput`
+view, so only W7 and the custom view's own caret depend on the answer.
