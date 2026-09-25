@@ -1001,3 +1001,74 @@ fn a_notice_never_hides_the_path() {
     );
     assert_eq!(ui.get_status_notice(), "something worth saying");
 }
+
+// --- Find in Files off the UI thread (release plan M1-07) ----------------
+
+/// Drive Slint's timers until `done` says so, or a generous deadline.
+fn run_timers_until(done: impl Fn() -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !done() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        slint::platform::update_timers_and_animations();
+    }
+}
+
+fn needles() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a.txt"), "a needle\n").unwrap();
+    std::fs::write(dir.path().join("b.txt"), "no\nanother needle\n").unwrap();
+    dir
+}
+
+#[test]
+fn find_in_files_runs_in_the_background_and_fills_the_results() {
+    let dir = needles();
+    let (ui, cell) = wired(crate::state::AppState::new());
+    let searches = Rc::new(std::cell::RefCell::new(crate::worker::Background::new()));
+    let timer = Rc::new(slint::Timer::default());
+
+    crate::search_folder(
+        &ui,
+        &cell,
+        &searches,
+        &timer,
+        dir.path().to_path_buf(),
+        bp_search::Query::literal("needle"),
+    );
+    // Back at once, saying so, rather than frozen until the walk is done.
+    assert!(ui.get_results_summary().starts_with("searching"));
+
+    run_timers_until(|| !ui.get_results_summary().starts_with("searching"));
+    assert_eq!(ui.get_results_summary(), "2 matches in 2 files searched");
+    assert_eq!(cell.borrow().file_hits.len(), 2);
+    assert!(!timer.running(), "the timer outlived its search");
+}
+
+#[test]
+fn closing_the_results_stops_the_search_and_drops_what_it_would_have_said() {
+    let dir = needles();
+    let (ui, cell) = wired(crate::state::AppState::new());
+    let searches = Rc::new(std::cell::RefCell::new(crate::worker::Background::new()));
+    let timer = Rc::new(slint::Timer::default());
+
+    crate::search_folder(
+        &ui,
+        &cell,
+        &searches,
+        &timer,
+        dir.path().to_path_buf(),
+        bp_search::Query::literal("needle"),
+    );
+    ui.set_results_open(false);
+    run_timers_until(|| !timer.running());
+
+    assert!(!searches.borrow().busy());
+    assert!(
+        cell.borrow().file_hits.is_empty(),
+        "a stopped search filled the list"
+    );
+    assert!(
+        !ui.get_results_open(),
+        "a stopped search reopened the panel"
+    );
+}

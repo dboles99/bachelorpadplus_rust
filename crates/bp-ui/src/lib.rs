@@ -74,6 +74,7 @@ mod settings_sheet;
 mod state;
 #[cfg(test)]
 mod window_tests;
+mod worker;
 
 /// Crate identity used by workspace smoke tests and diagnostics.
 pub const CRATE_NAME: &str = "bp-ui";
@@ -955,9 +956,16 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
     }
 
     // --- cross-file search ---------------------------------------------
+    // Find in Files, off the UI thread (release plan M1-07): a walk of a big
+    // tree used to freeze the window until it finished. The timer collects
+    // the result, and stops the walk if the results panel is closed first.
+    let searches = Rc::new(RefCell::new(worker::Background::new()));
+    let search_timer = Rc::new(slint::Timer::default());
     {
         let cell = Rc::clone(&state);
         let weak = ui.as_weak();
+        let searches = Rc::clone(&searches);
+        let timer = Rc::downgrade(&search_timer);
         ui.on_search_folder(move || {
             let Some(ui) = weak.upgrade() else { return };
             let query = ui_query(&ui);
@@ -972,41 +980,9 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
                 return;
             };
 
-            match bp_search::search_dir(&folder, &query) {
-                Ok(report) => {
-                    let rows: Vec<SearchHit> = report
-                        .hits
-                        .iter()
-                        .enumerate()
-                        .map(|(index, hit)| SearchHit {
-                            // Relative to the searched folder: the shared
-                            // prefix is the same on every row and identifies
-                            // nothing.
-                            label: format!(
-                                "{}:{}",
-                                hit.path
-                                    .strip_prefix(&folder)
-                                    .unwrap_or(&hit.path)
-                                    .display(),
-                                hit.line
-                            )
-                            .into(),
-                            detail: hit.preview.as_str().into(),
-                            index: i32::try_from(index).unwrap_or(i32::MAX),
-                        })
-                        .collect();
-
-                    ui.set_search_hits(Rc::new(slint::VecModel::from(rows)).into());
-                    ui.set_results_summary(report.summary().as_str().into());
-                    cell.borrow_mut().file_hits = report.hits;
-                }
-                Err(e) => {
-                    ui.set_search_hits(Rc::new(slint::VecModel::from(Vec::new())).into());
-                    ui.set_results_summary(e.to_string().as_str().into());
-                    cell.borrow_mut().file_hits.clear();
-                }
+            if let Some(timer) = timer.upgrade() {
+                search_folder(&ui, &cell, &searches, &timer, folder, query);
             }
-            ui.set_results_open(true);
         });
     }
 
@@ -1147,6 +1123,109 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
     ui.hide()?;
     drop(disk_timer);
     Ok(())
+}
+
+/// Start Find in Files under `folder` on the worker, and the timer that
+/// collects its result -- or stops it, if the results panel is closed
+/// first. Everything after the folder picker, so the window tests can drive
+/// it without one.
+fn search_folder(
+    ui: &AppWindow,
+    cell: &Rc<RefCell<state::AppState>>,
+    searches: &Rc<RefCell<worker::Background<SearchOutcome>>>,
+    timer: &Rc<slint::Timer>,
+    folder: PathBuf,
+    query: bp_search::Query,
+) {
+    ui.set_search_hits(Rc::new(slint::VecModel::from(Vec::new())).into());
+    ui.set_results_summary(
+        format!("searching {} -- close this panel to stop", folder.display()).into(),
+    );
+    ui.set_results_open(true);
+    cell.borrow_mut().file_hits.clear();
+
+    let root = folder.clone();
+    searches.borrow_mut().start(move |stop| {
+        let found = bp_search::search_dir_until(&root, &query, &|| {
+            stop.load(std::sync::atomic::Ordering::Relaxed)
+        })
+        .map_err(|e| e.to_string());
+        (root, found)
+    });
+
+    let (cell, weak, searches, stop_timer) = (
+        Rc::clone(cell),
+        ui.as_weak(),
+        Rc::clone(searches),
+        Rc::downgrade(timer),
+    );
+    timer.start(
+        slint::TimerMode::Repeated,
+        std::time::Duration::from_millis(100),
+        move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let mut jobs = searches.borrow_mut();
+            let done = if !jobs.busy() {
+                true
+            } else if !ui.get_results_open() {
+                // Closed while searching: that is the stop button.
+                jobs.stop();
+                true
+            } else if let Some((root, found)) = jobs.take() {
+                drop(jobs);
+                show_search_report(&ui, &cell, &root, found);
+                true
+            } else {
+                false
+            };
+            if done && let Some(timer) = stop_timer.upgrade() {
+                timer.stop();
+            }
+        },
+    );
+}
+
+/// A finished Find in Files: where it looked, and what it found.
+type SearchOutcome = (PathBuf, Result<bp_search::FileSearchReport, String>);
+
+/// Fill the results panel from a finished Find in Files under `folder`.
+fn show_search_report(
+    ui: &AppWindow,
+    cell: &Rc<RefCell<state::AppState>>,
+    folder: &std::path::Path,
+    found: Result<bp_search::FileSearchReport, String>,
+) {
+    match found {
+        Ok(report) => {
+            let rows: Vec<SearchHit> = report
+                .hits
+                .iter()
+                .enumerate()
+                .map(|(index, hit)| SearchHit {
+                    // Relative to the searched folder: the shared prefix is
+                    // the same on every row and identifies nothing.
+                    label: format!(
+                        "{}:{}",
+                        hit.path.strip_prefix(folder).unwrap_or(&hit.path).display(),
+                        hit.line
+                    )
+                    .into(),
+                    detail: hit.preview.as_str().into(),
+                    index: i32::try_from(index).unwrap_or(i32::MAX),
+                })
+                .collect();
+
+            ui.set_search_hits(Rc::new(slint::VecModel::from(rows)).into());
+            ui.set_results_summary(report.summary().as_str().into());
+            cell.borrow_mut().file_hits = report.hits;
+        }
+        Err(e) => {
+            ui.set_search_hits(Rc::new(slint::VecModel::from(Vec::new())).into());
+            ui.set_results_summary(e.as_str().into());
+            cell.borrow_mut().file_hits.clear();
+        }
+    }
+    ui.set_results_open(true);
 }
 
 /// Wire the editor's text, caret, Go to Line and tab-cycling callbacks. A
