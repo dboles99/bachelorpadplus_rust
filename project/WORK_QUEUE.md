@@ -14,8 +14,13 @@ which is not the same list.
    scoping.
 2. Take the whole item. Each one below is already the smallest thing worth
    doing; splitting one further produces a half-feature.
-3. Run the gate before saying it is done:
-   `./scripts/Invoke-LocalCI.ps1 -Linux`
+3. Run the gate before saying it is done: `./scripts/Invoke-LocalCI.ps1 -Linux`
+   on Windows (both legs, the second in WSL), or
+   `pwsh -NoProfile -File scripts/Invoke-LocalCI.ps1` on a Linux host, where
+   every stage runs natively (launch under `xvfb-run -a` when there is no
+   display). Never share one `CARGO_TARGET_DIR` between two worktrees of this
+   repository: cargo names workspace crates by their path relative to the
+   workspace root, so one tree's build is silently reused by the other.
 
 ## Collision rules
 

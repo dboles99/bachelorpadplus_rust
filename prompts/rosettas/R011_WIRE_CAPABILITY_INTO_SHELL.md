@@ -133,13 +133,16 @@ From `docs/governance/DEFINITION_OF_DONE.md`, the parts that apply here:
 ## The gate
 
 ```powershell
-./scripts/Invoke-LocalCI.ps1 -Linux
+./scripts/Invoke-LocalCI.ps1 -Linux                 # on Windows
+pwsh -NoProfile -File scripts/Invoke-LocalCI.ps1     # on a Linux host
 ```
 
 This **is** the gate — there is no hosted CI (ADR-0016). Every commit in this
 repository has passed it. It runs `fmt`, `check --locked`, `clippy -D
 warnings`, `test`, an actual binary launch, and the log-hygiene scan, then the
-whole lot again inside WSL.
+whole lot again inside WSL. On a Linux host the same script runs every stage
+natively (launch under `xvfb-run -a` when there is no display) and skips the
+WSL leg.
 
 Two practical notes:
 
