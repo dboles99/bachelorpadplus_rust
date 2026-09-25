@@ -115,7 +115,17 @@ so whoever finishes an item updates them as part of it.
 | M1-10 | Windows-1252 opens, saves back byte for byte, and a character it cannot hold offers UTF-8 | `bp_core::encode_windows_1252`, `bp_files::try_encode`, `lib.rs::offer_utf8` |
 | M1-15 | An opened file keeps its real creation date | `bp_naming::creation_date_for`, `state::created_at` |
 | M1-21 (outline) | The outline ignores fenced code | `bp-semantic` |
-| M1-03 (persistence) | View and Format choices saved into config.toml, comments kept; new settings take effect | `bp_config::save`, `AppState::{configure, remember}` |
+| M1-03 | View and Format choices saved into config.toml, comments kept; Tools ▸ Settings… sheet | `bp_config::save`, `AppState::{configure, remember}`, `settings_sheet.rs` |
+| M1-02 | About sheet with `AboutSlint`, build commit, renderer, licences | `ui/about.slint`, `about.rs`, `build.rs` |
+| M1-04 | Default view: Ln/Col, Go to Line, Insert Date/Time, line moves | `follow_widget_caret`, `at_the_caret`, `Buffer::byte_to_char` |
+| M1-05 | No placeholders on a release bar; Tools live | `menus::{readout, tools}`, `show_planned_menus` |
+| M1-07 (1 of 2) | Find in Files off the UI thread, stoppable | `worker::Background`, `bp_search::search_dir_until` |
+| M1-11 | Multi-select Open; Ctrl+Tab | `AppState::{open_many, cycle_tab}` |
+| M1-13 | Release profile, pinned toolchain, crt-static, trimmed features | `Cargo.toml`, `.cargo/config.toml` |
+| M1-16 | A notice never hides the path | `status_bar.slint` |
+| M1-17 | Collision-free Save As name; Save as New Revision | `suggested_filename`, `next_revision_path` |
+| M1-19 (store) | A document's profile survives a restart | `bp_history::ProfileStore` |
+| M1-21 | Outline ignores fences; Follow System says when the desktop is silent | `bp-semantic`, `menus::view` |
 
 Every library half now has its row.
 
