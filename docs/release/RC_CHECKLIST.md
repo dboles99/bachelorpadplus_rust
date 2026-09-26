@@ -10,6 +10,11 @@ An environment whose run is not complete, or has a failure that is not
 fixed, is left out of that tag's release assets and listed as "not yet" in
 the release notes.
 
+Every tag's release notes also carry the Windows 10 support statement from
+the README's Requirements section (release plan decision 21, W8): supported
+on 22H2 with ESU or LTSC, the same binary as Windows 11, tested at each
+release candidate, and no Windows-10-only fixes after 1.0.
+
 ## Environments
 
 | ID | Environment | Notes |

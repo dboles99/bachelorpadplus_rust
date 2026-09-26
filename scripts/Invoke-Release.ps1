@@ -30,8 +30,8 @@
          exe itself says what it was built from.
       4. Packages: on Linux, packaging/linux/build-packages.sh (inside the
          pinned container with -Container) and the glibc ceiling check; on
-         Windows, the installer and the portable zip. Windows signing
-         (M3-04) is not wired yet: the exe and installer are unsigned.
+         Windows, the installer and the portable zip, signed with -Sign
+         (packaging/windows/Signing.ps1).
       5. A CycloneDX SBOM, SHA256SUMS, the minisign signature, the manifest.
       6. With -Upload, gh release upload.
 
@@ -58,6 +58,17 @@
     Windows only: Inno Setup's ISCC.exe, if not on PATH or in its usual
     place.
 
+.PARAMETER Sign
+    Windows only: sign the exe, then the setup and its uninstaller, with the
+    identity configured on this machine (packaging/windows/Signing.ps1;
+    Azure Artifact Signing or an OV certificate, both through signtool with
+    an RFC 3161 timestamp), and verify each with `signtool verify /pa`.
+
+.PARAMETER AllowUnsigned
+    Windows only: allow a non-dry-run release without -Sign. Unsigned
+    Windows binaries meet SmartScreen and Smart App Control; this exists
+    for a release deliberately made before the identity is in place.
+
 .PARAMETER Upload
     Upload files/ to the GitHub release named by -Tag with gh. Refused with
     -DryRun.
@@ -72,6 +83,8 @@ param(
     [switch]$SkipGate,
     [string]$MinisignKey,
     [string]$IsccPath,
+    [switch]$Sign,
+    [switch]$AllowUnsigned,
     [switch]$Upload
 )
 
@@ -110,6 +123,10 @@ function Require-Tool {
 
 if ($Upload -and $DryRun) { throw "-Upload with -DryRun would publish a dry run; refused" }
 if ($Container -and $OnWindows) { throw "-Container is for the Linux build only" }
+if (($Sign -or $AllowUnsigned) -and -not $OnWindows) { throw "-Sign and -AllowUnsigned are for the Windows build only" }
+if ($OnWindows -and -not $Sign -and -not $DryRun -and -not $AllowUnsigned) {
+    throw "a Windows release is signed: pass -Sign (or -AllowUnsigned to release unsigned on purpose)"
+}
 
 Push-Location $Root
 try {
@@ -170,9 +187,16 @@ try {
         }
         $targetDir = ((cargo metadata --format-version 1 --no-deps) -join "`n" | ConvertFrom-Json).target_directory
         $exe = Join-Path $targetDir 'release/bachelorpad.exe'
-        Step 'installer and portable zip (unsigned: M3-04 not wired)' {
+        if ($Sign) {
+            Step 'sign the exe (Authenticode, timestamped)' {
+                . (Join-Path $Root 'packaging/windows/Signing.ps1')
+                Invoke-FileSigning -Path $exe
+            }
+        }
+        Step "installer and portable zip ($(if ($Sign) { 'signed' } else { 'unsigned' }))" {
             $installerArgs = @{ ExePath = $exe; OutputDir = $files; Version = $version }
             if ($IsccPath) { $installerArgs.IsccPath = $IsccPath }
+            if ($Sign) { $installerArgs.Sign = $true }
             & (Join-Path $Root 'packaging/windows/Build-Installer.ps1') @installerArgs | Out-Null
             & (Join-Path $Root 'packaging/windows/New-PortableZip.ps1') -ExePath $exe -OutputDir $files -Version $version | Out-Null
             $pdb = Join-Path $targetDir 'release/bachelorpad.pdb'
@@ -289,7 +313,7 @@ try {
             cargo       = ((cargo -V) -join '')
             cargo_lock_sha256 = Get-Sha256 (Join-Path $Root 'Cargo.lock')
             sums_signed = $signed
-            windows_signed = $false
+            windows_signed = [bool]($OnWindows -and $Sign)
             artefacts   = @($artefacts | ForEach-Object {
                     [ordered]@{ name = $_.Name; bytes = $_.Length; sha256 = Get-Sha256 $_.FullName }
                 })

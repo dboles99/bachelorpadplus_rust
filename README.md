@@ -37,8 +37,13 @@ AppImage and Flatpak builds may follow later. Until the packages exist,
 
 ## Requirements
 
-**Windows.** Windows 10 22H2 or Windows 11, 64-bit. Nothing else to install:
-the C runtime is built into the program. The current code compiles for
+**Windows.** Windows 11, or Windows 10 22H2, 64-bit. Nothing else to install:
+the C runtime is built into the program.
+
+Windows 10 is supported on 22H2 with Extended Security Updates, or on an LTSC
+edition, since ordinary Windows 10 no longer receives security fixes. It runs
+the same program as Windows 11 and is tested at every release candidate, but
+after 1.0 there will be no fixes for problems that occur only on Windows 10. The current code compiles for
 Windows but has not yet been run on a Windows machine; see
 [Known gaps](#known-gaps).
 
