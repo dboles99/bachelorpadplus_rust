@@ -96,8 +96,11 @@ pub enum LoadError {
     /// The file is past the editable limit, so it was not read whole.
     /// Refused rather than attempted: the attempt is what hangs the editor
     /// or runs it out of memory, taking every other open document with it.
+    /// The shell opens such a file in its read-only viewer instead
+    /// (`bp_buffer::LargeFile`), so this message is seen only where that
+    /// cannot be done.
     #[error(
-        "{} is {} -- too large to edit here (the limit is {}). A read-only viewer for large files is coming; for now, open a smaller file",
+        "{} is {} -- too large to edit here (the limit is {})",
         .path.display(), Size(*.bytes), Size(*.limit)
     )]
     TooLarge {
@@ -666,7 +669,7 @@ mod tests {
     }
 
     #[test]
-    fn the_refusal_names_the_file_its_size_and_what_to_do_instead() {
+    fn the_refusal_names_the_file_its_size_and_the_limit() {
         let dir = tempdir().unwrap();
         let path = sparse(dir.path(), "server.log", 40 * 1024 * 1024);
 
@@ -675,7 +678,10 @@ mod tests {
         assert!(message.contains("server.log"), "{message}");
         assert!(message.contains("40.0 MiB"), "{message}");
         assert!(message.contains("32.0 MiB"), "{message}");
-        assert!(message.contains("open a smaller file"), "{message}");
+        // What to do instead is the shell's to say: it opens the file in its
+        // read-only viewer, and a message from here promising a viewer "to
+        // come" outlived the viewer's arrival once already.
+        assert!(!message.contains("coming"), "{message}");
     }
 
     #[test]

@@ -317,6 +317,32 @@ pub fn handle_menu_action(
         close_each, close_with_prompt, refresh, refresh_after, save_each, save_with_prompt,
     };
 
+    // A viewer tab has no text to act on, and some of these would write
+    // an empty document over its file. The menus grey the same rows; this
+    // catches the shortcuts and a menu built before the tab changed.
+    let refusal = state
+        .borrow()
+        .viewer_active()
+        .then(|| menus::viewer_refusal(id))
+        .flatten();
+    if let Some(why) = refusal {
+        {
+            let mut s = state.borrow_mut();
+            let name = s
+                .workspace
+                .active_id()
+                .map(|doc| s.display_name(doc))
+                .unwrap_or_default();
+            s.error = Some(if why == "read-only" {
+                format!("Read-only: {name} is open in the viewer, so it cannot be changed or saved")
+            } else {
+                format!("Not in the viewer: that would read all of {name} into memory")
+            });
+        }
+        refresh(ui, &mut state.borrow_mut(), PushText::No);
+        return None;
+    }
+
     let mut push = PushText::Yes;
     match id {
         action::NEW => state.borrow_mut().new_document(),

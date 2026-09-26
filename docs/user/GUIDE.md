@@ -55,9 +55,57 @@ cancels. If another program changes a file you have open, the status bar
 says so and points you to File ▸ Reload from Disk; if you save anyway, you
 are asked first (**Save Anyway / Cancel**, where Enter means Cancel).
 
-Files larger than 32 MiB are not opened for editing: the editor refuses them
-with a notice instead of loading them. You can raise or lower that limit in
-**Tools ▸ Settings...** ("Largest file opened for editing").
+Files larger than 32 MiB are not opened for editing: they open read-only in
+the large-file viewer instead (see the next section). You can raise or lower
+that limit in **Tools ▸ Settings...** ("Largest file opened for editing").
+
+## Large files: the read-only viewer
+
+A file over the editable limit -- 32 MiB unless you change it in **Tools ▸
+Settings...** -- opens in a **viewer tab** rather than being refused. A
+banner across the top says why: *Read-only: this file is too large to edit
+(1.4 GiB; the limit is 32 MiB)*. The viewer never loads the file. It reads
+only the lines on screen, so a multi-gigabyte log opens at once and costs
+the same memory as a small one.
+
+- **Moving around.** Up, Down, Page Up and Page Down move through the file;
+  Ctrl+Home and Ctrl+End go to the first and last line; the mouse wheel and
+  the scrollbar on the right scroll. Left and Right scroll sideways, Home
+  goes back to the left edge and End to the end of the line. Clicking a line
+  puts the caret on it. The status bar shows `Ln 1,234 of 5,678,901`.
+- **Indexing.** To reach the end of a large file the viewer first finds
+  where every line starts. That runs in the background: the status bar says
+  `indexing lines, 43%` until it is done, you can read and scroll the part
+  already indexed meanwhile, and Ctrl+End or Go to Line to a line not yet
+  reached goes there as soon as it is.
+- **Go to Line** (Ctrl+G) works as in the editor.
+- **Find** (Ctrl+F) searches the whole file in the background, starting from
+  the caret, with the same case, whole-word and regular-expression options;
+  the find bar shows `searching… 34%` and then the line of the match, which
+  is highlighted. Enter or Find Next goes to the next match and Find
+  Previous to the one before, wrapping round at the ends. Escape, or closing
+  the find bar, stops a search. Find Previous reads from the top of the file
+  down to the caret, so on a very large file it takes longer than Find Next.
+- **Read-only means read-only.** Typing, Delete, Backspace, Enter, paste,
+  cut, undo and the line operations do nothing; the first such key says so
+  in the status bar. Save, Save As, Save a Copy, the Format menu, the Data
+  and Note menus, Encrypt, Redact and the other rows that would change or
+  write the document are greyed with **read-only** as the reason; Hash,
+  Scan for Secrets, Inspect Metadata and Word Wrap, which would need the
+  whole file in memory, are greyed with **not in the viewer**. Close,
+  switching tabs, Find, Go to Line, zoom, themes and line numbers work.
+- **Reload from Disk** reads the file again -- useful for a log that is still
+  growing -- and stays on the same line.
+- Nothing from a viewer tab goes into the recovery journal or the clipboard
+  history, and there is no selection to copy yet: to copy part of a large
+  file, open a smaller extract of it in the editor.
+- Bytes that are not valid UTF-8 are shown as `�`, one per byte, and do not
+  stop a search. A UTF-16 file past the limit cannot be viewed yet and says
+  so. A line longer than 64 KiB shows its first 64 KiB and says it was cut.
+
+The same viewer opens any file, whatever its size, when you ask for it on
+the command line: `--readonly` (the banner says *Opened read-only*) and
+`--large-file`.
 
 ## Encodings and line endings
 
@@ -474,14 +522,19 @@ Each FILE opens in a tab. The main options:
 | Option | Effect |
 | --- | --- |
 | `--line N` | put the caret on line N of the first file |
+| `--readonly` | open the files read-only, in the viewer |
+| `--large-file` | open the files in the read-only large-file viewer, whatever their size |
 | `--theme NAME` | colour theme for this run (`Light`, `Dark`, `Organic`, `Green`, or `System`) |
 | `--font-size POINTS`, `--tab-width COLUMNS`, `--indent-spaces true\|false` | editor settings for this run |
 | `--editor-view` | use the experimental custom editor view |
 | `--help`, `-h` / `--version`, `-V` | print help or the version and exit |
 | `--` | treat every later argument as a file, even one starting with `-` |
 
-`--readonly` and `--large-file` are accepted but not applied yet; the
-program says so when you use them. `bachelorpad --help` lists every option.
+`--readonly` uses the large-file viewer rather than an editor with typing
+turned off: the viewer never loads the file, so nothing in the editor --
+Save, the recovery journal, a data conversion -- can reach it. The price is
+that the viewer has no selection or copy yet. `bachelorpad --help` lists
+every option.
 
 ## Keyboard shortcuts
 

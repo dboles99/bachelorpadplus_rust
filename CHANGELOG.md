@@ -51,7 +51,14 @@ describe behaviour that earlier development builds had.
   Keyboard Shortcuts and About.
 - The menu bar from the keyboard (F10, and Alt with a menu's letter), and
   labels for screen readers on the menus, tabs and status bar.
-- The command-line options `--line N`, `--help` and `--version`.
+- A read-only large-file viewer: a file over the editable limit (32 MiB,
+  configurable in Settings) opens in a viewer tab with a banner saying why,
+  instead of being refused. It reads only the lines on screen, indexes the
+  file and searches it in the background (Find Next and Previous, stoppable),
+  and supports Go to Line, Ctrl+Home/End, the wheel and a scrollbar.
+  Everything that would change or write the document is greyed.
+- The command-line options `--line N`, `--readonly` and `--large-file` (both
+  open the files in the viewer), `--help` and `--version`.
 - A log file and, after a crash, a crash report in the state directory.
 - A bundled monospace font (DejaVu Sans Mono) and an application icon.
 - The Linux desktop entry, file-type definition and AppStream metadata, under
@@ -80,8 +87,10 @@ describe behaviour that earlier development builds had.
   was installed; now only an explicit Discard deletes it.
 - A second running window could offer, or delete, the first window's
   recovered work.
-- Files too large to edit were read whole into memory; they are now refused
-  with a notice before being read.
+- Files too large to edit were read whole into memory; they are now opened
+  in the read-only viewer without being read whole.
+- Opening any file read it whole once just to check whether it was
+  encrypted; now only its first bytes are read.
 - JSON Format reordered keys, and Sort Keys did not sort; TOML Format now
   warns that it drops comments.
 - `--line 427 file` opened a file named `427`.

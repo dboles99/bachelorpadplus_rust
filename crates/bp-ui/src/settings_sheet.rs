@@ -218,7 +218,7 @@ impl Draft {
             Row::EditableLimit => (
                 "Largest file opened for editing",
                 format!("{} MiB", self.editable_limit_mib),
-                "Larger files are refused rather than slow to a crawl",
+                "Larger files open read-only in the viewer",
             ),
             Row::EditorView => (
                 "Custom editor view",

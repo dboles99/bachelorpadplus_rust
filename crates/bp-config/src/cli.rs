@@ -200,12 +200,12 @@ pub const FLAGS: &[Flag] = &[
     },
     switch(
         "readonly",
-        "open the files without allowing edits",
+        "open the files read-only, in the viewer",
         Meaning::Readonly,
     ),
     switch(
         "large-file",
-        "open the files in the large-file viewer",
+        "open the files in the read-only large-file viewer, whatever their size",
         Meaning::LargeFile,
     ),
     setting(Setting::Theme, "NAME", "colour theme"),

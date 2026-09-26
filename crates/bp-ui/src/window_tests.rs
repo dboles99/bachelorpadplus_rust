@@ -719,6 +719,8 @@ fn wired(
     crate::bind_files(&ui, &cell);
     crate::bind_editing(&ui, &cell);
     crate::bind_settings(&ui, &cell);
+    crate::bind_viewer(&ui, &cell);
+    crate::bind_find(&ui, &cell);
     crate::refresh(&ui, &mut cell.borrow_mut(), crate::state::PushText::Yes);
     ui.invoke_focus_editor();
     (ui, cell)
@@ -1249,10 +1251,180 @@ fn every_interactive_shell_element_says_what_it_is_to_a_screen_reader() {
             "app.slint",
             &["accessible-role: navigation", "accessible-role: tab-list"][..],
         ),
+        ("viewer.slint", &["accessible-role: slider"][..]),
     ] {
         let source = std::fs::read_to_string(format!("{ui}{file}")).expect(file);
         for needle in needles {
             assert!(source.contains(needle), "{file} lost `{needle}`");
         }
     }
+}
+
+// --- the large-file viewer (release plan M1-06) --------------------------
+
+/// A 5,000-line log past a lowered editable limit, open in the wired window
+/// with its indexing finished -- by the window's own poll timer, which is
+/// the thing being relied on.
+fn viewing() -> (
+    AppWindow,
+    Rc<std::cell::RefCell<crate::state::AppState>>,
+    tempfile::TempDir,
+    std::path::PathBuf,
+    String,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("server.log");
+    let text: String = (1..=5_000).map(|i| format!("line {i:06}\n")).collect();
+    std::fs::write(&path, &text).unwrap();
+    let mut state = crate::state::AppState::new();
+    state.editable_limit = 1024;
+    state.open(path.clone());
+    let (ui, cell) = wired(state);
+    run_timers_until(|| !ui.get_viewer_busy());
+    assert!(!ui.get_viewer_busy(), "the viewer's poll never finished");
+    (ui, cell, dir, path, text)
+}
+
+fn viewer_row(ui: &AppWindow, row: usize) -> String {
+    use slint::Model as _;
+    ui.get_viewer_rows()
+        .row_data(row)
+        .map(|r| r.text.to_string())
+        .unwrap_or_default()
+}
+
+fn viewer_rows(ui: &AppWindow) -> Vec<String> {
+    use slint::Model as _;
+    let rows = ui.get_viewer_rows();
+    (0..rows.row_count())
+        .filter_map(|i| rows.row_data(i))
+        .map(|r| r.text.to_string())
+        .collect()
+}
+
+#[test]
+fn a_file_over_the_limit_shows_the_viewer_with_its_banner_and_scrolls_by_keyboard() {
+    let (ui, _cell, _dir, _path, _) = viewing();
+    assert!(ui.get_viewer_active());
+    assert!(
+        ui.get_viewer_banner()
+            .starts_with("Read-only: this file is too large to edit"),
+        "{}",
+        ui.get_viewer_banner()
+    );
+    assert_eq!(ui.get_save_state(), "Read-only");
+    assert_eq!(viewer_row(&ui, 0), "line 000001");
+    assert!(ui.get_cursor_label().starts_with("Ln 1 of 5,001"));
+
+    press(&ui, Key::PageDown);
+    press(&ui, Key::PageDown);
+    assert_ne!(
+        viewer_row(&ui, 0),
+        "line 000001",
+        "two pages down and the view never moved"
+    );
+    assert!(
+        !ui.get_cursor_label().starts_with("Ln 1 of"),
+        "the caret stayed"
+    );
+
+    chord(&ui, Key::Control, Key::End);
+    let rows = viewer_rows(&ui);
+    assert_eq!(rows.last().map(String::as_str), Some(""));
+    assert!(rows.contains(&"line 005000".to_owned()), "{rows:?}");
+    assert!(ui.get_viewer_thumb_position() > 0.99);
+
+    chord(&ui, Key::Control, Key::Home);
+    assert_eq!(viewer_row(&ui, 0), "line 000001");
+    assert_eq!(ui.get_viewer_thumb_position(), 0.0);
+}
+
+#[test]
+fn typing_saving_and_line_edits_in_the_viewer_leave_the_file_alone() {
+    let (ui, cell, _dir, path, text) = viewing();
+
+    type_text(&ui, "typed");
+    assert!(
+        ui.get_status_notice().contains("Read-only"),
+        "{}",
+        ui.get_status_notice()
+    );
+    chord(&ui, Key::Control, "s");
+    chord(&ui, Key::Control, "d");
+    chord(&ui, Key::Alt, Key::DownArrow);
+
+    let id = cell.borrow().workspace.active_id().unwrap();
+    assert!(!cell.borrow().is_dirty(id));
+    assert!(
+        ui.get_status_notice().contains("Read-only"),
+        "{}",
+        ui.get_status_notice()
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    assert_eq!(viewer_row(&ui, 0), "line 000001");
+}
+
+#[test]
+fn ctrl_g_in_the_viewer_lands_on_the_line() {
+    let (ui, _cell, _dir, _path, _) = viewing();
+    chord(&ui, Key::Control, "g");
+    assert!(ui.get_goto_open());
+    type_text(&ui, "4242");
+    press(&ui, Key::Return);
+    assert!(
+        ui.get_cursor_label().starts_with("Ln 4,242 of"),
+        "{}",
+        ui.get_cursor_label()
+    );
+    assert!(viewer_rows(&ui).contains(&"line 004242".to_owned()));
+}
+
+#[test]
+fn find_in_the_viewer_searches_on_the_poll_and_highlights_the_match() {
+    use slint::Model as _;
+    let (ui, _cell, _dir, _path, _) = viewing();
+    chord(&ui, Key::Control, "f");
+    type_text(&ui, "003210");
+    run_timers_until(|| !ui.get_viewer_busy());
+
+    assert_eq!(ui.get_find_status(), "line 3,210");
+    assert!(viewer_rows(&ui).contains(&"line 003210".to_owned()));
+    let boxes = ui.get_viewer_highlight();
+    assert_eq!(boxes.row_count(), 1, "the match is highlighted");
+    let found = boxes.row_data(0).unwrap();
+    assert_eq!((found.start, found.end), (5, 11));
+}
+
+#[test]
+fn switching_tabs_swaps_the_viewer_and_the_editor_and_the_keyboard_follows() {
+    let (ui, cell, _dir, _path, _) = viewing();
+    cell.borrow_mut().new_document();
+    crate::refresh(&ui, &mut cell.borrow_mut(), crate::state::PushText::Yes);
+    assert!(!ui.get_viewer_active());
+    type_text(&ui, "hello");
+    assert_eq!(ui.get_doc_text(), "hello", "the editor has the keyboard");
+
+    // Back one tab: the viewer, which sits between the untitled document
+    // the window started with and this new one.
+    ui.window().dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Shift.into(),
+    });
+    chord(&ui, Key::Control, Key::Tab);
+    ui.window().dispatch_event(WindowEvent::KeyReleased {
+        text: Key::Shift.into(),
+    });
+    assert!(ui.get_viewer_active());
+    type_text(&ui, "more");
+    assert!(
+        ui.get_status_notice().contains("Read-only"),
+        "the keys went somewhere other than the viewer: {}",
+        ui.get_status_notice()
+    );
+    assert_eq!(viewer_row(&ui, 0), "line 000001");
+    chord(&ui, Key::Control, Key::Tab);
+    assert_eq!(
+        ui.get_doc_text(),
+        "hello",
+        "nothing typed at the viewer reached it"
+    );
 }

@@ -164,13 +164,31 @@ more.
 | About | **live** — the version, the build's commit, what draws the window, both licences, Notices, and Slint's `AboutSlint` attribution (ADR-0031) |
 | Help, diagnostics | planned |
 
+## Over a viewer tab
+
+A file past the editable limit, or any file opened with `--readonly` or
+`--large-file`, opens in the read-only large-file viewer (release plan
+M1-06; `bp-ui/src/viewer.rs`). The menus stay the same shape; what changes is
+which rows can act. One list decides it -- `menus::viewer_refusal` -- and
+both greys the rows and refuses the same ids in `dispatch` when they arrive
+by a shortcut, so a row cannot be grey and still reachable.
+
+| Rows | State over a viewer tab |
+| --- | --- |
+| New, Open, Open Recent, Save All, Reload, Close Tab, the tab context menu | **live** — Reload reads the file again and keeps the line |
+| Save, Save As, Save as New Revision, Save a Copy | greyed, hint **read-only** |
+| Undo, Redo, Cut, Paste, Select All, clipboard history, the line operations, Insert, Format's line endings and encodings, the Data conversions, Semantic Rename, Encrypt, Redact, Sign | greyed, hint **read-only** |
+| Copy, Word Wrap, Hash, Scan for Secrets, Inspect Metadata, Verify Signature, Document Statistics, the Note extractions, Data Validate / Report / Column Types | greyed, hint **not in the viewer** — each would need the whole file in memory, which the viewer exists not to do |
+| Go to Line, Find bar (Find, Next, Previous), themes, Line Numbers, zoom, indentation settings, profiles, Privacy Mode, Security History, Tools, Help | **live** |
+| Replace All | refused in the find bar ("read-only") |
+
 ## Find bar
 
 Not a menu. The bar itself is **live**, and so are its three options.
 
 | Control | State |
 | --- | --- |
-| Find, Replace, Replace All, In Folder | **live** |
+| Find, Replace, Replace All, In Folder | **live** — over a viewer tab Find runs on a background thread from the caret and closing the bar stops it; Replace All is refused |
 | Aa / Word / .* toggles | **live** — `bp_search::Query::{case_sensitive, whole_word, regex}`; flipping one re-runs the search |
 
 ## Go to Line
