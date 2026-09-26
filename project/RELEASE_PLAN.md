@@ -127,6 +127,8 @@ Batch these: every one is a one-line answer. "Deadline" is the milestone that ca
 
 **Answered 2026-09-26:** 2's copyright holder (**Daniel Boles**); 17 (a), nothing leaves the machine (ADR-0034); 18 as recommended (Inno Setup per-user + portable zip; deb + rpm + tar.gz + PKGBUILD); 19 as recommended (local script, Linux in a pinned Debian 12 container); 20 (b), RC1 ships saying the envelope is unreviewed.
 
+**Answered 2026-09-26, later:** the icon is approved (M2-01); 15 (c), ask above 4× the default Argon2 cost and refuse above 256 MiB or t > 8; 21 as recommended ("Supported on Windows 10 22H2 with ESU or LTSC; same binary as Windows 11; tested at each RC; no Windows-10-only fixes after 1.0"); U3, the read-only viewer tab; D6, LF, CRLF and bare CR only, everywhere; U5, snapshot on open; 3, Azure Trusted Signing (the owner applies; M3-04 is wired to AzureSignTool meanwhile). The owner will allow the Debian, Fedora and Arch mirrors in this environment's network settings for the container build and package tests, and will run the Windows gate, dry run and install test on their Lenovo laptop.
+
 | # | Decision | Recommendation | Unblocks | Deadline |
 |---|---|---|---|---|
 | 1 | **Scope sign-off** (S1–S6 above) | Defer S1, S2, S5, S6; accept S3; take S4 = D5(c) | The whole plan | Before M0 ends |
