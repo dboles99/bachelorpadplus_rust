@@ -11,7 +11,7 @@
 mod logging;
 
 use bp_config::RendererPref;
-use bp_config::cli::{self, Action, Invocation};
+use bp_config::cli::{self, Action};
 use bp_theme::ThemeId;
 
 fn main() -> anyhow::Result<()> {
@@ -75,7 +75,6 @@ fn main() -> anyhow::Result<()> {
         .iter()
         .map(ToString::to_string)
         .chain(loaded.notices.iter().map(ToString::to_string))
-        .chain(not_yet_applied(&invocation))
         .collect();
 
     // An unrecognised theme name is a recoverable mistake: warn and fall back
@@ -122,6 +121,10 @@ fn main() -> anyhow::Result<()> {
     bp_ui::run_with(bp_ui::RunOptions {
         files: invocation.files,
         line: invocation.line,
+        // Both open the files in the read-only viewer (release plan M1-06);
+        // `--readonly` says so in the banner.
+        readonly: invocation.readonly,
+        large_file: invocation.large_file,
         renderer: match loaded.config.renderer {
             RendererPref::Software => bp_ui::Renderer::Software,
             RendererPref::Platform => bp_ui::Renderer::Platform,
@@ -154,62 +157,4 @@ fn main() -> anyhow::Result<()> {
 #[allow(clippy::panic)]
 fn crash_on_purpose() -> ! {
     panic!("deliberate crash test ({})", logging::CRASH_TEST_ENV);
-}
-
-/// Notices for flags that parse but that the shell cannot act on yet.
-///
-/// `--readonly` and `--large-file` are understood by `cli::parse` (specs.md
-/// section 19), but `bp_ui::RunOptions` has no field to carry them to the
-/// window yet (release plan M1-06). `--line` has one since M1-04. Silently opening a file editable after `--readonly` was
-/// asked for is the one outcome worse than refusing, so each says in the
-/// status bar that it was not applied. The notice goes when `RunOptions`
-/// grows the field and this function stops listing it.
-fn not_yet_applied(invocation: &Invocation) -> Vec<String> {
-    let mut notices = Vec::new();
-    if invocation.readonly {
-        notices.push("--readonly is not applied yet; the files open editable".to_owned());
-    }
-    if invocation.large_file {
-        notices.push("--large-file is not applied yet; the files open in the editor".to_owned());
-    }
-    notices
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn parse_strs(list: &[&str]) -> Invocation {
-        let args: Vec<String> = list.iter().map(|s| (*s).to_owned()).collect();
-        cli::parse(&args)
-    }
-
-    #[test]
-    fn a_plain_invocation_reports_nothing_unapplied() {
-        assert!(not_yet_applied(&parse_strs(&["a.txt"])).is_empty());
-    }
-
-    #[test]
-    fn readonly_that_cannot_be_honoured_says_so_rather_than_opening_editable() {
-        let notices = not_yet_applied(&parse_strs(&["--readonly", "a.txt"]));
-        assert_eq!(notices.len(), 1);
-        assert!(
-            notices[0].contains("editable"),
-            "the user must learn the file is not protected: {notices:?}"
-        );
-    }
-
-    #[test]
-    fn each_unapplied_flag_gets_its_own_notice() {
-        let notices = not_yet_applied(&parse_strs(&[
-            "--line",
-            "427",
-            "--readonly",
-            "--large-file",
-            "server.log",
-        ]));
-        // `--line` is applied now, so only the other two are reported.
-        assert_eq!(notices.len(), 2, "{notices:?}");
-        assert!(notices.iter().all(|n| !n.contains("427")), "{notices:?}");
-    }
 }

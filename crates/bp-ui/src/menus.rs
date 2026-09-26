@@ -367,6 +367,60 @@ pub(crate) fn next_live_row(enabled: &[bool], from: i32, delta: i32) -> i32 {
     from
 }
 
+/// Why `id` cannot act on a document open in the read-only viewer, or `None`
+/// when it can (release plan M1-06).
+///
+/// One list for both ends: the menus grey a row with this as its hint, and
+/// `dispatch` refuses the same ids when they arrive some other way -- a
+/// keyboard shortcut, or a menu built before the tab changed. "read-only"
+/// for a row that would change or write the document; "not in the viewer"
+/// for one that would have to read all of it into memory to answer, which
+/// is the thing the viewer exists not to do.
+pub(crate) fn viewer_refusal(id: i32) -> Option<&'static str> {
+    use action::*;
+    const READ_ONLY: &str = "read-only";
+    const NOT_HERE: &str = "not in the viewer";
+    let in_range = |base: i32, end: i32| (base..end).contains(&id);
+    let refusal = match id {
+        NEW | OPEN | SAVE_ALL | RELOAD | CLOSE_TAB | CLOSE_OTHER_TABS | CLOSE_ALL_TABS
+        | COPY_TAB_PATH | THEME_LIGHT | THEME_DARK | THEME_ORGANIC | THEME_GREEN | THEME_SYSTEM
+        | TOGGLE_GUTTER | ZOOM_IN | ZOOM_OUT | ZOOM_RESET | INDENT_TABS | INDENT_SPACES
+        | TAB_WIDTH_2 | TAB_WIDTH_4 | TAB_WIDTH_8 | SHORTCUTS | ABOUT | PRIVACY_MODE
+        | SECURITY_HISTORY | SET_DEFAULT_EDITOR | REMOVE_REGISTRATION | SETTINGS
+        | OPEN_LOG_FOLDER | OPEN_CONFIG_FOLDER | GO_TO_LINE | NONE => return None,
+        // A document's profile is a setting about it, not a change to it.
+        _ if in_range(PROFILE_BASE, profile_end()) => return None,
+        _ if in_range(
+            RECENT_BASE,
+            RECENT_BASE + i32::try_from(bp_config::MAX_RECENT).unwrap_or(0),
+        ) =>
+        {
+            return None;
+        }
+        TOGGLE_WRAP | SCAN_SECRETS | HASH_DOCUMENT | VERIFY_SIGNATURE | INSPECT_METADATA
+        | DOCUMENT_STATS | DATA_VALIDATE | DATA_REPORT | DATA_COLUMN_TYPES | COPY => NOT_HERE,
+        _ if (NOTE_TITLE..=NOTE_OUTLINE).contains(&id) && id != NOTE_RENAME => NOT_HERE,
+        _ => READ_ONLY,
+    };
+    Some(refusal)
+}
+
+/// `items` as they stand for a document open in the viewer: every row that
+/// cannot act on it greyed, with the reason as its hint. Readouts and rows
+/// already greyed keep what they say.
+pub(crate) fn for_viewer(items: Vec<MenuItem>) -> Vec<MenuItem> {
+    items
+        .into_iter()
+        .map(|item| match viewer_refusal(item.action) {
+            Some(why) if item.enabled => MenuItem {
+                separator_after: item.separator_after,
+                ..row_enabled(item.label.as_str(), why, item.action, false)
+            },
+            _ => item,
+        })
+        .collect()
+}
+
 /// One past the last plain-paste clipboard id `CLIP_BASE` can produce.
 ///
 /// Bounded the same way `RECENT_BASE`'s window is bounded by `MAX_RECENT`:

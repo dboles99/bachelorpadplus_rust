@@ -238,6 +238,14 @@ pub struct AppState {
     /// Cross-file search results, indexed by the row the user clicks.
     pub(crate) file_hits: Vec<bp_search::FileHit>,
     pub(crate) clips: bp_clipboard::History,
+    /// Documents open in the read-only viewer (release plan M1-06), by the
+    /// same id as their tab. A document here has no entry in `editors`: it
+    /// was never loaded, which is the point of it.
+    pub(crate) viewers: HashMap<DocumentId, crate::viewer::Viewer>,
+    /// Rows and columns the viewer's surface has room for. Its own, not
+    /// `visible_rows`: the banner above it takes a row's height.
+    pub(crate) viewer_rows: usize,
+    pub(crate) viewer_columns: usize,
 }
 
 impl AppState {
@@ -271,11 +279,19 @@ impl AppState {
     /// double-clicked, or opened through a file association. Every notice is
     /// kept: the configuration's, then anything left behind by a move, then
     /// whatever opening the files reported.
-    pub(crate) fn start_up(&mut self, config_notice: Option<String>, files: &[PathBuf]) {
+    ///
+    /// `how` is `--readonly` or `--large-file`, which open every file named
+    /// in the viewer.
+    pub(crate) fn start_up(
+        &mut self,
+        config_notice: Option<String>,
+        files: &[PathBuf],
+        how: crate::viewer::OpenAs,
+    ) {
         if !files.is_empty() {
             let blank = self.workspace.active_id();
             for path in files {
-                self.open(path.clone());
+                self.open_as(path.clone(), how);
             }
             if let Some(blank) = blank
                 && self.workspace.len() > 1
@@ -341,7 +357,7 @@ impl AppState {
     /// profile. Straight onto the document rather than through
     /// `set_security`: a default is not a change the user made, and the
     /// security history records changes.
-    fn give_default_profile(&mut self, id: DocumentId) {
+    pub(crate) fn give_default_profile(&mut self, id: DocumentId) {
         if self.default_profile == bp_security::Profile::Standard {
             return;
         }
@@ -353,7 +369,7 @@ impl AppState {
     /// Give a document the profile the user last set on the file at `path`,
     /// if there is one. After `give_default_profile`, so a profile set on
     /// this very file beats the default for new ones.
-    fn recall_profile(&mut self, id: DocumentId, path: &Path) {
+    pub(crate) fn recall_profile(&mut self, id: DocumentId, path: &Path) {
         if let Some(security) = self.profiles.get(path)
             && let Some(doc) = self.workspace.get_mut(id)
         {
@@ -479,6 +495,11 @@ impl AppState {
             tab_context: None,
             file_hits: Vec::new(),
             clips: bp_clipboard::History::new(),
+            viewers: HashMap::new(),
+            // Replaced by the viewer surface's own measurement, as
+            // `visible_rows` is by the editor's.
+            viewer_rows: 30,
+            viewer_columns: 80,
         }
     }
 
@@ -514,6 +535,11 @@ impl AppState {
         let mut jobs = Vec::new();
 
         for id in ids {
+            // A viewer tab holds no text and never changes, so it has
+            // nothing to recover and no journal to clear.
+            if self.is_viewer(id) {
+                continue;
+            }
             let Some(doc) = self.workspace.get(id) else {
                 continue;
             };
@@ -612,6 +638,12 @@ impl AppState {
     /// Returns the range to select, if there is one.
     pub(crate) fn find(&mut self, query: &bp_search::Query) -> Option<std::ops::Range<usize>> {
         self.match_index = 0;
+        // The viewer searches on a thread, from where it is; what it finds
+        // arrives later, through `poll_viewers`.
+        if self.viewer_find(query, true, true) {
+            self.matches.clear();
+            return None;
+        }
         if query.is_empty() {
             self.matches.clear();
             self.find_status.clear();
@@ -655,7 +687,7 @@ impl AppState {
 
     /// Note that this document and its file are in step, and remember the
     /// file as recently used.
-    fn mark_in_step(&mut self, id: DocumentId, path: &Path) {
+    pub(crate) fn mark_in_step(&mut self, id: DocumentId, path: &Path) {
         if let Some(stamp) = FileStamp::of(path) {
             self.stamps.insert(id, stamp);
         }
@@ -1057,6 +1089,10 @@ impl AppState {
         let Some(id) = self.workspace.active_id() else {
             return;
         };
+        if self.is_viewer(id) {
+            self.reload_viewer(id);
+            return;
+        }
         let Some(path) = self
             .workspace
             .get(id)
@@ -1085,6 +1121,11 @@ impl AppState {
     /// The bytes on disk no longer match the intent, which is exactly what
     /// "unsaved" means -- leaving it clean would hide a pending change.
     pub(crate) fn set_line_ending(&mut self, line_ending: LineEnding) {
+        if let Some(id) = self.workspace.active_id()
+            && self.refuse_read_only(id)
+        {
+            return;
+        }
         if let Some(doc) = self.workspace.active_mut()
             && doc.line_ending() != line_ending
         {
@@ -1106,6 +1147,9 @@ impl AppState {
     /// characters, and the status bar says which one stands in the way and
     /// where, so the user can decide what to do about it.
     pub(crate) fn set_encoding_of(&mut self, id: DocumentId, encoding: Encoding) {
+        if self.refuse_read_only(id) {
+            return;
+        }
         if !encoding.is_unicode() {
             let text = self.text_of(id);
             if let Err(EncodeError::Unrepresentable(what)) =
@@ -1243,7 +1287,8 @@ impl AppState {
                 // the data operations, statistics -- will be noticeably slow.
                 // Said once, at open, rather than left for the user to
                 // discover as a hang. A file past the editable limit never
-                // gets here: `load` refuses it, and the arm below shows why.
+                // gets here: `load` refuses it, and the arm below sends it
+                // to the viewer.
                 if file.size_class() == bp_buffer::SizeClass::Large {
                     self.error = Some(format!(
                         "Large file ({} MiB): whole-document tools may be slow",
@@ -1251,10 +1296,40 @@ impl AppState {
                     ));
                 }
             }
+            // Too large to edit is not too large to read: it opens in the
+            // viewer, read-only, with a banner saying why (owner decision
+            // U3). Measured here rather than stat'd first, so a log that
+            // grew past the limit while it was being read goes there too.
+            Err(bp_files::LoadError::TooLarge { bytes, limit, .. }) => {
+                self.open_in_viewer(path2, crate::viewer::Reason::TooLarge { bytes, limit });
+            }
             // The error types already render a message naming the file and
             // what to do about it, which is exactly what the status bar wants.
-            // That includes a file too large to edit, which opens no tab.
             Err(e) => self.error = Some(e.to_string()),
+        }
+    }
+
+    /// Open `path` as the command line asked: [`Self::open`], or straight
+    /// into the viewer for `--readonly` and `--large-file`.
+    ///
+    /// `--readonly` uses the viewer rather than an editor with its keys
+    /// turned off. The viewer never loads the file, so there is no buffer
+    /// for any of the editor's forty-odd write paths to reach -- save,
+    /// Save As, the journal, a data conversion, Replace All -- and nothing
+    /// to remember to guard in two editor views. A read-only editor would be
+    /// one missed guard away from writing to the file it promised not to.
+    pub(crate) fn open_as(&mut self, path: PathBuf, how: crate::viewer::OpenAs) {
+        use crate::viewer::{OpenAs, Reason};
+        match how {
+            OpenAs::Normal => self.open(path),
+            OpenAs::ReadOnly => {
+                self.error = None;
+                self.open_in_viewer(path, Reason::ReadOnly);
+            }
+            OpenAs::Viewer => {
+                self.error = None;
+                self.open_in_viewer(path, Reason::Asked);
+            }
         }
     }
 
@@ -1264,6 +1339,9 @@ impl AppState {
     /// refused" as success and then discard the buffer.
     pub(crate) fn save_document(&mut self, id: DocumentId, path: Option<PathBuf>) -> SaveResult {
         self.error = None;
+        if self.refuse_read_only(id) {
+            return SaveResult::Failed;
+        }
         let Some(doc) = self.workspace.get(id) else {
             return SaveResult::Saved;
         };
@@ -1362,6 +1440,9 @@ impl AppState {
     /// real save would make the copy a different file from the original.
     pub(crate) fn save_copy(&mut self, id: DocumentId, target: &Path) -> SaveResult {
         self.error = None;
+        if self.refuse_read_only(id) {
+            return SaveResult::Failed;
+        }
         let Some(doc) = self.workspace.get(id) else {
             return SaveResult::Saved;
         };
@@ -1960,14 +2041,15 @@ impl AppState {
 
     /// Begin opening `path`, asking for a passphrase if it is encrypted.
     ///
-    /// Read as bytes rather than through `bp_files::load`, which decodes text
-    /// and would mangle ciphertext on the way in.
+    /// Only the head is read, for the magic number: this used to read the
+    /// whole file to look at six bytes, which for a file bound for the
+    /// large-file viewer was the very read the viewer exists to avoid.
     ///
     /// An encrypted file does **not** become a tab until it is unlocked. A tab
     /// nobody can read is worse than no tab: it looks like an empty document,
     /// and saving it would write emptiness over the real one.
     pub(crate) fn open_maybe_encrypted(&mut self, path: PathBuf) -> bool {
-        match std::fs::read(&path) {
+        match read_head(&path) {
             Ok(bytes) if bp_crypto::is_bpadx(&bytes) => {
                 self.ask = Some(crate::passphrase::Ask::Unlock(path));
                 self.passphrase_status.clear();
@@ -1994,7 +2076,7 @@ impl AppState {
         let mut asking = false;
         let mut locked_later = Vec::new();
         for path in paths {
-            let encrypted = std::fs::read(&path).is_ok_and(|bytes| bp_crypto::is_bpadx(&bytes));
+            let encrypted = read_head(&path).is_ok_and(|bytes| bp_crypto::is_bpadx(&bytes));
             if encrypted && asking {
                 locked_later.push(path.file_name().map_or_else(
                     || path.display().to_string(),
@@ -2432,6 +2514,11 @@ impl AppState {
             self.goto_status = "not a line number".to_owned();
             return None;
         };
+        // The viewer moves itself; there is no widget caret to select into.
+        if self.viewer_active() {
+            self.viewer_go_to(line);
+            return None;
+        }
         let editor = self.active_editor_mut()?;
         let existed = editor.go_to_line(line);
         let cursor = editor.cursor();
@@ -2548,13 +2635,21 @@ impl AppState {
         // for "recovery" at the next launch, and kept a plaintext copy of it
         // on disk in the meantime. Sealed checkpoints are keyed by path, as
         // in `save_document`.
-        let _ = self.journal.discard(id.get());
-        self.checkpointed.remove(&id);
-        if let Some(path) = self.workspace.get(id).and_then(Document::path) {
-            let _ = self.journal.discard_sealed_for(path);
+        //
+        // Not for a viewer tab, which never had a journal: discarding by its
+        // path would delete sealed work another session left for the same
+        // file.
+        if !self.is_viewer(id) {
+            let _ = self.journal.discard(id.get());
+            self.checkpointed.remove(&id);
+            if let Some(path) = self.workspace.get(id).and_then(Document::path) {
+                let _ = self.journal.discard_sealed_for(path);
+            }
         }
         if self.workspace.close(id).is_some() {
             self.editors.remove(&id);
+            // Dropping it stops its indexing and any search it had running.
+            self.viewers.remove(&id);
             // Holding a passphrase for the session is a deliberate trade;
             // holding it past the document's life is just a leak.
             self.forget_passphrase(id);
@@ -2575,6 +2670,9 @@ impl AppState {
         let Some(id) = self.workspace.active_id() else {
             return;
         };
+        if self.is_viewer(id) {
+            return;
+        }
         let changed = self
             .editors
             .get_mut(&id)
@@ -2603,6 +2701,9 @@ impl AppState {
     }
 
     fn position_label(&self) -> String {
+        if let Some(viewer) = self.active_viewer() {
+            return viewer.position_label();
+        }
         let lines = self.gutter_lines;
         // Both views: under `TextInput` the editor's caret follows the
         // widget's (`follow_widget_caret`), so it is as good an answer there.
@@ -2674,11 +2775,21 @@ impl AppState {
     /// Note that the active document was edited in place, through the caret.
     pub(crate) fn mark_edited(&mut self) {
         if let Some(id) = self.workspace.active_id()
+            && !self.is_viewer(id)
             && let Some(doc) = self.workspace.get_mut(id)
         {
             doc.mark_modified();
         }
     }
+}
+
+/// The first few bytes of a file: enough to tell an encrypted one by its
+/// magic number without reading a 2 GB log whole to find out it is not one.
+pub(crate) fn read_head(path: &Path) -> std::io::Result<Vec<u8>> {
+    use std::io::Read as _;
+    let mut head = Vec::with_capacity(16);
+    std::fs::File::open(path)?.take(16).read_to_end(&mut head)?;
+    Ok(head)
 }
 
 /// Status-bar save state, per specs.md section 3.
@@ -3601,6 +3712,7 @@ pub(crate) fn find_query(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::viewer::OpenAs;
     use time::macros::datetime;
 
     #[test]
@@ -3952,7 +4064,7 @@ mod tests {
     }
 
     #[test]
-    fn a_file_past_the_configured_limit_opens_no_tab() {
+    fn a_file_past_the_configured_limit_opens_in_the_viewer_not_the_editor() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("big.log");
         std::fs::write(&path, vec![b'x'; 2 * 1024 * 1024]).unwrap();
@@ -3966,8 +4078,12 @@ mod tests {
 
         state.open(path);
 
-        assert_eq!(state.workspace.len(), before);
-        assert!(state.error.is_some(), "refused without saying why");
+        assert_eq!(state.workspace.len(), before + 1, "it opens, in a tab");
+        assert!(state.viewer_active(), "and the tab is the viewer");
+        assert!(
+            state.active_editor().is_none(),
+            "nothing was loaded to edit"
+        );
     }
 
     /// A session, and the state directory a restart of it would use.
@@ -4576,10 +4692,11 @@ mod tests {
     }
 
     #[test]
-    fn a_file_too_large_to_edit_opens_no_tab_and_says_why() {
-        // Sparse, so the test costs a `stat` and not 40 MiB of disk. The
+    fn a_file_too_large_to_edit_opens_read_only_and_the_banner_says_why() {
+        // Sparse, so the test costs a `stat` and not 32 MiB of disk. The
         // point is that the shell never hands such a file to the editable
-        // widget, which is what used to hang the whole application.
+        // widget, which is what used to hang the whole application -- and
+        // since owner decision U3, that it opens anyway, read-only.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("server.log");
         std::fs::File::create(&path)
@@ -4591,9 +4708,16 @@ mod tests {
 
         state.open(path);
 
-        assert_eq!(state.workspace.len(), tabs, "a tab was opened for it");
-        let error = state.error.expect("the refusal is reported");
-        assert!(error.contains("too large to edit"), "{error}");
+        assert_eq!(state.workspace.len(), tabs + 1);
+        let banner = state
+            .active_viewer()
+            .expect("a viewer tab")
+            .reason()
+            .banner();
+        assert_eq!(
+            banner,
+            "Read-only: this file is too large to edit (32.1 MiB; the limit is 32 MiB)"
+        );
     }
 
     #[test]
@@ -4670,7 +4794,7 @@ mod tests {
         let mut state = AppState::new();
         state.left_behind = Some("⚠ an old journal".to_owned());
 
-        state.start_up(Some("config warning".to_owned()), &[path]);
+        state.start_up(Some("config warning".to_owned()), &[path], OpenAs::Normal);
 
         assert_eq!(state.workspace.len(), 1, "the blank tab was replaced");
         assert_eq!(
@@ -4685,7 +4809,7 @@ mod tests {
         let mut state = AppState::new();
         state.left_behind = Some("⚠ an old journal".to_owned());
 
-        state.start_up(None, &[dir.path().join("absent.txt")]);
+        state.start_up(None, &[dir.path().join("absent.txt")], OpenAs::Normal);
 
         let error = state.error.expect("something to say");
         assert!(error.starts_with("⚠ an old journal; "), "{error}");
@@ -4703,7 +4827,7 @@ mod tests {
     #[test]
     fn a_quiet_startup_says_nothing() {
         let mut state = AppState::new();
-        state.start_up(None, &[]);
+        state.start_up(None, &[], OpenAs::Normal);
         assert_eq!(state.error, None);
     }
 

@@ -128,10 +128,13 @@ unproven. The honest list:
   but the way they are put together has only been reviewed by this project.
   Do not rely on it against a determined, well-resourced attacker until it
   has been. See [SECURITY.md](SECURITY.md).
-- **Files larger than 32 MiB are refused**, with a notice, rather than
-  opened. A read-only viewer for large files is planned. The limit can be
-  changed in Tools ▸ Settings. `--readonly` and `--large-file` are accepted
-  on the command line but not applied yet; the program says so.
+- **Files larger than 32 MiB open read-only**, in a viewer that reads only
+  the lines on screen (the limit can be changed in Tools ▸ Settings). The
+  viewer has no selection or copy, cannot show UTF-16 files, shows bytes
+  that are not UTF-8 as `�`, and shows only the first 64 KiB of any one
+  line. It has been tested with files of tens of megabytes; a 1 GB file on
+  each operating system is still to be tried. `--readonly` opens any file
+  in the same viewer.
 - **No syntax highlighting.** Source files open as plain text. There is no
   Markdown preview, no printing, no multi-cursor or column selection, and no
   replace across files.

@@ -19,6 +19,9 @@ export component EditorSurface inherits Rectangle {
     in property <int> caret-row: -1;
     in property <int> caret-column;
     in property <bool> show-gutter: true;
+    /// Characters the widest line number needs, when that is more than the
+    /// gutter's usual width holds. 0 leaves the width as it was.
+    in property <int> gutter-columns: 0;
     in property <length> font-size: 14px;
     /// Derived, not a constant, because zoom moves `font-size` underneath it.
     ///
@@ -75,7 +78,10 @@ export component EditorSurface inherits Rectangle {
     // column. A gutter too narrow for its numbers clips them; one that no
     // longer matches where the text starts moves the caret sideways.
     // 3.3 x 14pt is the 46px this was fixed at.
-    property <length> gutter-width: root.show-gutter ? max(46px, root.font-size * 3.3) : 0px;
+    //
+    // `gutter-columns` widens it further for numbers longer than the editor
+    // meets: the large-file viewer numbers lines in the millions.
+    property <length> gutter-width: root.show-gutter ? max(46px, root.font-size * 3.3, root.gutter-columns * root.advance + 14px) : 0px;
     property <length> text-left: root.pad + root.gutter-width;
 
     property <int> fitting-rows: max(1, floor((self.height - 2 * root.pad) / root.line-height));

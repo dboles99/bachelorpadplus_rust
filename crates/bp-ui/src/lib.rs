@@ -72,6 +72,7 @@ mod editor_view;
 mod passphrase;
 mod settings_sheet;
 mod state;
+mod viewer;
 #[cfg(test)]
 mod window_tests;
 mod worker;
@@ -117,6 +118,16 @@ fn refresh(ui: &AppWindow, state: &mut state::AppState, push_text: state::PushTe
     if push_text == state::PushText::Yes {
         ui.set_doc_text(state.active_text().as_str().into());
     }
+    let viewing = state.viewer_active();
+    let switched = ui.get_viewer_active() != viewing;
+    ui.set_viewer_active(viewing);
+    if switched {
+        ui.invoke_follow_view();
+    }
+    if viewing {
+        viewer::draw(ui, state);
+    }
+    ui.set_viewer_busy(state.viewers_busy());
     if state.editor_view {
         editor_view::push_editor_view(ui, state);
     }
@@ -127,7 +138,14 @@ fn refresh(ui: &AppWindow, state: &mut state::AppState, push_text: state::PushTe
     let format = state.format();
 
     if let Some(doc) = state.workspace.active() {
-        ui.set_save_state(state::save_state_label(doc).into());
+        ui.set_save_state(
+            if viewing {
+                "Read-only".to_owned()
+            } else {
+                state::save_state_label(doc)
+            }
+            .into(),
+        );
         ui.set_is_dirty(doc.is_dirty());
         ui.set_location(doc.location_label().into());
         ui.set_encoding_label(doc.encoding().label().into());
@@ -193,7 +211,16 @@ fn refresh(ui: &AppWindow, state: &mut state::AppState, push_text: state::PushTe
     // rest are set once at startup.
     let any_dirty = state.workspace.dirty().next().is_some();
     let has_path = state.workspace.active().and_then(Document::path).is_some();
-    let model = |items: Vec<MenuItem>| slint::ModelRc::new(slint::VecModel::from(items));
+    // Over a viewer tab, every row that cannot act on it is greyed with the
+    // reason, rather than left live to be refused after the click.
+    let model = |items: Vec<MenuItem>| {
+        let items = if viewing {
+            menus::for_viewer(items)
+        } else {
+            items
+        };
+        slint::ModelRc::new(slint::VecModel::from(items))
+    };
 
     ui.set_file_items(model(menus::file(
         any_dirty,
@@ -437,6 +464,12 @@ pub struct RunOptions {
     pub files: Vec<PathBuf>,
     /// `--line N`: where the caret starts in the file opened last.
     pub line: Option<std::num::NonZeroUsize>,
+    /// `--readonly`: open `files` in the read-only viewer, whatever their
+    /// size (release plan M1-06).
+    pub readonly: bool,
+    /// `--large-file`: open `files` in the large-file viewer even when they
+    /// are small enough to edit.
+    pub large_file: bool,
     /// Print `BPSPIKE_READY_MS=<f64>` once the first frame has been rendered,
     /// then quit. Drives `scripts/Measure-UiSpike.ps1`.
     ///
@@ -509,7 +542,14 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
         // by another route must not be able to hand the editor a 0 pt font.
         initial.font_size = bp_config::zoom(size, 0);
     }
-    initial.start_up(options.startup_notice.clone(), &options.files);
+    let how = if options.readonly {
+        viewer::OpenAs::ReadOnly
+    } else if options.large_file {
+        viewer::OpenAs::Viewer
+    } else {
+        viewer::OpenAs::Normal
+    };
+    initial.start_up(options.startup_notice.clone(), &options.files, how);
 
     // What a previous session left unsaved is claimed now, before anything
     // else can journal, and offered once the window is up -- see
@@ -624,6 +664,7 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
 
     bind_editing(&ui, &state);
     bind_settings(&ui, &state);
+    bind_viewer(&ui, &state);
     about::bind(&ui, &state);
 
     // Every in-app question reports here; `dialog` runs what was waiting on
@@ -824,91 +865,7 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
         });
     }
 
-    // --- find and replace ---------------------------------------------
-    {
-        let cell = Rc::clone(&state);
-        let weak = ui.as_weak();
-        ui.on_find_changed(move || {
-            let Some(ui) = weak.upgrade() else { return };
-            let query = ui_query(&ui);
-            let selection = cell.borrow_mut().find(&query);
-            ui.set_find_status(cell.borrow().find_status.as_str().into());
-            if let Some(range) = selection {
-                dispatch::select(&ui, &mut cell.borrow_mut(), &range);
-            }
-        });
-    }
-
-    for forward in [true, false] {
-        let cell = Rc::clone(&state);
-        let weak = ui.as_weak();
-        let step = move || {
-            let Some(ui) = weak.upgrade() else { return };
-            let selection = cell.borrow_mut().step_match(forward);
-            ui.set_find_status(cell.borrow().find_status.as_str().into());
-            if let Some(range) = selection {
-                dispatch::select(&ui, &mut cell.borrow_mut(), &range);
-            }
-        };
-        if forward {
-            ui.on_find_next(step);
-        } else {
-            ui.on_find_previous(step);
-        }
-    }
-
-    {
-        let cell = Rc::clone(&state);
-        let weak = ui.as_weak();
-        ui.on_replace_all(move || {
-            let Some(ui) = weak.upgrade() else { return };
-            let query = ui_query(&ui);
-            let replacement = ui.get_replace_query().to_string();
-
-            // Planned first, and the plan shown, before anything changes:
-            // specs.md section 6 wants the changes visible before they are
-            // applied. The borrow ends before the dialog blocks -- a native
-            // dialog can pump events, and holding a `RefCell` across one is
-            // how a re-entrant callback panics.
-            let planned = {
-                let s = cell.borrow();
-                bp_search::plan_replace_all(&s.active_text(), &query, &replacement)
-            };
-
-            match planned {
-                Err(e) => cell.borrow_mut().find_status = e.to_string(),
-                Ok(plan) if plan.is_empty() => {
-                    cell.borrow_mut().find_status = "no matches".to_owned();
-                }
-                Ok(plan) => {
-                    // The rest happens once the preview is answered.
-                    let cell = Rc::clone(&cell);
-                    dispatch::confirm_replace(&ui, plan, move |ui, plan| {
-                        {
-                            let mut s = cell.borrow_mut();
-                            match plan {
-                                None => s.find_status = "cancelled".to_owned(),
-                                Some(plan) => {
-                                    let n = plan.count();
-                                    // An ordinary edit, so it is undoable and
-                                    // nothing reaches disk until the user
-                                    // saves.
-                                    s.edit(plan.apply());
-                                    s.matches.clear();
-                                    s.find_status = format!("replaced {n}");
-                                }
-                            }
-                        }
-                        ui.set_find_status(cell.borrow().find_status.as_str().into());
-                        refresh(ui, &mut cell.borrow_mut(), state::PushText::Yes);
-                    });
-                    return;
-                }
-            }
-            ui.set_find_status(cell.borrow().find_status.as_str().into());
-            refresh(&ui, &mut cell.borrow_mut(), state::PushText::Yes);
-        });
-    }
+    bind_find(&ui, &state);
 
     {
         let cell = Rc::clone(&state);
@@ -1429,12 +1386,226 @@ fn bind_editing(ui: &AppWindow, state: &Rc<RefCell<state::AppState>>) {
             let Some(ui) = weak.upgrade() else { return };
             let moved = cell.borrow_mut().go_to_line(&ui.get_goto_line());
             ui.set_goto_status(cell.borrow().goto_status.as_str().into());
+            if cell.borrow().viewer_active() {
+                refresh(&ui, &mut cell.borrow_mut(), state::PushText::No);
+            }
             if let Some(range) = moved {
                 // The bar stays open: going to a line is often the first of
                 // several, and closing it would make the second one two
                 // keystrokes further away.
                 dispatch::select(&ui, &mut cell.borrow_mut(), &range);
             }
+        });
+    }
+}
+
+/// Wire Find, Find Next and Previous, and Replace All. A function of its
+/// own so the window tests drive exactly what `run_with` wires -- the
+/// viewer's search included.
+fn bind_find(ui: &AppWindow, state: &Rc<RefCell<state::AppState>>) {
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_find_changed(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let query = ui_query(&ui);
+            let selection = cell.borrow_mut().find(&query);
+            ui.set_find_status(cell.borrow().find_status.as_str().into());
+            if let Some(range) = selection {
+                dispatch::select(&ui, &mut cell.borrow_mut(), &range);
+            }
+            // The viewer's search has just started on its thread; the
+            // refresh is what sets the poll going that collects it.
+            if cell.borrow().viewer_active() {
+                refresh(&ui, &mut cell.borrow_mut(), state::PushText::No);
+            }
+        });
+    }
+
+    for forward in [true, false] {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        let step = move || {
+            let Some(ui) = weak.upgrade() else { return };
+            if cell.borrow().viewer_active() {
+                let query = ui_query(&ui);
+                cell.borrow_mut().viewer_find(&query, forward, false);
+                ui.set_find_status(cell.borrow().find_status.as_str().into());
+                refresh(&ui, &mut cell.borrow_mut(), state::PushText::No);
+                return;
+            }
+            let selection = cell.borrow_mut().step_match(forward);
+            ui.set_find_status(cell.borrow().find_status.as_str().into());
+            if let Some(range) = selection {
+                dispatch::select(&ui, &mut cell.borrow_mut(), &range);
+            }
+        };
+        if forward {
+            ui.on_find_next(step);
+        } else {
+            ui.on_find_previous(step);
+        }
+    }
+
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_replace_all(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            if cell.borrow().viewer_active() {
+                cell.borrow_mut().find_status =
+                    "read-only: nothing here can be replaced".to_owned();
+                ui.set_find_status(cell.borrow().find_status.as_str().into());
+                return;
+            }
+            let query = ui_query(&ui);
+            let replacement = ui.get_replace_query().to_string();
+
+            // Planned first, and the plan shown, before anything changes:
+            // specs.md section 6 wants the changes visible before they are
+            // applied. The borrow ends before the dialog blocks -- a native
+            // dialog can pump events, and holding a `RefCell` across one is
+            // how a re-entrant callback panics.
+            let planned = {
+                let s = cell.borrow();
+                bp_search::plan_replace_all(&s.active_text(), &query, &replacement)
+            };
+
+            match planned {
+                Err(e) => cell.borrow_mut().find_status = e.to_string(),
+                Ok(plan) if plan.is_empty() => {
+                    cell.borrow_mut().find_status = "no matches".to_owned();
+                }
+                Ok(plan) => {
+                    // The rest happens once the preview is answered.
+                    let cell = Rc::clone(&cell);
+                    dispatch::confirm_replace(&ui, plan, move |ui, plan| {
+                        {
+                            let mut s = cell.borrow_mut();
+                            match plan {
+                                None => s.find_status = "cancelled".to_owned(),
+                                Some(plan) => {
+                                    let n = plan.count();
+                                    // An ordinary edit, so it is undoable and
+                                    // nothing reaches disk until the user
+                                    // saves.
+                                    s.edit(plan.apply());
+                                    s.matches.clear();
+                                    s.find_status = format!("replaced {n}");
+                                }
+                            }
+                        }
+                        ui.set_find_status(cell.borrow().find_status.as_str().into());
+                        refresh(ui, &mut cell.borrow_mut(), state::PushText::Yes);
+                    });
+                    return;
+                }
+            }
+            ui.set_find_status(cell.borrow().find_status.as_str().into());
+            refresh(&ui, &mut cell.borrow_mut(), state::PushText::Yes);
+        });
+    }
+}
+
+/// Wire the large-file viewer's callbacks (release plan M1-06). A function
+/// of its own so the window tests wire the viewer exactly as `run_with`
+/// does.
+fn bind_viewer(ui: &AppWindow, state: &Rc<RefCell<state::AppState>>) {
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_viewer_key(move |text, control, _shift, alt| {
+            let Some(ui) = weak.upgrade() else {
+                return false;
+            };
+            let claimed = cell.borrow_mut().viewer_key(&text, control, alt);
+            if claimed {
+                refresh(&ui, &mut cell.borrow_mut(), state::PushText::No);
+            }
+            claimed
+        });
+    }
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_viewer_pressed(move |row| {
+            let Some(ui) = weak.upgrade() else { return };
+            {
+                let mut s = cell.borrow_mut();
+                let rows = s.viewer_rows;
+                if let Some(viewer) = s.active_viewer_mut() {
+                    let line = viewer.top + usize::try_from(row).unwrap_or(0);
+                    viewer.put_caret(line, rows);
+                }
+            }
+            refresh(&ui, &mut cell.borrow_mut(), state::PushText::No);
+        });
+    }
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_viewer_scrolled(move |lines| {
+            let Some(ui) = weak.upgrade() else { return };
+            {
+                let mut s = cell.borrow_mut();
+                let rows = s.viewer_rows;
+                if let Some(viewer) = s.active_viewer_mut() {
+                    viewer.scroll(isize::try_from(lines).unwrap_or(0), rows);
+                }
+            }
+            viewer::draw(&ui, &mut cell.borrow_mut());
+        });
+    }
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_viewer_scrubbed(move |fraction| {
+            let Some(ui) = weak.upgrade() else { return };
+            {
+                let mut s = cell.borrow_mut();
+                let rows = s.viewer_rows;
+                if let Some(viewer) = s.active_viewer_mut() {
+                    viewer.scrub(fraction, rows);
+                }
+            }
+            refresh(&ui, &mut cell.borrow_mut(), state::PushText::No);
+        });
+    }
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_viewer_resized(move |rows, columns| {
+            let Some(ui) = weak.upgrade() else { return };
+            {
+                let mut s = cell.borrow_mut();
+                s.viewer_rows = usize::try_from(rows).unwrap_or(1).max(1);
+                s.viewer_columns = usize::try_from(columns).unwrap_or(80).max(1);
+            }
+            if cell.borrow().viewer_active() {
+                viewer::draw(&ui, &mut cell.borrow_mut());
+            }
+        });
+    }
+    // The poll that collects indexing and searches, while any is running.
+    // Slint's timer runs it, switched by `viewer-busy`, which `refresh` sets
+    // -- so nothing wakes the event loop while every viewer is idle. Closing
+    // the find bar is how a search is stopped.
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_viewer_tick(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            {
+                let mut s = cell.borrow_mut();
+                if !ui.get_find_open() {
+                    s.stop_viewer_search();
+                }
+                s.poll_viewers();
+            }
+            if cell.borrow().viewer_active() {
+                ui.set_find_status(cell.borrow().find_status.as_str().into());
+            }
+            refresh(&ui, &mut cell.borrow_mut(), state::PushText::No);
         });
     }
 }
@@ -1491,6 +1662,11 @@ fn start_at_line(
     line: std::num::NonZeroUsize,
 ) {
     let landed = cell.borrow_mut().go_to_line(&line.to_string());
+    if cell.borrow().viewer_active() {
+        // The viewer went there itself, or will once its index has.
+        refresh(ui, &mut cell.borrow_mut(), state::PushText::No);
+        return;
+    }
     let Some(range) = landed else { return };
     let said = std::mem::take(&mut cell.borrow_mut().goto_status);
     if !said.is_empty() {
@@ -1692,6 +1868,13 @@ fn save_with_prompt(
     id: DocumentId,
     then: impl FnOnce(&AppWindow, state::SaveResult) + 'static,
 ) {
+    // Before the changed-on-disk question: a log growing under the viewer
+    // is the normal case, and asking whether to overwrite it would offer a
+    // save that is never going to happen.
+    if cell.borrow_mut().refuse_read_only(id) {
+        then(ui, state::SaveResult::Failed);
+        return;
+    }
     let changed = cell.borrow().would_overwrite_external_change(id);
     if !changed {
         save_or_pick(ui, cell, id, then);
@@ -1751,6 +1934,11 @@ fn save_or_pick(
 
 /// Save As: ask where, save there, and refresh.
 pub(crate) fn save_as(ui: &AppWindow, cell: &Rc<RefCell<state::AppState>>, id: DocumentId) {
+    // Refused before the file dialog, not after the user has chosen a name.
+    if cell.borrow_mut().refuse_read_only(id) {
+        refresh(ui, &mut cell.borrow_mut(), state::PushText::No);
+        return;
+    }
     let chosen = dispatch::pick_save_path(&cell.borrow(), id);
     match chosen {
         Some(path) => save_to(ui, cell, id, path),

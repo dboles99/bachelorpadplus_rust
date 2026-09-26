@@ -3,9 +3,9 @@
 // This file owns the window: its properties, the callbacks Rust binds to, the
 // shortcut bindings, and the layout that puts the pieces in order. The pieces
 // themselves live beside it -- `menu.slint`, `editor_surface.slint`,
-// `tab.slint`, `find_bar.slint`, `results_panel.slint`, `status_bar.slint` --
-// so that adding a row to one of them is not an edit to the same file as
-// everything else.
+// `tab.slint`, `find_bar.slint`, `results_panel.slint`, `status_bar.slint`,
+// `viewer.slint` -- so that adding a row to one of them is not an edit to the
+// same file as everything else.
 //
 // Three things stay here on purpose:
 //
@@ -44,6 +44,7 @@ import { StatusBar } from "status_bar.slint";
 import { Tab } from "tab.slint";
 import { EditorRow, MenuItem, Palette, SearchHit, SelectionBox, SettingRow, TabInfo } from "types.slint";
 import { SettingsSheet } from "settings.slint";
+import { ViewerPane } from "viewer.slint";
 
 // Re-exported because `slint-build` generates Rust types only for what the
 // compiled entry file exports. `bp-ui` names all eight.
@@ -198,6 +199,47 @@ export component AppWindow inherits Window {
     callback editor-scrolled(int);
     callback editor-resized(int, int);
 
+    // --- the large-file viewer (`viewer.slint`, `src/viewer.rs`) ---------
+    // Shown instead of both editor views while the active tab is a document
+    // open read-only in the viewer (release plan M1-06).
+    in property <bool> viewer-active;
+    in property <string> viewer-banner;
+    in property <[EditorRow]> viewer-rows;
+    in property <[SelectionBox]> viewer-highlight;
+    in property <int> viewer-caret-row: -1;
+    in property <int> viewer-caret-column;
+    in property <float> viewer-thumb-position;
+    in property <float> viewer-thumb-size: 1;
+    in property <int> viewer-gutter-columns;
+    /// Whether any viewer has indexing or a search running. Runs the poll
+    /// below, and only while it is true.
+    in property <bool> viewer-busy;
+
+    callback viewer-key(string, bool, bool, bool) -> bool;
+    callback viewer-pressed(int);
+    callback viewer-scrolled(int);
+    callback viewer-resized(int, int);
+    callback viewer-scrubbed(float);
+    callback viewer-tick();
+
+    viewer-poll := Timer {
+        interval: 100ms;
+        running: root.viewer-busy;
+        triggered => {
+            root.viewer-tick();
+        }
+    }
+
+    /// The active tab just changed between the viewer and an editor: move
+    /// the keyboard with it, or keys typed after switching would reach the
+    /// view that is now hidden. Not while something else holds the keyboard
+    /// on purpose -- a question, a sheet, a bar being typed into.
+    public function follow-view() {
+        if (!root.dialog-open && !root.settings-open && !root.about-open && !root.passphrase-open && !root.goto-open) {
+            root.focus-editor();
+        }
+    }
+
     // --- find and replace ---------------------------------------------
     in-out property <bool> find-open;
     in-out property <string> find-query;
@@ -293,6 +335,10 @@ export component AppWindow inherits Window {
     /// where the next match is -- `set-selection-offsets` is a function on
     /// the widget, so only Slint can invoke it.
     public function select-range(start: int, end: int) {
+        if (root.viewer-active) {
+            viewer.focus-view();
+            return;
+        }
         if (root.use-editor-view) {
             // Rust has already moved its own caret; there is nothing here to
             // tell. Just take the focus back from the find box.
@@ -310,6 +356,10 @@ export component AppWindow inherits Window {
     /// caret is not readable; under the custom surface it is a courtesy, and
     /// the insertion has already happened.
     public function paste-from-clipboard() {
+        if (root.viewer-active) {
+            // Read-only: there is nowhere to paste.
+            return;
+        }
         if (root.use-editor-view) {
             // We own the caret, so Rust inserted at it directly.
             surface.focus();
@@ -342,7 +392,9 @@ export component AppWindow inherits Window {
 
     /// Put the caret back in whichever editor is in use.
     public function focus-editor() {
-        if (root.use-editor-view) {
+        if (root.viewer-active) {
+            viewer.focus-view();
+        } else if (root.use-editor-view) {
             surface.focus();
         } else {
             editor.focus();
@@ -423,7 +475,10 @@ export component AppWindow inherits Window {
     }
 
     function dispatch(action: int) {
-        if (root.use-editor-view) {
+        // Over a viewer tab everything goes to Rust, including the ids the
+        // widget would otherwise handle itself: Rust refuses the ones that
+        // would edit, and the widget is not the document on screen.
+        if (root.viewer-active || root.use-editor-view) {
             root.menu-action(action);
         } else if (action == 100) {
             editor.undo();
@@ -817,14 +872,15 @@ export component AppWindow inherits Window {
                 background: Palette.panel;
                 vertical-stretch: 1;
 
-                // Both exist rather than one being inside an `if`: an element
+                // All three -- the two editor views and the viewer -- exist
+                // rather than one being inside an `if`: an element
                 // in an `if` is out of scope for `dispatch` and
                 // `forward-focus`, which is the same constraint the find bar
                 // is collapsed rather than conditional for.
                 surface := EditorSurface {
                     accessible-role: text-input;
                     accessible-label: "Document";
-                    visible: root.use-editor-view;
+                    visible: root.use-editor-view && !root.viewer-active;
                     rows: root.editor-rows;
                     selection: root.editor-selection;
                     caret-row: root.caret-row;
@@ -860,7 +916,7 @@ export component AppWindow inherits Window {
                 }
 
                 flick := Flickable {
-                    visible: !root.use-editor-view;
+                    visible: !root.use-editor-view && !root.viewer-active;
                     viewport-height: max(self.height, editor-row.preferred-height);
                     // Wide enough for the longest line when nothing wraps,
                     // or a caret sent to the end of one has nowhere to be
@@ -1012,6 +1068,40 @@ export component AppWindow inherits Window {
                                 return reject;
                             }
                         }
+                    }
+                }
+
+                viewer := ViewerPane {
+                    visible: root.viewer-active;
+                    banner: root.viewer-banner;
+                    rows: root.viewer-rows;
+                    highlight: root.viewer-highlight;
+                    caret-row: root.viewer-caret-row;
+                    caret-column: root.viewer-caret-column;
+                    show-gutter: root.show-gutter;
+                    font-size: root.font-size;
+                    thumb-position: root.viewer-thumb-position;
+                    thumb-size: root.viewer-thumb-size;
+                    gutter-columns: root.viewer-gutter-columns;
+
+                    key(text, control, shift, alt) => {
+                        if (alt && !control && root.mnemonic(text) >= 0) {
+                            root.open-menu(root.mnemonic(text));
+                            return true;
+                        }
+                        return root.viewer-key(text, control, shift, alt);
+                    }
+                    pressed(row) => {
+                        root.viewer-pressed(row);
+                    }
+                    scrolled(lines) => {
+                        root.viewer-scrolled(lines);
+                    }
+                    resized(rows, columns) => {
+                        root.viewer-resized(rows, columns);
+                    }
+                    scrubbed(fraction) => {
+                        root.viewer-scrubbed(fraction);
                     }
                 }
             }
