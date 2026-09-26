@@ -55,6 +55,9 @@ export component EditorSurface inherits Rectangle {
     /// with, and any other source would wrap in a different place than it
     /// renders.
     callback resized(int, int);
+    /// Show the context menu at this point: a right-click, or the Menu key
+    /// or Shift+F10, which open it just below the caret.
+    callback context-menu(length, length);
 
     // The character advance is measured, not assumed. A hard-coded ratio
     // drifts the caret one fraction of a pixel further from its character
@@ -136,6 +139,10 @@ export component EditorSurface inherits Rectangle {
 
     keys := FocusScope {
         key-pressed(event) => {
+            if (event.text == Key.Menu || (event.modifiers.shift && event.text == Key.F10)) {
+                root.context-menu(root.text-left + root.caret-column * root.advance, root.pad + (max(0, root.caret-row) + 1) * root.line-height);
+                return EventResult.accept;
+            }
             if (root.key(event.text, event.modifiers.control, event.modifiers.shift, event.modifiers.alt)) {
                 return EventResult.accept;
             }
@@ -218,7 +225,13 @@ export component EditorSurface inherits Rectangle {
         mouse-cursor: text;
 
         pointer-event(event) => {
-            if (event.kind == PointerEventKind.down) {
+            // A right-click leaves the caret and the selection where they
+            // are, as it does in `TextInput`: Cut and Copy act on the
+            // selection, and moving the caret first would lose it.
+            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                keys.focus();
+                root.context-menu(self.mouse-x, self.mouse-y);
+            } else if (event.kind == PointerEventKind.down) {
                 keys.focus();
                 root.press(root.row-at(self.mouse-y), root.column-at(self.mouse-x), event.modifiers.shift);
             }

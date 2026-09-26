@@ -61,6 +61,73 @@ fn at_the_caret(
     }
 }
 
+/// Paste `text` at the caret, in either view: a clipboard row, a paste
+/// transformation, Paste Special.
+///
+/// Two paths, because the caret is reached differently under each view,
+/// and missing one is how a feature works for whoever tested it and does
+/// nothing for whoever did not.
+fn paste_at_caret(ui: &AppWindow, state: &Rc<RefCell<AppState>>, text: &str) {
+    set_os_clipboard(text, state.borrow().keep_clipboard_private());
+
+    let owns_caret = state.borrow().editor_view;
+    if owns_caret {
+        {
+            let mut s = state.borrow_mut();
+            if let Some(editor) = s.active_editor_mut() {
+                editor.insert(text);
+            }
+            s.mark_edited();
+        }
+        crate::refresh(ui, &mut state.borrow_mut(), PushText::No);
+        ui.invoke_focus_editor();
+    } else {
+        // The OS clipboard now holds the text, so the widget's own paste
+        // puts it at the caret -- the one way to insert there without caret
+        // access.
+        ui.invoke_paste_from_clipboard();
+    }
+}
+
+/// Edit ▸ Paste Special...: what is on the clipboard now, pasted as it is
+/// or through one of the transformations its kind offers.
+///
+/// A question rather than a submenu, because the choices depend on the
+/// clipboard's contents, which a menu built earlier cannot know -- and
+/// reading the clipboard every time a menu is built would be reading it for
+/// nothing almost every time.
+fn paste_special(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    let Some(text) = crate::read_os_clipboard().filter(|t| !t.trim().is_empty()) else {
+        state.borrow_mut().error = Some("Paste Special: the clipboard holds no text".to_owned());
+        crate::refresh(ui, &mut state.borrow_mut(), PushText::No);
+        return;
+    };
+    let offer = menus::paste_special(&text);
+    let mut buttons: Vec<String> = offer
+        .choices
+        .iter()
+        .map(|(label, _)| (*label).to_owned())
+        .collect();
+    let cancel = buttons.len();
+    buttons.push("Cancel".to_owned());
+    let cell = Rc::clone(state);
+    dialog::ask(
+        ui,
+        dialog::Dialog {
+            title: "Paste Special".to_owned(),
+            body: offer.body,
+            buttons,
+            default: 0,
+            cancel,
+        },
+        move |ui, chosen| {
+            if let Some((_, text)) = offer.choices.into_iter().nth(chosen) {
+                paste_at_caret(ui, &cell, &text);
+            }
+        },
+    );
+}
+
 /// Tools ▸ Open Log Folder: the folder the binary really logs to. A failure
 /// is a status line.
 pub(crate) fn open_log_folder(state: &mut AppState) {
@@ -899,62 +966,49 @@ pub fn handle_menu_action(
         // what let the recent-files arm swallow everything up to 100 before
         // it had a real range, and the paste-transformation ids just below
         // would have fallen into this arm the same way.
+        //
+        // The offset is a slot in the snapshot the menu opened with, and
+        // the entry is found by what the slot names, wherever the history
+        // has moved it since (U5). One that has gone is reported, not
+        // swapped for whatever took its place.
         id if (action::CLIP_BASE..menus::clip_end()).contains(&id) => {
-            let index = usize::try_from(id - action::CLIP_BASE).unwrap_or(0);
-            let text = state.borrow().clips.get(index).map(|e| e.text.clone())?;
-            set_os_clipboard(&text, state.borrow().keep_clipboard_private());
-
-            let owns_caret = state.borrow().editor_view;
-            if owns_caret {
-                {
-                    let mut s = state.borrow_mut();
-                    if let Some(editor) = s.active_editor_mut() {
-                        editor.insert(&text);
-                    }
-                    s.mark_edited();
-                }
-                refresh(ui, &mut state.borrow_mut(), PushText::No);
-                ui.invoke_focus_editor();
-            } else {
-                // The OS clipboard now holds the entry, so the
-                // widget's own paste puts it at the caret -- the one
-                // way to insert there without caret access.
-                ui.invoke_paste_from_clipboard();
+            let slot = usize::try_from(id - action::CLIP_BASE).unwrap_or(usize::MAX);
+            let named = state.borrow_mut().clip_named(slot);
+            match named {
+                Some(entry) => paste_at_caret(ui, state, &entry.text),
+                None => refresh(ui, &mut state.borrow_mut(), PushText::No),
             }
             return None;
         }
 
-        // A paste transformation. Same two-path shape as the plain
-        // clipboard rows just above -- the caret is reached differently
-        // under each editor view, and missing one path is how a feature
-        // works for whoever tested it and does nothing for whoever did not.
+        // A paste transformation: the same entry lookup, then the same
+        // paste. A transform the entry's kind does not offer, or one that
+        // would change nothing, is a row that was never built.
         id if (action::CLIP_TRANSFORM_BASE..menus::clip_transform_end()).contains(&id) => {
-            let (entry_index, transform) = {
-                let s = state.borrow();
-                menus::decode_transform(id, s.clips.entries())?
-            };
-            let source = state
-                .borrow()
-                .clips
-                .get(entry_index)
-                .map(|e| e.text.clone())?;
-            let text = menus::apply_transform(transform, &source)?;
-            set_os_clipboard(&text, state.borrow().keep_clipboard_private());
-
-            let owns_caret = state.borrow().editor_view;
-            if owns_caret {
-                {
-                    let mut s = state.borrow_mut();
-                    if let Some(editor) = s.active_editor_mut() {
-                        editor.insert(&text);
-                    }
-                    s.mark_edited();
-                }
+            let (slot, index) = menus::decode_transform(id)?;
+            let named = state.borrow_mut().clip_named(slot);
+            let Some(entry) = named else {
                 refresh(ui, &mut state.borrow_mut(), PushText::No);
-                ui.invoke_focus_editor();
-            } else {
-                ui.invoke_paste_from_clipboard();
-            }
+                return None;
+            };
+            let transform = *bp_clipboard::transforms_for(entry.kind).get(index)?;
+            let text = menus::apply_transform(transform, &entry.text)?;
+            paste_at_caret(ui, state, &text);
+            return None;
+        }
+
+        // Pin and Clear change the history, not the document.
+        id if (action::CLIP_PIN_BASE..menus::clip_pin_end()).contains(&id) => {
+            let slot = usize::try_from(id - action::CLIP_PIN_BASE).unwrap_or(usize::MAX);
+            state.borrow_mut().toggle_clip_pin(slot);
+            push = PushText::No;
+        }
+        action::CLIP_CLEAR => {
+            state.borrow_mut().clear_shown_clips();
+            push = PushText::No;
+        }
+        action::PASTE_SPECIAL => {
+            paste_special(ui, state);
             return None;
         }
 
