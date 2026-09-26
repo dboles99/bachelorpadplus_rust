@@ -28,14 +28,14 @@ pub mod line_index;
 pub mod stream;
 
 pub use large::{
-    Access, CHUNK_BYTES, DisplayLine, HUGE_FILE_BYTES, INDEX_BUDGET_BYTES, IndexProgress,
-    LARGE_FILE_BYTES, LargeFile, LargeFileError, MAX_DISPLAY_BYTES, MAX_DISPLAY_LINE_BYTES,
-    MAX_DISPLAY_LINES, SizeClass,
+    Access, CHUNK_BYTES, DisplayLine, HUGE_FILE_BYTES, INDEX_BUDGET_BYTES, INVALID_BYTE_DISPLAY,
+    IndexProgress, LARGE_FILE_BYTES, LargeFile, LargeFileError, MAX_DISPLAY_BYTES,
+    MAX_DISPLAY_LINE_BYTES, MAX_DISPLAY_LINES, SizeClass,
 };
 pub use line_index::{LineIndex, LineLocation, MAX_ANCHORS, MAX_INDEX_HEAP_BYTES};
 pub use stream::{
-    DEFAULT_OVERLAP_BYTES, DEFAULT_WINDOW_BYTES, MAX_OVERLAP_BYTES, MIN_WINDOW_BYTES, StreamWindow,
-    WindowReader,
+    DEFAULT_OVERLAP_BYTES, DEFAULT_WINDOW_BYTES, INVALID_BYTE_SEARCHED, MAX_OVERLAP_BYTES,
+    MIN_WINDOW_BYTES, StreamWindow, WindowReader,
 };
 
 /// Crate identity used by workspace smoke tests and diagnostics.
