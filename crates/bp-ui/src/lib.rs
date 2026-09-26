@@ -249,7 +249,7 @@ fn refresh(ui: &AppWindow, state: &mut state::AppState, push_text: state::PushTe
     ui.set_insert_items(model(menus::insert(state::now())));
     ui.set_data_items(model(menus::data(format)));
     ui.set_note_items(model(menus::note(state.active_has_content())));
-    ui.set_edit_items(model(menus::edit(state.clips.entries())));
+    set_clip_menus(ui, state);
     // Rebuilt rather than set once: it shows the *active* document's profile
     // and what that profile permits, both of which change with the tab.
     let encrypted = state
@@ -269,6 +269,50 @@ fn refresh(ui: &AppWindow, state: &mut state::AppState, push_text: state::PushTe
         // fact for the same underlying reason.
         has_path,
     )));
+}
+
+/// The rows that name clipboard entries: Edit's, and the editor context
+/// menu's (release plan M1-18).
+///
+/// Built from the snapshot the last of those menus opened with, not from
+/// the history as it is now (U5): the poll can add an entry while one is
+/// open, and a rebuild from the live history would move every row down
+/// under the pointer. An entry that has gone since loses its row, so no
+/// preview of text the history has forgotten stays on screen.
+fn set_clip_menus(ui: &AppWindow, state: &state::AppState) {
+    let shown = state.shown_clips();
+    let edit = menus::edit(&shown);
+    let edit = if state.viewer_active() {
+        menus::for_viewer(edit)
+    } else {
+        edit
+    };
+    // Only when the rows differ. This runs on every refresh, the poll's
+    // included, and Slint rebuilds an open context menu whose model is
+    // replaced: in the window tests the keyboard's place in it was lost,
+    // so a copy arriving under the menu disturbed it even though no row
+    // had changed.
+    let set = |current: slint::ModelRc<MenuItem>,
+               items: Vec<MenuItem>,
+               apply: &dyn Fn(slint::ModelRc<MenuItem>)| {
+        use slint::Model as _;
+        if !current.iter().eq(items.iter().cloned()) {
+            apply(slint::ModelRc::new(slint::VecModel::from(items)));
+        }
+    };
+    set(ui.get_edit_items(), edit, &|m| ui.set_edit_items(m));
+    // Not greyed for the viewer: the context menu does not open over it.
+    set(
+        ui.get_context_history_items(),
+        menus::context_history(&shown),
+        &|m| ui.set_context_history_items(m),
+    );
+    set(
+        ui.get_context_pin_items(),
+        menus::context_pins(&shown),
+        &|m| ui.set_context_pin_items(m),
+    );
+    ui.set_context_can_clear(menus::context_can_clear(&shown));
 }
 
 /// Menus whose contents never change. Set once, not on every refresh.
@@ -1322,6 +1366,19 @@ fn bind_files(ui: &AppWindow, state: &Rc<RefCell<state::AppState>>) {
 /// function of its own so the window tests drive exactly what `run_with`
 /// wires.
 fn bind_editing(ui: &AppWindow, state: &Rc<RefCell<state::AppState>>) {
+    // Edit or the editor context menu is opening: freeze which entry each
+    // of its clipboard rows names, and build them from that (U5).
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_clip_menu_opening(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let mut s = cell.borrow_mut();
+            s.open_clip_menu();
+            set_clip_menus(&ui, &s);
+        });
+    }
+
     // Ctrl+Tab and Ctrl+Shift+Tab.
     {
         let cell = Rc::clone(state);

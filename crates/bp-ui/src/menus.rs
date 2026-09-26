@@ -171,11 +171,24 @@ pub mod action {
     pub const OPEN_LOG_FOLDER: i32 = 231;
     pub const OPEN_CONFIG_FOLDER: i32 = 232;
 
+    /// The clipboard rows that are not one entry's (release plan M1-18), in
+    /// a block of their own at 240-249. 242-249 are free.
+    ///
+    /// `ui/app.slint`'s editor context menu names these two by number, as it
+    /// names the widget's 100-105.
+    pub const PASTE_SPECIAL: i32 = 240;
+    /// Forget the unpinned entries the menu showed.
+    pub const CLIP_CLEAR: i32 = 241;
+
     /// Clipboard history occupies `CLIP_BASE ..` (bounded by [`super::clip_end`]).
     ///
     /// Slint's `dispatch` routes exactly `UNDO..=SELECT_ALL` to the widget and
     /// everything else to Rust, so this range only has to avoid that window —
     /// not sit below it.
+    ///
+    /// The offset is a slot in the snapshot taken when the menu opened
+    /// (`bp_clipboard::Snapshot`), not a position in the history, which can
+    /// move under an open menu (U5). The same goes for the two ranges below.
     pub const CLIP_BASE: i32 = 300;
 
     /// How many transform rows are reserved per clipboard entry.
@@ -193,6 +206,10 @@ pub mod action {
     /// plain-paste arm's `id - CLIP_BASE` arithmetic never has to know
     /// transform rows exist.
     pub const CLIP_TRANSFORM_BASE: i32 = 500;
+    /// Pin or unpin one entry (the editor context menu's Pin submenu):
+    /// `CLIP_PIN_BASE + slot`, bounded by [`super::clip_pin_end`]. Directly
+    /// after the transform rows' range, which ends at 600.
+    pub const CLIP_PIN_BASE: i32 = 600;
 
     pub const NOTE_TITLE: i32 = 80;
     pub const NOTE_RENAME: i32 = 81;
@@ -390,6 +407,10 @@ pub(crate) fn viewer_refusal(id: i32) -> Option<&'static str> {
         | OPEN_LOG_FOLDER | OPEN_CONFIG_FOLDER | GO_TO_LINE | NONE => return None,
         // A document's profile is a setting about it, not a change to it.
         _ if in_range(PROFILE_BASE, profile_end()) => return None,
+        // Pinning and clearing change the clipboard history, not the
+        // document.
+        CLIP_CLEAR => return None,
+        _ if in_range(CLIP_PIN_BASE, clip_pin_end()) => return None,
         _ if in_range(
             RECENT_BASE,
             RECENT_BASE + i32::try_from(bp_config::MAX_RECENT).unwrap_or(0),
@@ -454,6 +475,20 @@ pub(crate) fn clip_transform_end() -> i32 {
         + action::CLIP_TRANSFORM_SLOTS * i32::try_from(bp_clipboard::MAX_ENTRIES).unwrap_or(0)
 }
 
+/// One past the last pin id.
+pub(crate) fn clip_pin_end() -> i32 {
+    action::CLIP_PIN_BASE + i32::try_from(bp_clipboard::MAX_ENTRIES).unwrap_or(0)
+}
+
+/// Clipboard entries as a menu shows them: each with its slot in the
+/// snapshot the menu was opened with (`bp_clipboard::Snapshot::shown`).
+pub(crate) type Shown<'h> = [(usize, &'h bp_clipboard::Entry)];
+
+/// A slot as the offset of a row id.
+fn slot_id(base: i32, slot: usize) -> i32 {
+    base + i32::try_from(slot).unwrap_or(0)
+}
+
 /// A menu label for a paste transformation.
 ///
 /// Presentation only -- what each `Transform` actually does lives in
@@ -492,27 +527,65 @@ pub(crate) fn apply_transform(transform: bp_clipboard::Transform, text: &str) ->
     (result != text).then_some(result)
 }
 
-/// Decode a `CLIP_TRANSFORM_BASE`-range id back to which entry and
-/// transform it means.
+/// What Paste Special... offers for the clipboard's text: a sentence saying
+/// what is there, and each way to paste it, labelled, with the text it
+/// would paste.
+pub(crate) struct PasteSpecial {
+    pub body: String,
+    /// The transformations that would change the text, in the order the
+    /// clipboard rows offer them, then the text unchanged.
+    pub choices: Vec<(&'static str, String)>,
+}
+
+/// Paste Special... over `text`. The same transformations, and the same
+/// rule about offering only the ones that change something, as each
+/// clipboard history row -- one list, so the two cannot drift.
+pub(crate) fn paste_special(text: &str) -> PasteSpecial {
+    let kind = bp_clipboard::detect_kind(text);
+    let mut choices: Vec<(&'static str, String)> = bp_clipboard::transforms_for(kind)
+        .iter()
+        .filter_map(|&transform| {
+            apply_transform(transform, text).map(|result| (transform_label(transform), result))
+        })
+        .collect();
+    // Its shape and not a preview: this is the clipboard as it stands, which
+    // may be another program's copy -- a password manager's, say -- and the
+    // history keeps those off screen unless asked (`record_other_programs`).
+    let lines = text.lines().count();
+    let chars = text.chars().count();
+    let body = format!(
+        "The clipboard holds {}: {lines} {}, {chars} {}.\n\n{}",
+        kind.label(),
+        if lines == 1 { "line" } else { "lines" },
+        if chars == 1 {
+            "character"
+        } else {
+            "characters"
+        },
+        if choices.is_empty() {
+            "No transformation would change it."
+        } else {
+            "Paste it transformed, or as it is."
+        }
+    );
+    choices.push(("Paste Unchanged", text.to_owned()));
+    PasteSpecial { body, choices }
+}
+
+/// Decode a `CLIP_TRANSFORM_BASE`-range id to the snapshot slot of the
+/// entry it belongs to and which of that entry's transforms it is, or
+/// `None` for an id outside the range.
 ///
-/// `None` covers a stale id the same way as an unknown one: the range is
-/// wrong, the entry is no longer there (the history moved between the menu
-/// being built and the click landing), or the slot is past however many
-/// transforms that entry's kind actually offers. All three are "do nothing"
-/// as far as the caller is concerned.
-pub(crate) fn decode_transform(
-    id: i32,
-    clips: &[bp_clipboard::Entry],
-) -> Option<(usize, bp_clipboard::Transform)> {
+/// Whether the entry is still there, and whether its kind offers that many
+/// transforms, is for whoever resolves the slot: both are "do nothing".
+pub(crate) fn decode_transform(id: i32) -> Option<(usize, usize)> {
     if !(action::CLIP_TRANSFORM_BASE..clip_transform_end()).contains(&id) {
         return None;
     }
     let offset = id - action::CLIP_TRANSFORM_BASE;
-    let entry_index = usize::try_from(offset / action::CLIP_TRANSFORM_SLOTS).ok()?;
-    let slot = usize::try_from(offset % action::CLIP_TRANSFORM_SLOTS).ok()?;
-    let entry = clips.get(entry_index)?;
-    let transform = *bp_clipboard::transforms_for(entry.kind).get(slot)?;
-    Some((entry_index, transform))
+    let slot = usize::try_from(offset / action::CLIP_TRANSFORM_SLOTS).ok()?;
+    let transform = usize::try_from(offset % action::CLIP_TRANSFORM_SLOTS).ok()?;
+    Some((slot, transform))
 }
 
 pub fn file(
@@ -629,13 +702,17 @@ fn shorten(text: &str, max: usize) -> String {
 /// The Edit menu. Every row is live in both editor views: the caret rows
 /// read `TextInput`'s caret since release plan M1-04, and were greyed
 /// without `--editor-view` before that.
-pub fn edit(clips: &[bp_clipboard::Entry]) -> Vec<MenuItem> {
+///
+/// `clips` is the history as it was when the menu opened, not as it is now
+/// (U5): see `action::CLIP_BASE`.
+pub fn edit(clips: &Shown<'_>) -> Vec<MenuItem> {
     let mut items = vec![
         row("Undo", "Ctrl+Z", action::UNDO),
         row_end("Redo", "Ctrl+Y", action::REDO),
         row("Cut", "Ctrl+X", action::CUT),
         row("Copy", "Ctrl+C", action::COPY),
-        row_end("Paste", "Ctrl+V", action::PASTE),
+        row("Paste", "Ctrl+V", action::PASTE),
+        row_end("Paste Special...", "", action::PASTE_SPECIAL),
         row_end("Select All", "Ctrl+A", action::SELECT_ALL),
     ];
 
@@ -644,31 +721,8 @@ pub fn edit(clips: &[bp_clipboard::Entry]) -> Vec<MenuItem> {
     if clips.is_empty() {
         items.push(readout("Clipboard History — nothing copied yet"));
     } else {
-        for (index, entry) in clips.iter().take(bp_clipboard::MAX_ENTRIES).enumerate() {
-            let pin = if entry.pinned { "📌 " } else { "" };
-            items.push(row(
-                &format!("{pin}{}", entry.preview(44)),
-                entry.kind.label(),
-                action::CLIP_BASE + i32::try_from(index).unwrap_or(0),
-            ));
-
-            // Format-aware paste transformations (specs.md section 14) --
-            // only the ones that would actually change this entry's text.
-            // A row that does nothing when clicked is worse than no row.
-            for (slot, &transform) in bp_clipboard::transforms_for(entry.kind).iter().enumerate() {
-                if apply_transform(transform, &entry.text).is_none() {
-                    continue;
-                }
-                let id = action::CLIP_TRANSFORM_BASE
-                    + i32::try_from(index).unwrap_or(0) * action::CLIP_TRANSFORM_SLOTS
-                    + i32::try_from(slot).unwrap_or(0);
-                items.push(row(
-                    &format!("    ↳ {}", transform_label(transform)),
-                    "",
-                    id,
-                ));
-            }
-        }
+        items.extend(clip_rows(clips, false));
+        items.push(clear_row("Clear Clipboard History", clips));
     }
     if let Some(last) = items.last_mut() {
         last.separator_after = true;
@@ -688,6 +742,86 @@ pub fn edit(clips: &[bp_clipboard::Entry]) -> Vec<MenuItem> {
         row("Go to Line...", "Ctrl+G", action::GO_TO_LINE),
     ]);
     items
+}
+
+/// One row per entry, pasting it, each followed by its transformations.
+///
+/// Shared by the Edit menu and the editor context menu's Clipboard History
+/// submenu, so the two cannot offer different rows for the same entry.
+/// `kind_in_label` because a context menu has no hint column: Slint shows a
+/// `MenuItem`'s shortcut only in a menu bar.
+fn clip_rows(clips: &Shown<'_>, kind_in_label: bool) -> Vec<MenuItem> {
+    let mut items = Vec::new();
+    for &(slot, entry) in clips.iter().take(bp_clipboard::MAX_ENTRIES) {
+        let pin = if entry.pinned { "📌 " } else { "" };
+        let preview = entry.preview(44);
+        let id = slot_id(action::CLIP_BASE, slot);
+        items.push(if kind_in_label {
+            row(&format!("{pin}{preview}  ({})", entry.kind.label()), "", id)
+        } else {
+            row(&format!("{pin}{preview}"), entry.kind.label(), id)
+        });
+
+        // Format-aware paste transformations (specs.md section 14) --
+        // only the ones that would actually change this entry's text.
+        // A row that does nothing when clicked is worse than no row.
+        for (index, &transform) in bp_clipboard::transforms_for(entry.kind).iter().enumerate() {
+            if apply_transform(transform, &entry.text).is_none() {
+                continue;
+            }
+            let id = action::CLIP_TRANSFORM_BASE
+                + i32::try_from(slot).unwrap_or(0) * action::CLIP_TRANSFORM_SLOTS
+                + i32::try_from(index).unwrap_or(0);
+            items.push(row(
+                &format!("    ↳ {}", transform_label(transform)),
+                "",
+                id,
+            ));
+        }
+    }
+    items
+}
+
+/// Clear, live only when there is something unpinned to clear.
+fn clear_row(label: &str, clips: &Shown<'_>) -> MenuItem {
+    let unpinned = clips.iter().any(|(_, entry)| !entry.pinned);
+    row_enabled(label, "keeps pinned", action::CLIP_CLEAR, unpinned)
+}
+
+/// The editor context menu's Clipboard History submenu (release plan
+/// M1-18): the Edit menu's clipboard rows, or a readout saying why there
+/// are none.
+pub(crate) fn context_history(clips: &Shown<'_>) -> Vec<MenuItem> {
+    if clips.is_empty() {
+        return vec![readout("Nothing copied yet")];
+    }
+    clip_rows(clips, true)
+}
+
+/// The editor context menu's Pin submenu: every entry the menu shows,
+/// ticked when pinned. Choosing one pins or unpins that entry -- the one
+/// the row names, wherever the history has moved it since (U5).
+pub(crate) fn context_pins(clips: &Shown<'_>) -> Vec<MenuItem> {
+    if clips.is_empty() {
+        return vec![readout("Nothing copied yet")];
+    }
+    clips
+        .iter()
+        .take(bp_clipboard::MAX_ENTRIES)
+        .map(|&(slot, entry)| {
+            toggle(
+                &entry.preview(44),
+                entry.pinned,
+                slot_id(action::CLIP_PIN_BASE, slot),
+            )
+        })
+        .collect()
+}
+
+/// Whether the context menu's Clear row is live: the same test as the Edit
+/// menu's.
+pub(crate) fn context_can_clear(clips: &Shown<'_>) -> bool {
+    clear_row("", clips).enabled
 }
 
 pub fn view(
@@ -1256,6 +1390,11 @@ mod tests {
     /// every timezone. `bp-naming` never reads a clock, which is what makes
     /// pinning one here enough.
     const STAMP_CLOCK: time::OffsetDateTime = time::macros::datetime!(2026-08-19 14:05:09 UTC);
+
+    /// `entries` as a menu opened now would show them: each at its own slot.
+    fn shown(entries: &[bp_clipboard::Entry]) -> Vec<(usize, &bp_clipboard::Entry)> {
+        entries.iter().enumerate().collect()
+    }
 
     #[test]
     fn every_stamp_row_is_inside_the_range_dispatch_matches() {
@@ -2597,7 +2736,7 @@ mod tests {
         // `true` so Duplicate Line and Move Line Up/Down are enabled here
         // too -- they are outside the editor window either way, but a
         // disabled row would skip the check below and prove nothing.
-        for item in edit(&clips).iter().filter(|i| i.enabled) {
+        for item in edit(&shown(&clips)).iter().filter(|i| i.enabled) {
             if widget_rows.contains(&item.action) {
                 continue;
             }
@@ -2616,7 +2755,7 @@ mod tests {
             bp_clipboard::Entry::new("first"),
             bp_clipboard::Entry::new("second"),
         ];
-        let items = edit(&clips);
+        let items = edit(&shown(&clips));
         // Bounded above by `clip_end()`: both entries are plain text and
         // single words, so each also offers transform rows (As Bullet
         // List, As Code Block) whose ids live past `clip_end()` -- an
@@ -2647,7 +2786,7 @@ mod tests {
         let clips: Vec<bp_clipboard::Entry> = (0..bp_clipboard::MAX_ENTRIES)
             .map(|i| bp_clipboard::Entry::new(&format!("first line {i}\nsecond line {i}")))
             .collect();
-        let items = edit(&clips);
+        let items = edit(&shown(&clips));
 
         // A row is 28px. Against the 680px client area the window starts with,
         // and menus opening 28px down, about 23 rows is all that fits.
@@ -2680,7 +2819,7 @@ mod tests {
         // change. The plain-paste row must still be there; nothing beyond
         // it should be.
         let clips = [bp_clipboard::Entry::new("/usr/local/bin")];
-        let items = edit(&clips);
+        let items = edit(&shown(&clips));
 
         assert!(
             items.iter().any(|i| i.action == action::CLIP_BASE),
@@ -2703,7 +2842,7 @@ mod tests {
         // that `bp-data` keeps the author's order, compact JSON is already
         // minified and rightly gets no row (the test below).
         let clips = [bp_clipboard::Entry::new(r#"{"b": 1, "a": 2}"#)];
-        let items = edit(&clips);
+        let items = edit(&shown(&clips));
 
         assert!(
             items.iter().any(|i| i.label.contains("Pretty-Print JSON")),
@@ -2720,7 +2859,7 @@ mod tests {
         // A row that would change nothing is not offered -- and with key
         // order kept, compact JSON in any order is already minified.
         let clips = [bp_clipboard::Entry::new(r#"{"b":1,"a":2}"#)];
-        let items = edit(&clips);
+        let items = edit(&shown(&clips));
         assert!(items.iter().all(|i| !i.label.contains("Minify JSON")));
     }
 
@@ -2816,5 +2955,150 @@ mod tests {
             items.iter().any(|i| i.label.contains("nothing copied yet")),
             "an empty section with no explanation reads as broken"
         );
+    }
+
+    // --- the editor context menu and U5 (release plan M1-18) ---------------
+
+    #[test]
+    fn a_clipboard_row_keeps_the_slot_it_was_shown_at_when_an_earlier_entry_goes() {
+        // The id is the slot, not the row's position in the menu: with the
+        // entry at slot 1 gone, the one at slot 2 must still say 2, or a
+        // click on it would resolve to whatever the snapshot has at 1.
+        let a = bp_clipboard::Entry::new("alpha");
+        let c = bp_clipboard::Entry::new("gamma");
+        let items = edit(&[(0, &a), (2, &c)]);
+        let ids: Vec<i32> = items
+            .iter()
+            .filter(|i| (action::CLIP_BASE..clip_end()).contains(&i.action))
+            .map(|i| i.action)
+            .collect();
+        assert_eq!(ids, [action::CLIP_BASE, action::CLIP_BASE + 2]);
+
+        let pins: Vec<i32> = context_pins(&[(0, &a), (2, &c)])
+            .iter()
+            .map(|i| i.action)
+            .collect();
+        assert_eq!(pins, [action::CLIP_PIN_BASE, action::CLIP_PIN_BASE + 2]);
+    }
+
+    #[test]
+    fn the_context_menus_clipboard_history_offers_the_edit_menus_rows() {
+        let clips = [
+            bp_clipboard::Entry::new("one line\nand another"),
+            bp_clipboard::Entry::new(r#"{"b": 1, "a": 2}"#),
+        ];
+        let ids = |items: Vec<MenuItem>| -> Vec<i32> {
+            items
+                .into_iter()
+                .map(|i| i.action)
+                .filter(|&id| id >= action::CLIP_BASE && id < clip_transform_end())
+                .collect()
+        };
+        let from_edit = ids(edit(&shown(&clips)));
+        assert!(
+            from_edit.len() > 2,
+            "the fixture should offer transforms too"
+        );
+        assert_eq!(ids(context_history(&shown(&clips))), from_edit);
+    }
+
+    #[test]
+    fn a_context_menu_row_names_its_entry_in_the_label_for_want_of_a_hint_column() {
+        let clips = [bp_clipboard::Entry::new("https://example.com")];
+        let items = context_history(&shown(&clips));
+        assert!(items[0].label.contains("example.com"));
+        assert!(items[0].label.contains("(URL)"), "{}", items[0].label);
+    }
+
+    #[test]
+    fn the_pin_submenu_ticks_exactly_the_pinned_entries() {
+        let mut pinned = bp_clipboard::Entry::new("kept");
+        pinned.pinned = true;
+        let loose = bp_clipboard::Entry::new("loose");
+        let items = context_pins(&[(0, &pinned), (1, &loose)]);
+        assert!(items[0].label.starts_with('✓'), "{}", items[0].label);
+        assert!(!items[1].label.starts_with('✓'), "{}", items[1].label);
+    }
+
+    #[test]
+    fn clear_is_live_only_while_something_shown_is_unpinned() {
+        let mut pinned = bp_clipboard::Entry::new("kept");
+        pinned.pinned = true;
+        let loose = bp_clipboard::Entry::new("loose");
+        assert!(!context_can_clear(&[]));
+        assert!(!context_can_clear(&[(0, &pinned)]));
+        assert!(context_can_clear(&[(0, &pinned), (1, &loose)]));
+    }
+
+    #[test]
+    fn an_empty_history_gives_both_submenus_a_readout_rather_than_nothing() {
+        // A submenu with no rows opens as an empty box, which reads as broken.
+        for items in [context_history(&[]), context_pins(&[])] {
+            assert_eq!(items.len(), 1);
+            assert!(!items[0].enabled);
+            assert!(items[0].label.contains("Nothing copied yet"));
+        }
+    }
+
+    #[test]
+    fn pin_ids_start_after_the_last_transform_id() {
+        // Paste Special and Clear are checked against Slint's window with
+        // the rest of the Edit menu, above; the pin rows are only in the
+        // context menu, so their range is checked here.
+        assert!(
+            clip_transform_end() <= action::CLIP_PIN_BASE,
+            "a full history's transform rows would run into the pin rows"
+        );
+    }
+
+    #[test]
+    fn a_transform_id_decodes_to_the_slot_and_transform_it_was_built_from() {
+        let id = action::CLIP_TRANSFORM_BASE + 3 * action::CLIP_TRANSFORM_SLOTS + 2;
+        assert_eq!(decode_transform(id), Some((3, 2)));
+        assert_eq!(decode_transform(action::CLIP_BASE), None);
+        assert_eq!(decode_transform(clip_transform_end()), None);
+    }
+
+    #[test]
+    fn over_the_viewer_pin_and_clear_stay_live_and_every_paste_is_refused() {
+        // The history is not the document, so the viewer has no reason to
+        // refuse a pin or a clear. Every paste would change the document.
+        assert_eq!(viewer_refusal(action::CLIP_PIN_BASE), None);
+        assert_eq!(viewer_refusal(action::CLIP_CLEAR), None);
+        for id in [
+            action::PASTE_SPECIAL,
+            action::CLIP_BASE,
+            action::CLIP_TRANSFORM_BASE,
+        ] {
+            assert_eq!(viewer_refusal(id), Some("read-only"), "{id}");
+        }
+    }
+
+    #[test]
+    fn paste_special_offers_only_changes_and_always_the_text_unchanged() {
+        let offer = paste_special("first line\nsecond line");
+        let labels: Vec<&str> = offer.choices.iter().map(|(label, _)| *label).collect();
+        assert_eq!(
+            labels,
+            [
+                "Join Lines",
+                "As Bullet List",
+                "As Code Block",
+                "Paste Unchanged"
+            ]
+        );
+        assert_eq!(offer.choices[0].1, "first line second line");
+        assert_eq!(offer.choices[3].1, "first line\nsecond line");
+        assert!(
+            offer.body.contains("text: 2 lines, 22 characters"),
+            "{}",
+            offer.body
+        );
+        assert!(!offer.body.contains("first line"), "no preview of the text");
+
+        // A URL has no transformations, so the one choice is the text.
+        let offer = paste_special("https://example.com");
+        assert_eq!(offer.choices.len(), 1);
+        assert!(offer.body.contains("No transformation"), "{}", offer.body);
     }
 }

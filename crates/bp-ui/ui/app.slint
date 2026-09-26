@@ -122,6 +122,17 @@ export component AppWindow inherits Window {
     /// The tab strip's context menu. Not a menu-bar menu, but built the same
     /// way and dispatched through the same ids.
     in property <[MenuItem]> tab-items;
+    /// The editor context menu's clipboard rows (release plan M1-18): its
+    /// Clipboard History and Pin submenus, and whether Clear has anything
+    /// to clear. Its other rows never change, so they are written below.
+    in property <[MenuItem]> context-history-items;
+    in property <[MenuItem]> context-pin-items;
+    in property <bool> context-can-clear;
+    /// Edit or the editor context menu is about to open. Rust freezes which
+    /// entry each clipboard row names and rebuilds those rows before they
+    /// are shown, so a copy the 1.2 s poll records under an open menu
+    /// cannot move a row onto another entry (U5).
+    callback clip-menu-opening();
 
     callback new-document();
     callback open-document();
@@ -168,6 +179,11 @@ export component AppWindow inherits Window {
     /// follows the caret -- the failure they pin looked like dead keys.
     out property <length> editor-scroll-x: flick.viewport-x;
     out property <length> editor-scroll-y: flick.viewport-y;
+    /// Just below the `TextInput` view's caret, in the flickable's content,
+    /// kept for the Menu key: the widget will not say where its caret is
+    /// except as it moves.
+    property <length> text-caret-x;
+    property <length> text-caret-y;
 
     /// What the status bar's path and notice segments show. For the window
     /// tests: the path must survive every notice.
@@ -418,6 +434,7 @@ export component AppWindow inherits Window {
         if (index == 0) {
             file-menu.show();
         } else if (index == 1) {
+            root.clip-menu-opening();
             edit-menu.show();
         } else if (index == 2) {
             view-menu.show();
@@ -472,6 +489,23 @@ export component AppWindow inherits Window {
         if (text == "t" || text == "T") { return 12; }
         if (text == "h" || text == "H") { return 13; }
         return -1;
+    }
+
+    /// Open the editor context menu at (`x`, `y`) in the editor pane.
+    ///
+    /// Every way of opening it comes through here -- a right-click in
+    /// either view, the Menu key, Shift+F10 -- because the snapshot has to
+    /// be taken first, and `ContextMenuArea` opening itself would skip it:
+    /// Slint says nothing to anyone when it does.
+    function open-editor-menu(x: length, y: length) {
+        root.clip-menu-opening();
+        editor-menu.show({ x: x, y: y });
+    }
+
+    /// Whether `text` with `shift` asks for the context menu: the Menu key,
+    /// or Shift+F10, which Slint honours only on Windows.
+    function is-menu-key(text: string, shift: bool) -> bool {
+        return text == Key.Menu || (shift && text == Key.F10);
     }
 
     function dispatch(action: int) {
@@ -877,195 +911,291 @@ export component AppWindow inherits Window {
                 // in an `if` is out of scope for `dispatch` and
                 // `forward-focus`, which is the same constraint the find bar
                 // is collapsed rather than conditional for.
-                surface := EditorSurface {
-                    accessible-role: text-input;
-                    accessible-label: "Document";
-                    visible: root.use-editor-view && !root.viewer-active;
-                    rows: root.editor-rows;
-                    selection: root.editor-selection;
-                    caret-row: root.caret-row;
-                    caret-column: root.caret-column;
-                    show-gutter: root.show-gutter;
-                    font-size: root.font-size;
-
-                    key(text, control, shift, alt) => {
-                        if (alt && !control && root.mnemonic(text) >= 0) {
-                            root.open-menu(root.mnemonic(text));
-                            return true;
+                //
+                // The editor context menu (release plan M1-18) covers both
+                // editor views and not the viewer, which has no selection
+                // to cut or copy and nowhere to paste. It never opens by
+                // itself: neither view lets a right-click through to it
+                // (the surface's `TouchArea` and the `Flickable` both take
+                // every button), and each opens it through
+                // `open-editor-menu` instead, which takes the clipboard
+                // snapshot first.
+                editor-menu := ContextMenuArea {
+                    Menu {
+                        MenuItem {
+                            title: "Cut";
+                            activated => {
+                                root.dispatch(102);
+                            }
                         }
-                        return root.editor-key(text, control, shift, alt);
+                        MenuItem {
+                            title: "Copy";
+                            activated => {
+                                root.dispatch(103);
+                            }
+                        }
+                        MenuItem {
+                            title: "Paste";
+                            activated => {
+                                root.dispatch(104);
+                            }
+                        }
+                        MenuItem {
+                            title: "Select All";
+                            activated => {
+                                root.dispatch(105);
+                            }
+                        }
+                        MenuSeparator { }
+                        // `menus::action::PASTE_SPECIAL` and `CLIP_CLEAR`.
+                        MenuItem {
+                            title: "Paste Special...";
+                            activated => {
+                                root.dispatch(240);
+                            }
+                        }
+                        Menu {
+                            title: "Clipboard History";
+                            for row in root.context-history-items: MenuItem {
+                                title: row.label;
+                                enabled: row.enabled;
+                                activated => {
+                                    root.dispatch(row.action);
+                                }
+                            }
+                        }
+                        Menu {
+                            title: "Pin";
+                            for row in root.context-pin-items: MenuItem {
+                                title: row.label;
+                                enabled: row.enabled;
+                                activated => {
+                                    root.dispatch(row.action);
+                                }
+                            }
+                        }
+                        MenuItem {
+                            title: "Clear Clipboard History";
+                            enabled: root.context-can-clear;
+                            activated => {
+                                root.dispatch(241);
+                            }
+                        }
                     }
-                    pressed(row, column, extend) => {
-                        root.editor-pressed(row, column, extend);
-                    }
-                    selected-word(row, column) => {
-                        root.editor-selected-word(row, column);
-                    }
-                    selected-line(row, column) => {
-                        root.editor-selected-line(row, column);
-                    }
-                    dragged(row, column) => {
-                        root.editor-dragged(row, column);
-                    }
-                    scrolled(lines) => {
-                        root.editor-scrolled(lines);
-                    }
-                    resized(rows, columns) => {
-                        root.editor-resized(rows, columns);
-                    }
-                }
 
-                flick := Flickable {
-                    visible: !root.use-editor-view && !root.viewer-active;
-                    viewport-height: max(self.height, editor-row.preferred-height);
-                    // Wide enough for the longest line when nothing wraps,
-                    // or a caret sent to the end of one has nowhere to be
-                    // shown. Not when wrapping: the preferred width of
-                    // wrapping text is its unwrapped width, and asking for it
-                    // would stop the text wrapping at all.
-                    viewport-width: root.wrap-text ? self.width : max(self.width, editor-row.preferred-width);
+                    surface := EditorSurface {
+                        accessible-role: text-input;
+                        accessible-label: "Document";
+                        visible: root.use-editor-view && !root.viewer-active;
+                        rows: root.editor-rows;
+                        selection: root.editor-selection;
+                        caret-row: root.caret-row;
+                        caret-column: root.caret-column;
+                        show-gutter: root.show-gutter;
+                        font-size: root.font-size;
 
-                    editor-row := HorizontalLayout {
-                        padding: 10px;
-                        spacing: 10px;
-                        alignment: start;
+                        key(text, control, shift, alt) => {
+                            if (alt && !control && root.mnemonic(text) >= 0) {
+                                root.open-menu(root.mnemonic(text));
+                                return true;
+                            }
+                            return root.editor-key(text, control, shift, alt);
+                        }
+                        pressed(row, column, extend) => {
+                            root.editor-pressed(row, column, extend);
+                        }
+                        selected-word(row, column) => {
+                            root.editor-selected-word(row, column);
+                        }
+                        selected-line(row, column) => {
+                            root.editor-selected-line(row, column);
+                        }
+                        dragged(row, column) => {
+                            root.editor-dragged(row, column);
+                        }
+                        scrolled(lines) => {
+                            root.editor-scrolled(lines);
+                        }
+                        resized(rows, columns) => {
+                            root.editor-resized(rows, columns);
+                        }
+                        context-menu(x, y) => {
+                            root.open-editor-menu(x, y);
+                        }
+                    }
 
-                        if root.show-gutter: Text {
-                            text: root.gutter;
-                            color: Palette.ink-dim;
-                            font-family: "DejaVu Sans Mono";
-                            font-size: root.font-size;
-                            horizontal-alignment: right;
-                            // Widened with the text, or the line numbers clip
-                            // at the sizes where there are most of them.
-                            width: max(40px, root.font-size * 3);
+                    flick := Flickable {
+                        visible: !root.use-editor-view && !root.viewer-active;
+                        viewport-height: max(self.height, editor-row.preferred-height);
+                        // Wide enough for the longest line when nothing wraps,
+                        // or a caret sent to the end of one has nowhere to be
+                        // shown. Not when wrapping: the preferred width of
+                        // wrapping text is its unwrapped width, and asking for it
+                        // would stop the text wrapping at all.
+                        viewport-width: root.wrap-text ? self.width : max(self.width, editor-row.preferred-width);
+
+                        // The right-click `TextInput` ignores, which would
+                        // otherwise reach the `Flickable` and stop there. Under
+                        // the text rather than over it, so every other press
+                        // still reaches the widget first.
+                        TouchArea {
+                            pointer-event(event) => {
+                                if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                                    root.open-editor-menu(self.mouse-x + flick.viewport-x, self.mouse-y + flick.viewport-y);
+                                }
+                            }
                         }
 
-                        editor := TextInput {
-                            accessible-label: "Document";
-                            text <=> root.doc-text;
-                            // How far Page Up and Page Down move. Unset, it is
-                            // zero, and `TextInput` refuses a page of zero --
-                            // which is why both keys used to do nothing.
-                            page-height: flick.height - 20px;
-                            color: Palette.ink;
-                            selection-background-color: Palette.accent;
-                            font-family: "DejaVu Sans Mono";
-                            font-size: root.font-size;
-                            single-line: false;
-                            wrap: root.wrap-text ? word-wrap : no-wrap;
-                            horizontal-stretch: 1;
-                            edited => {
-                                root.text-edited(self.text);
+                        editor-row := HorizontalLayout {
+                            padding: 10px;
+                            spacing: 10px;
+                            alignment: start;
+
+                            if root.show-gutter: Text {
+                                text: root.gutter;
+                                color: Palette.ink-dim;
+                                font-family: "DejaVu Sans Mono";
+                                font-size: root.font-size;
+                                horizontal-alignment: right;
+                                // Widened with the text, or the line numbers clip
+                                // at the sizes where there are most of them.
+                                width: max(40px, root.font-size * 3);
                             }
 
-                            // Keep the caret on screen. A bare `Flickable`
-                            // does not follow its content's caret, so arrows,
-                            // End and Page Down moved it out of view and
-                            // looked as if they had done nothing. Moves only
-                            // as far as needed, like the custom surface's
-                            // `reveal_caret`.
-                            cursor-position-changed(position) => {
-                                // The caret in viewport coordinates, and a
-                                // line's height with room below it. The
-                                // 10px is the row's padding, so a caret on
-                                // the first line or at a line's start shows
-                                // the margin and gutter it sits beside.
-                                let x = self.x + position.x;
-                                let y = self.y + position.y;
-                                let line = root.font-size * 1.6;
-                                if (y + flick.viewport-y < 0px) {
-                                    flick.viewport-y = min(0px, 10px - y);
-                                } else if (y + line + flick.viewport-y > flick.height) {
-                                    flick.viewport-y = min(0px, flick.height - y - line);
+                            editor := TextInput {
+                                accessible-label: "Document";
+                                text <=> root.doc-text;
+                                // How far Page Up and Page Down move. Unset, it is
+                                // zero, and `TextInput` refuses a page of zero --
+                                // which is why both keys used to do nothing.
+                                page-height: flick.height - 20px;
+                                color: Palette.ink;
+                                selection-background-color: Palette.accent;
+                                font-family: "DejaVu Sans Mono";
+                                font-size: root.font-size;
+                                single-line: false;
+                                wrap: root.wrap-text ? word-wrap : no-wrap;
+                                horizontal-stretch: 1;
+                                edited => {
+                                    root.text-edited(self.text);
                                 }
-                                // Horizontally, anything that fits in the
-                                // first screen width is shown from the left
-                                // edge, gutter included. Only a caret beyond
-                                // it scrolls the view, and then only far
-                                // enough.
-                                if (x + 10px <= flick.width) {
-                                    flick.viewport-x = 0px;
-                                } else if (x + flick.viewport-x < 0px) {
-                                    flick.viewport-x = min(0px, 10px - x);
-                                } else if (x + 10px + flick.viewport-x > flick.width) {
-                                    flick.viewport-x = min(0px, flick.width - x - 10px);
-                                }
-                                root.caret-moved();
-                            }
 
-                            // Insert and overwrite. `TextInput` has no such
-                            // mode, so it is built from what it does have: in
-                            // overwrite, a typed character first selects the
-                            // character it will replace, and the widget's own
-                            // "typing replaces the selection" does the rest --
-                            // undo, the edited callback and IME all intact.
-                            //
-                            // The caret is read through
-                            // `cursor-position_byte-offset`, which Slint marks
-                            // internal. It is the only way to read it; if an
-                            // upgrade removes it, this fails to compile rather
-                            // than misbehaving.
-                            key-pressed(event) => {
-                                // Move Line Up/Down. The window's Alt+Up and
-                                // Alt+Down bindings never see these: the
-                                // widget takes an arrow as caret movement
-                                // whatever the modifier, so it moved the caret
-                                // and left the line where it was. Caught here,
-                                // before the widget acts on the key.
-                                if (event.modifiers.alt && !event.modifiers.control && !event.modifiers.shift) {
-                                    if (root.mnemonic(event.text) >= 0) {
-                                        root.open-menu(root.mnemonic(event.text));
-                                        return accept;
+                                // Keep the caret on screen. A bare `Flickable`
+                                // does not follow its content's caret, so arrows,
+                                // End and Page Down moved it out of view and
+                                // looked as if they had done nothing. Moves only
+                                // as far as needed, like the custom surface's
+                                // `reveal_caret`.
+                                cursor-position-changed(position) => {
+                                    // The caret in viewport coordinates, and a
+                                    // line's height with room below it. The
+                                    // 10px is the row's padding, so a caret on
+                                    // the first line or at a line's start shows
+                                    // the margin and gutter it sits beside.
+                                    let x = self.x + position.x;
+                                    let y = self.y + position.y;
+                                    let line = root.font-size * 1.6;
+                                    root.text-caret-x = x;
+                                    root.text-caret-y = y + line;
+                                    if (y + flick.viewport-y < 0px) {
+                                        flick.viewport-y = min(0px, 10px - y);
+                                    } else if (y + line + flick.viewport-y > flick.height) {
+                                        flick.viewport-y = min(0px, flick.height - y - line);
                                     }
-                                    if (event.text == Key.UpArrow) {
-                                        root.dispatch(96);
-                                        return accept;
+                                    // Horizontally, anything that fits in the
+                                    // first screen width is shown from the left
+                                    // edge, gutter included. Only a caret beyond
+                                    // it scrolls the view, and then only far
+                                    // enough.
+                                    if (x + 10px <= flick.width) {
+                                        flick.viewport-x = 0px;
+                                    } else if (x + flick.viewport-x < 0px) {
+                                        flick.viewport-x = min(0px, 10px - x);
+                                    } else if (x + 10px + flick.viewport-x > flick.width) {
+                                        flick.viewport-x = min(0px, flick.width - x - 10px);
                                     }
-                                    if (event.text == Key.DownArrow) {
-                                        root.dispatch(97);
-                                        return accept;
-                                    }
+                                    root.caret-moved();
                                 }
-                                // Copy and cut, by every key that means them,
-                                // are reported to Rust first: see
-                                // `copied-from-editor`.
-                                let chord = event.modifiers.control && !event.modifiers.alt;
-                                if ((chord && (event.text == "c" || event.text == "C" || event.text == Key.Insert))) {
-                                    if (!root.copied-from-editor(self.text, self.anchor-position-byte-offset, self.cursor-position_byte-offset, false)) {
-                                        self.copy();
-                                    }
-                                    return accept;
-                                }
-                                if ((chord && (event.text == "x" || event.text == "X"))
-                                        || (event.text == Key.Delete && event.modifiers.shift && !event.modifiers.control)) {
-                                    root.copied-from-editor(self.text, self.anchor-position-byte-offset, self.cursor-position_byte-offset, true);
-                                    self.cut();
-                                    return accept;
-                                }
-                                if (event.text == Key.Insert) {
-                                    // The CUA paste key, as in
-                                    // `bp_editor::keys::command_for`.
-                                    if (event.modifiers.shift && !event.modifiers.control) {
-                                        self.paste();
+
+                                // Insert and overwrite. `TextInput` has no such
+                                // mode, so it is built from what it does have: in
+                                // overwrite, a typed character first selects the
+                                // character it will replace, and the widget's own
+                                // "typing replaces the selection" does the rest --
+                                // undo, the edited callback and IME all intact.
+                                //
+                                // The caret is read through
+                                // `cursor-position_byte-offset`, which Slint marks
+                                // internal. It is the only way to read it; if an
+                                // upgrade removes it, this fails to compile rather
+                                // than misbehaving.
+                                key-pressed(event) => {
+                                    // The context menu from the keyboard, at the
+                                    // caret rather than wherever the pointer is.
+                                    if (root.is-menu-key(event.text, event.modifiers.shift)) {
+                                        root.open-editor-menu(root.text-caret-x + flick.viewport-x, root.text-caret-y + flick.viewport-y);
                                         return accept;
                                     }
-                                    if (!event.modifiers.alt) {
-                                        root.toggle-overwrite();
+                                    // Move Line Up/Down. The window's Alt+Up and
+                                    // Alt+Down bindings never see these: the
+                                    // widget takes an arrow as caret movement
+                                    // whatever the modifier, so it moved the caret
+                                    // and left the line where it was. Caught here,
+                                    // before the widget acts on the key.
+                                    if (event.modifiers.alt && !event.modifiers.control && !event.modifiers.shift) {
+                                        if (root.mnemonic(event.text) >= 0) {
+                                            root.open-menu(root.mnemonic(event.text));
+                                            return accept;
+                                        }
+                                        if (event.text == Key.UpArrow) {
+                                            root.dispatch(96);
+                                            return accept;
+                                        }
+                                        if (event.text == Key.DownArrow) {
+                                            root.dispatch(97);
+                                            return accept;
+                                        }
+                                    }
+                                    // Copy and cut, by every key that means them,
+                                    // are reported to Rust first: see
+                                    // `copied-from-editor`.
+                                    let chord = event.modifiers.control && !event.modifiers.alt;
+                                    if ((chord && (event.text == "c" || event.text == "C" || event.text == Key.Insert))) {
+                                        if (!root.copied-from-editor(self.text, self.anchor-position-byte-offset, self.cursor-position_byte-offset, false)) {
+                                            self.copy();
+                                        }
                                         return accept;
+                                    }
+                                    if ((chord && (event.text == "x" || event.text == "X"))
+                                            || (event.text == Key.Delete && event.modifiers.shift && !event.modifiers.control)) {
+                                        root.copied-from-editor(self.text, self.anchor-position-byte-offset, self.cursor-position_byte-offset, true);
+                                        self.cut();
+                                        return accept;
+                                    }
+                                    if (event.text == Key.Insert) {
+                                        // The CUA paste key, as in
+                                        // `bp_editor::keys::command_for`.
+                                        if (event.modifiers.shift && !event.modifiers.control) {
+                                            self.paste();
+                                            return accept;
+                                        }
+                                        if (!event.modifiers.alt) {
+                                            root.toggle-overwrite();
+                                            return accept;
+                                        }
+                                        return reject;
+                                    }
+                                    // Typing, or AltGr typing -- never a chord.
+                                    if (root.overwrite
+                                            && (!event.modifiers.control || event.modifiers.alt)
+                                            && self.cursor-position_byte-offset == self.anchor-position-byte-offset) {
+                                        let end = root.overwrite-end(self.text, self.cursor-position_byte-offset, event.text);
+                                        if (end > self.cursor-position_byte-offset) {
+                                            self.set-selection-offsets(self.cursor-position_byte-offset, end);
+                                        }
                                     }
                                     return reject;
                                 }
-                                // Typing, or AltGr typing -- never a chord.
-                                if (root.overwrite
-                                        && (!event.modifiers.control || event.modifiers.alt)
-                                        && self.cursor-position_byte-offset == self.anchor-position-byte-offset) {
-                                    let end = root.overwrite-end(self.text, self.cursor-position_byte-offset, event.text);
-                                    if (end > self.cursor-position_byte-offset) {
-                                        self.set-selection-offsets(self.cursor-position_byte-offset, end);
-                                    }
-                                }
-                                return reject;
                             }
                         }
                     }

@@ -1505,3 +1505,224 @@ fn switching_tabs_swaps_the_viewer_and_the_editor_and_the_keyboard_follows() {
         "nothing typed at the viewer reached it"
     );
 }
+
+// --- clipboard rows and the editor context menu (release plan M1-18) -----
+
+type Shared = Rc<std::cell::RefCell<crate::state::AppState>>;
+
+/// The wired window with `copied` in the clipboard history, newest last,
+/// over the custom editor view when `editor_view` and `TextInput` if not.
+fn wired_with_clips(copied: &[&str], editor_view: bool) -> (AppWindow, Shared) {
+    let mut state = crate::state::AppState::new();
+    state.editor_view = editor_view;
+    for text in copied {
+        state.clips.push(text, bp_security::Clipboard::InMemory);
+    }
+    let (ui, cell) = wired(state);
+    ui.set_use_editor_view(editor_view);
+    crate::set_static_menus(&ui);
+    crate::refresh(&ui, &mut cell.borrow_mut(), crate::state::PushText::Yes);
+    ui.invoke_focus_editor();
+    (ui, cell)
+}
+
+/// What the clipboard poll does when it sees a new copy: record it and
+/// rebuild the menus.
+fn poll_sees(ui: &AppWindow, cell: &Shared, text: &str) {
+    cell.borrow_mut()
+        .clips
+        .push(text, bp_security::Clipboard::InMemory);
+    crate::refresh(ui, &mut cell.borrow_mut(), crate::state::PushText::No);
+}
+
+/// A right-click in the middle of the editor pane, well clear of the menu
+/// bar and the tab strip.
+fn right_click_in_the_editor(ui: &AppWindow) {
+    use slint::platform::PointerEventButton;
+    let position = slint::LogicalPosition::new(300.0, 200.0);
+    ui.window()
+        .dispatch_event(WindowEvent::PointerMoved { position });
+    ui.window().dispatch_event(WindowEvent::PointerPressed {
+        position,
+        button: PointerEventButton::Right,
+    });
+    ui.window().dispatch_event(WindowEvent::PointerReleased {
+        position,
+        button: PointerEventButton::Right,
+    });
+}
+
+fn labels(items: &slint::ModelRc<crate::MenuItem>) -> Vec<String> {
+    use slint::Model as _;
+    items.iter().map(|item| item.label.to_string()).collect()
+}
+
+/// The rows that paste an entry as it is, leaving out its transformations.
+fn entry_rows(items: &slint::ModelRc<crate::MenuItem>) -> Vec<String> {
+    let mut rows = labels(items);
+    rows.retain(|label| !label.trim_start().starts_with('↳'));
+    rows
+}
+
+fn is_pinned(cell: &Shared, text: &str) -> bool {
+    cell.borrow()
+        .clips
+        .entries()
+        .iter()
+        .find(|e| e.text == text)
+        .unwrap_or_else(|| panic!("{text:?} is not in the history"))
+        .pinned
+}
+
+/// Down from nothing to the context menu's Pin row, into its submenu, and
+/// Enter on the submenu's first row. Cut, Copy, Paste, Select All, then
+/// the separator the arrows step over, Paste Special, Clipboard History,
+/// Pin: seven presses.
+fn pin_the_first_row_from_the_keyboard(ui: &AppWindow) {
+    for _ in 0..7 {
+        press(ui, Key::DownArrow);
+    }
+    press(ui, Key::RightArrow);
+    press(ui, Key::DownArrow);
+    press(ui, Key::Return);
+}
+
+#[test]
+fn a_clipboard_row_pastes_the_entry_it_named_when_a_copy_lands_while_the_edit_menu_is_open() {
+    let (ui, cell) = wired_with_clips(&["older", "newest"], true);
+
+    // Edit opens on Undo. Found by label rather than counted, so a row
+    // added above the clipboard block does not quietly retarget the test.
+    chord(&ui, Key::Alt, "e");
+    let rows = labels(&ui.get_edit_items());
+    let newest = rows
+        .iter()
+        .position(|label| label == "newest")
+        .expect("Edit shows the newest entry");
+    for _ in 0..newest {
+        press(&ui, Key::DownArrow);
+    }
+
+    // The U5 race: the poll records a copy while the highlight is on the
+    // row. Rebuilt from the live history, that row became "arrived later".
+    poll_sees(&ui, &cell, "arrived later");
+    assert_eq!(labels(&ui.get_edit_items())[newest], "newest");
+    press(&ui, Key::Return);
+
+    let text = cell.borrow().active_text();
+    assert_eq!(text, "newest", "the row pasted something else: {text:?}");
+}
+
+#[test]
+fn a_right_click_opens_the_context_menu_over_the_custom_view_and_pin_pins_the_entry_it_names() {
+    let (ui, cell) = wired_with_clips(&["older", "newest"], true);
+    assert_eq!(
+        labels(&ui.get_context_history_items()),
+        ["Nothing copied yet"],
+        "nothing has been shown yet, so there is no snapshot"
+    );
+
+    right_click_in_the_editor(&ui);
+    assert_eq!(
+        entry_rows(&ui.get_context_history_items()),
+        ["newest  (text)", "older  (text)"],
+        "opening the menu takes the snapshot its rows are built from"
+    );
+    let pins = labels(&ui.get_context_pin_items());
+    assert!(pins[0].ends_with("newest"), "{pins:?}");
+    assert!(ui.get_context_can_clear());
+
+    pin_the_first_row_from_the_keyboard(&ui);
+    assert!(is_pinned(&cell, "newest"), "Pin did not reach the entry");
+    assert!(!is_pinned(&cell, "older"));
+    assert!(
+        labels(&ui.get_context_pin_items())[0].starts_with('✓'),
+        "the Pin row should tick once its entry is pinned"
+    );
+}
+
+#[test]
+fn a_right_click_opens_the_context_menu_over_the_default_view_too() {
+    let (ui, cell) = wired_with_clips(&["older", "newest"], false);
+    right_click_in_the_editor(&ui);
+    assert_eq!(
+        entry_rows(&ui.get_context_history_items()),
+        ["newest  (text)", "older  (text)"]
+    );
+    pin_the_first_row_from_the_keyboard(&ui);
+    assert!(is_pinned(&cell, "newest"));
+}
+
+#[test]
+fn pin_pins_the_entry_it_named_when_a_copy_lands_while_the_context_menu_is_open() {
+    let (ui, cell) = wired_with_clips(&["older", "newest"], true);
+    right_click_in_the_editor(&ui);
+    poll_sees(&ui, &cell, "arrived later");
+    pin_the_first_row_from_the_keyboard(&ui);
+
+    assert!(is_pinned(&cell, "newest"), "the row named newest");
+    assert!(
+        !is_pinned(&cell, "arrived later"),
+        "the copy the poll recorded was never on screen"
+    );
+}
+
+#[test]
+fn a_row_whose_entry_has_gone_says_so_and_pastes_nothing() {
+    let (ui, cell) = wired_with_clips(&["only"], true);
+    chord(&ui, Key::Alt, "e");
+    press(&ui, Key::Escape);
+    cell.borrow_mut().clips.clear_all();
+    crate::dispatch::handle_menu_action(&ui, &cell, crate::menus::action::CLIP_BASE);
+
+    assert_eq!(cell.borrow().active_text(), "");
+    let status = ui.get_error_message().to_string();
+    assert!(status.contains("no longer in the history"), "{status:?}");
+}
+
+#[test]
+fn the_menu_key_opens_the_context_menu_from_the_keyboard_in_both_views() {
+    for editor_view in [true, false] {
+        let (ui, cell) = wired_with_clips(&["older", "newest"], editor_view);
+        press(&ui, Key::Menu);
+        pin_the_first_row_from_the_keyboard(&ui);
+        assert!(is_pinned(&cell, "newest"), "editor view {editor_view}");
+    }
+}
+
+#[test]
+fn shift_f10_opens_the_context_menu_too() {
+    let (ui, cell) = wired_with_clips(&["newest"], true);
+    chord(&ui, Key::Shift, Key::F10);
+    pin_the_first_row_from_the_keyboard(&ui);
+    assert!(is_pinned(&cell, "newest"));
+}
+
+#[test]
+fn a_right_click_in_the_custom_view_leaves_the_caret_and_selection_for_cut_and_copy() {
+    use slint::platform::PointerEventButton;
+    let (ui, _) = wired_with_clips(&[], true);
+    let presses = Rc::new(std::cell::Cell::new(0));
+    let counted = Rc::clone(&presses);
+    ui.on_editor_pressed(move |_, _, _| counted.set(counted.get() + 1));
+
+    right_click_in_the_editor(&ui);
+    press(&ui, Key::Escape);
+    assert_eq!(presses.get(), 0, "a right-click placed the caret");
+
+    // The control: a left-click in the same place does.
+    let position = slint::LogicalPosition::new(300.0, 200.0);
+    for event in [
+        WindowEvent::PointerPressed {
+            position,
+            button: PointerEventButton::Left,
+        },
+        WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        },
+    ] {
+        ui.window().dispatch_event(event);
+    }
+    assert_eq!(presses.get(), 1);
+}

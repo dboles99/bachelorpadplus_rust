@@ -29,6 +29,11 @@ use crate::menus::action;
 /// exists to remove.
 pub(crate) const PREFIX_CHARS: usize = 4096;
 
+/// What a clipboard row says when the entry it names has gone -- cleared,
+/// trimmed or refused by a profile since its menu opened. It does nothing
+/// rather than act on whichever entry took its place (U5).
+const CLIP_GONE: &str = "that clipboard entry is no longer in the history, so nothing was done";
+
 /// How a save attempt ended.
 ///
 /// Three cases, not two: a close-on-quit flow must not treat "needs a path"
@@ -252,6 +257,16 @@ pub struct AppState {
     /// Cross-file search results, indexed by the row the user clicks.
     pub(crate) file_hits: Vec<bp_search::FileHit>,
     pub(crate) clips: bp_clipboard::History,
+    /// Which entry each clipboard row in the menus names, frozen when the
+    /// last menu showing them opened (U5, release plan M1-18). Every
+    /// clipboard row is built from this and every click resolves against it,
+    /// so the 1.2 s poll adding an entry under an open menu cannot make a
+    /// row act on anything but the entry it shows.
+    ///
+    /// Replaced on the next open rather than dropped on close: Slint tells
+    /// nobody when a context menu closes. Hashes only, so a stale one keeps
+    /// nothing the history has forgotten.
+    pub(crate) clip_menu: bp_clipboard::Snapshot,
     /// Documents open in the read-only viewer (release plan M1-06), by the
     /// same id as their tab. A document here has no entry in `editors`: it
     /// was never loaded, which is the point of it.
@@ -509,6 +524,7 @@ impl AppState {
             tab_context: None,
             file_hits: Vec::new(),
             clips: bp_clipboard::History::new(),
+            clip_menu: bp_clipboard::Snapshot::default(),
             viewers: HashMap::new(),
             // Replaced by the viewer surface's own measurement, as
             // `visible_rows` is by the editor's.
@@ -1965,6 +1981,54 @@ impl AppState {
         let policy = self.policy().clipboard;
         self.clips
             .observe(text, policy, bp_clipboard::Origin::OpenDocument, false)
+    }
+
+    /// A menu showing clipboard rows is opening: freeze which entry each of
+    /// its rows will name (U5).
+    pub(crate) fn open_clip_menu(&mut self) {
+        self.clip_menu = self.clips.snapshot();
+    }
+
+    /// The clipboard entries the menus show, each with its slot -- the
+    /// entries of the last snapshot that are still in the history.
+    pub(crate) fn shown_clips(&self) -> Vec<(usize, &bp_clipboard::Entry)> {
+        self.clip_menu.shown(&self.clips).collect()
+    }
+
+    /// The entry a clipboard row at `slot` names, or `None` -- saying so in
+    /// the status bar -- if it has left the history since the menu opened.
+    ///
+    /// A clone, so the caller can go on to borrow the state mutably to paste
+    /// it.
+    pub(crate) fn clip_named(&mut self, slot: usize) -> Option<bp_clipboard::Entry> {
+        let entry = self.clip_menu.resolve(&self.clips, slot).cloned();
+        if entry.is_none() {
+            self.error = Some(CLIP_GONE.to_owned());
+        }
+        entry
+    }
+
+    /// Pin or unpin the entry the Pin row at `slot` names.
+    pub(crate) fn toggle_clip_pin(&mut self, slot: usize) {
+        self.error = Some(
+            match self.clips.toggle_pin_shown(&self.clip_menu, slot) {
+                Some(true) => "clipboard entry pinned: Clear keeps it",
+                Some(false) => "clipboard entry unpinned",
+                None => CLIP_GONE,
+            }
+            .to_owned(),
+        );
+    }
+
+    /// Forget the unpinned entries the menu showed -- not ones copied since,
+    /// which nobody has seen.
+    pub(crate) fn clear_shown_clips(&mut self) {
+        let gone = self.clips.clear_shown(&self.clip_menu);
+        self.error = Some(match gone {
+            0 => "nothing to clear: every entry shown is pinned or already gone".to_owned(),
+            1 => "1 clipboard entry cleared; pinned ones kept".to_owned(),
+            n => format!("{n} clipboard entries cleared; pinned ones kept"),
+        });
     }
 
     /// Whether a copy out of the active document should be kept out of the
@@ -5350,6 +5414,132 @@ mod tests {
         assert!(
             state.error.is_some(),
             "and the user is told why it vanished"
+        );
+    }
+
+    // --- clipboard rows name an entry, not a position (U5, M1-18) ---------
+
+    /// A state whose history holds `texts`, newest last, with a menu just
+    /// opened over it.
+    fn menu_open_over(texts: &[&str]) -> AppState {
+        let mut state = AppState::new();
+        for text in texts {
+            state.clips.push(text, bp_security::Clipboard::InMemory);
+        }
+        state.open_clip_menu();
+        state
+    }
+
+    /// The id of the Edit menu row that pastes `text`, as the menu was built.
+    fn row_for(state: &AppState, text: &str) -> i32 {
+        crate::menus::edit(&state.shown_clips())
+            .into_iter()
+            .find(|row| row.label.as_str() == text)
+            .unwrap_or_else(|| panic!("no row for {text:?}"))
+            .action
+    }
+
+    #[test]
+    fn a_clipboard_row_resolves_to_the_entry_it_showed_after_the_poll_adds_one() {
+        // Build the rows, let the poll record a copy, then click. Decoded
+        // against the live history, as the row ids once were, the row that
+        // showed "newest" named position 0 -- which the copy now holds.
+        let mut state = menu_open_over(&["older", "newest"]);
+        let id = row_for(&state, "newest");
+        state
+            .clips
+            .push("arrived later", bp_security::Clipboard::InMemory);
+
+        let slot = usize::try_from(id - action::CLIP_BASE).unwrap();
+        assert_eq!(state.clips.entries()[slot].text, "arrived later");
+        let named = state.clip_named(slot).expect("the entry is still there");
+        assert_eq!(named.text, "newest");
+        assert!(state.error.is_none());
+    }
+
+    #[test]
+    fn the_rows_do_not_change_under_an_open_menu_until_it_opens_again() {
+        let mut state = menu_open_over(&["older", "newest"]);
+        let before = crate::menus::edit(&state.shown_clips());
+        state
+            .clips
+            .push("arrived later", bp_security::Clipboard::InMemory);
+        assert_eq!(crate::menus::edit(&state.shown_clips()), before);
+
+        state.open_clip_menu();
+        assert_eq!(state.shown_clips()[0].1.text, "arrived later");
+    }
+
+    #[test]
+    fn a_row_whose_entry_has_gone_names_nothing_and_says_so() {
+        let mut state = menu_open_over(&["gone", "other"]);
+        let id = row_for(&state, "gone");
+        state.clips.clear();
+        state.clips.push("other", bp_security::Clipboard::InMemory);
+
+        let slot = usize::try_from(id - action::CLIP_BASE).unwrap();
+        assert!(
+            state.clip_named(slot).is_none(),
+            "it acted on another entry"
+        );
+        let status = state.error.clone().unwrap_or_default();
+        assert!(status.contains("no longer in the history"), "{status:?}");
+    }
+
+    #[test]
+    fn pin_pins_the_entry_its_row_showed_and_says_which_way_it_went() {
+        let mut state = menu_open_over(&["older", "newest"]);
+        state
+            .clips
+            .push("arrived later", bp_security::Clipboard::InMemory);
+
+        state.toggle_clip_pin(0);
+        let pinned: Vec<&str> = state
+            .clips
+            .entries()
+            .iter()
+            .filter(|e| e.pinned)
+            .map(|e| e.text.as_str())
+            .collect();
+        assert_eq!(pinned, ["newest"]);
+        assert!(state.error.as_deref().unwrap_or("").contains("pinned"));
+
+        state.clips.clear_all();
+        state.toggle_clip_pin(0);
+        assert!(
+            state
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("no longer in the history")
+        );
+    }
+
+    #[test]
+    fn clear_forgets_what_the_menu_showed_and_keeps_pins_and_later_copies() {
+        let mut state = AppState::new();
+        state.clips.push("pinned", bp_security::Clipboard::InMemory);
+        state.clips.toggle_pin(0);
+        state.clips.push("shown", bp_security::Clipboard::InMemory);
+        state.open_clip_menu();
+        state
+            .clips
+            .push("arrived later", bp_security::Clipboard::InMemory);
+
+        state.clear_shown_clips();
+        let left: Vec<&str> = state
+            .clips
+            .entries()
+            .iter()
+            .map(|e| e.text.as_str())
+            .collect();
+        assert_eq!(left, ["arrived later", "pinned"]);
+        assert!(
+            state
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .starts_with("1 clipboard entry")
         );
     }
 
