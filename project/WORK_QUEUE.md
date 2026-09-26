@@ -243,6 +243,31 @@ All of it, in one pass. What is worth carrying forward:
   checks VERSIONINFO now. The things to watch are listed in the plan's M2
   progress note.
 
+## Follow-ups from M3
+
+- **Nothing packaged for Windows has run on Windows.** On the owner's
+  machine: `packaging/windows/Build-Installer.ps1`, then
+  `Test-Install.ps1` on the Windows 10 and 11 VMs. ISCC has never
+  compiled `bachelorpad.iss`, so its `[Code]` Pascal is unproven.
+- **The Debian 12 release image has not been built.** Every Debian, Fedora
+  and Arch mirror is unreachable from the build container used so far.
+  The Dockerfile was proven with `--base-image ubuntu:22.04` (glibc 2.35).
+  The first real `Invoke-Release.ps1 -Container` run is also the first
+  build of the pinned Debian image and of its cargo-auditable install.
+- **`test-packages.sh` has run on Ubuntu 22.04 and 24.04 only.** Fedora and
+  Arch need a host that can reach their mirrors.
+- **The installer's "Add bpad to PATH" task is the installer agent's
+  addition** (unchecked by default, removed on uninstall). Keep it or drop
+  it; the plan did not ask for it.
+- **M3-04, Windows signing**, waits on decision 3. The release script
+  records `windows_signed: false` in every manifest until then.
+- **`artifacts/test-evidence/*.json` is ignored** by `.gitignore`, which
+  clashes with committing RC evidence there. The RC checklist uses per-tag
+  subfolders to get around it; decide which is meant before M4.
+- **`SLINT_BACKEND=winit-x11`**, named in the plan's risk R8, is probably
+  wrong for Slint 1.17: its parser reads that as backend `winit` with a
+  renderer called `x11`. Check before documenting it anywhere.
+
 ## Not a queue item
 
 The first thing in `NEXT_SESSION.md` is a person typing into `--editor-view`
