@@ -108,7 +108,7 @@ dependencies = [
 
 [[package]]
 name = "bp-buffer"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "ropey",
  "thiserror",
@@ -116,7 +116,7 @@ dependencies = [
 
 [[package]]
 name = "bp-core"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "bp-security",
  "time",
@@ -124,7 +124,7 @@ dependencies = [
 
 [[package]]
 name = "bp-crypto"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -139,7 +139,7 @@ dependencies = [
 
 [[package]]
 name = "bp-data"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "csv",
  "saphyr",
@@ -152,7 +152,7 @@ dependencies = [
 
 [[package]]
 name = "bp-files"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "bp-buffer",
  "bp-core",
@@ -164,7 +164,7 @@ dependencies = [
 
 [[package]]
 name = "bp-formats"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 
 [[package]]
 name = "bp-fuzz"
@@ -183,14 +183,14 @@ dependencies = [
 
 [[package]]
 name = "bp-naming"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "time",
 ]
 
 [[package]]
 name = "bp-notebook"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -199,11 +199,11 @@ dependencies = [
 
 [[package]]
 name = "bp-platform"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 
 [[package]]
 name = "bp-security"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "serde",
 ]
