@@ -1369,15 +1369,30 @@ impl AppState {
         // The same policy as a real save, for the same reason the encoding is
         // shared: bytes written differently from the original would make the
         // copy a different file.
-        let bytes = match try_encode(
-            &self.text_of(id),
-            doc.encoding(),
-            LineEndingPolicy::Preserve,
-        ) {
-            Ok(bytes) => bytes,
+        let text = zeroize::Zeroizing::new(self.text_of(id));
+        let bytes = match try_encode(&text, doc.encoding(), LineEndingPolicy::Preserve) {
+            Ok(bytes) => zeroize::Zeroizing::new(bytes),
             Err(e) => {
                 self.error = Some(format!("copy not saved: {e}"));
                 return SaveResult::Failed;
+            }
+        };
+
+        // A copy of an encrypted document is encrypted too, with the same
+        // passphrase. It used to be written in clear, silently: the one
+        // route by which the text of a `.bpadx` reached the disk without the
+        // user choosing Decrypt. Refused rather than falling back, as Save
+        // is.
+        let bytes = match self.passphrases.get(&id) {
+            None => bytes,
+            Some(passphrase) => {
+                match bp_crypto::seal(&bytes, passphrase, bp_crypto::SealOptions::default()) {
+                    Ok(sealed) => zeroize::Zeroizing::new(sealed),
+                    Err(e) => {
+                        self.error = Some(format!("copy not saved -- {e}"));
+                        return SaveResult::Failed;
+                    }
+                }
             }
         };
 
@@ -6229,6 +6244,40 @@ mod tests {
             !notice.contains("  "),
             "a wrapped literal leaked its indentation into the status bar: {notice:?}"
         );
+    }
+
+    #[test]
+    fn a_copy_of_an_encrypted_document_is_encrypted_with_the_same_passphrase() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = AppState::new();
+        state.edit("the secret plan\n".to_owned());
+        let id = state.workspace.active_id().unwrap();
+        state
+            .passphrases
+            .insert(id, zeroize::Zeroizing::new("correct horse".to_owned()));
+
+        let copy = dir.path().join("copy.bpadx");
+        assert!(matches!(state.save_copy(id, &copy), SaveResult::Saved));
+
+        let on_disk = std::fs::read(&copy).unwrap();
+        assert!(bp_crypto::is_bpadx(&on_disk), "the copy is an envelope");
+        assert!(
+            !on_disk.windows(10).any(|w| w == b"the secret"),
+            "the text must not reach the disk in clear"
+        );
+        let opened = bp_crypto::open(&on_disk, "correct horse").expect("same passphrase");
+        assert_eq!(opened.as_slice(), b"the secret plan\n");
+    }
+
+    #[test]
+    fn a_copy_of_a_plain_document_stays_plain() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = AppState::new();
+        state.edit("nothing to hide\n".to_owned());
+        let id = state.workspace.active_id().unwrap();
+        let copy = dir.path().join("copy.txt");
+        assert!(matches!(state.save_copy(id, &copy), SaveResult::Saved));
+        assert_eq!(std::fs::read(&copy).unwrap(), b"nothing to hide\n");
     }
 
     // --- Sign Document (release plan M2-10) --------------------------------

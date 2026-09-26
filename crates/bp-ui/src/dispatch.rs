@@ -476,6 +476,14 @@ pub fn handle_menu_action(
             if let Some(id) = target {
                 let chosen = pick_save_path(&state.borrow(), id);
                 if let Some(path) = chosen {
+                    // The copy of an encrypted document is sealed, so it gets
+                    // the name that says so, as Encrypt's target does.
+                    let encrypted = state.borrow().passphrases.contains_key(&id);
+                    let path = if encrypted {
+                        with_bpadx_extension(path)
+                    } else {
+                        path
+                    };
                     state.borrow_mut().save_copy(id, &path);
                 }
             }
