@@ -25,9 +25,8 @@ is not how fast code gets written, it is how long a question sits.
 
 | # | Question | Blocks | Why it cannot be defaulted |
 | --- | --- | --- | --- |
-| D1 | **What may leave the machine?** Which providers, if any, are acceptable destinations for document content or embeddings. | Phases 8 and 10; `Network::Allowed` currently means only "this profile does not forbid it" | Baking in a provider list would be an answer nobody gave, about data leaving the user's computer |
 | D2 | **Is `--editor-view`'s two-view fork worth keeping indefinitely?** IME cannot work on Slint 1.17.1, so parity is unreachable until Slint changes. | Every future wiring item pays a small tax. Since M1-04 the caret features (Ln/Col, Go to Line, Insert Date/Time, the line moves) work in both views, so none is confined to the custom one | Answered once already (keep opt-in). Re-ask only if the tax becomes visible, or Slint ships composition support |
-| D4 | **Should `bp-crypto`'s envelope get an outside review before anything real is encrypted with it?** Every primitive is composed from RustCrypto and nothing is reimplemented, but the envelope design is mine, and envelope design is where composed-primitive formats usually fail. | Trusting `.bpadx` with real documents | Not something the author of the design can answer by looking harder at it |
+| D4 | **Should `bp-crypto`'s envelope get an outside review before anything real is encrypted with it?** Every primitive is composed from RustCrypto and nothing is reimplemented, but the envelope design is mine, and envelope design is where composed-primitive formats usually fail. | Trusting `.bpadx` with real documents | Not something the author of the design can answer by looking harder at it. **For RC1 answered (decision 20, 2026-09-26):** RC1 ships saying the envelope is unreviewed, in SECURITY.md and in the Encrypt prompt; whether and when to commission a review before 1.0 GA is still the owner's |
 | D3 | **May `bp-storage` be wired into the application?** ADR-0020 permits `Metadata::Summary` under Standard, so the security half is settled. What remains is a product decision plus a design pass. | Phase 9 (related notes, duplicates; the `bp-organize` crate that `ARCHITECTURE.md` plans and nobody has created) | ADR-0019 explicitly says not to "just wire it up". For RC1 it is settled: ADR-0030 keeps `bp-storage` unwired. The question stands for 1.2 |
 | D6 | **What is a line?** `bp-search` counts `\n`; `bp-buffer`'s rope also breaks on bare `\r`, `\x0B`, `\x0C`, U+0085, U+2028 and U+2029, because `ropey`'s `unicode_lines` is on by default. `bp-ui` now counts with the rope in both views, so what disagrees is Find in Files (from `bp-search`) and the editor. | Find-in-files scrolling to the right line; release-plan item M1-09 | Either answer is defensible and each changes observable behaviour in the other direction. Found by the cross-crate tests; pinned as an ignored test |
 | D7 | **Should `bp-crypto` expose a derive-once API?** Today `derive` and `Key` are private, so every `seal` call pays a full Argon2id derivation. `bp-audit` seals one `.bpadx` envelope per line, so *reading* a sealed audit history costs ~45 ms per line — a few hundred lines is several seconds, and it grows over a document's life. | The security inspector staying usable on a long-lived document | Splitting `derive` from `seal_with_key` changes ADR-0021's surface, and the alternative — a cheaper KDF in `bp-audit` — would weaken every line against an offline attacker, which ADR-0020 forbids. Not an implementation detail |
@@ -35,13 +34,14 @@ is not how fast code gets written, it is how long a question sits.
 | U3 | **What does "too large to edit" look like?** A file past the 32 MiB editable limit is refused today, with a notice. The plan recommends a read-only viewer tab with a banner, over `bp_buffer::LargeFile`. | Release-plan item M1-06 | A real UI decision: a viewer tab, a separate window and "refuse and point elsewhere" each change what a user sees |
 | U4 | **How is Markdown previewed?** Slint has no HTML view. | View ▸ Split / Preview, Markdown TOC | Drawing styled text in-app, handing off to a browser and deferring are all defensible; the plan recommends deferring past RC1 |
 | U5 | **Should clipboard menu rows be frozen while a menu is open?** A row's id is decoded against the history at click time, and the 1.2 s poll can add or clear an entry in between. | Release-plan item M1-18 (the editor context menu) | Snapshot on open, a row id carrying the entry's hash, and pausing the poll behave differently when the history changes under an open menu |
-| — | **Who is the copyright holder named in `LICENSE-*` and the About window?** "BachelorPad+ contributors" is not a legal entity. Left open by decision 2 of the release plan (ADR-0031). | Release-plan item M1-14, every package | A legal name only the owner can give |
 
 `project/RELEASE_PLAN.md` §4 orders these by the milestone each blocks, and
 also carries the release-only questions not repeated here: the signing
-identity (decision 3, being applied for by the owner), packaging formats,
-how release builds are made, and the Windows 10 support statement
-(decisions 18, 19 and 21).
+identity (decision 3, being applied for by the owner) and the Windows 10
+support statement (decision 21). Answered 2026-09-26 and removed from here:
+D1 (ADR-0034, nothing leaves the machine), the copyright holder (Daniel
+Boles), packaging formats (decision 18) and how release builds are made
+(decision 19, a local script).
 
 ## Answered, for context
 

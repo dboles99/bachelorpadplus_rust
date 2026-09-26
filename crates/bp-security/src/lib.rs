@@ -92,7 +92,9 @@ pub enum Embeddings {
 ///
 /// `Allowed` means *this profile does not forbid it*. It does not mean any
 /// particular destination is approved -- that is a separate decision and
-/// deliberately not encoded here (ADR-0020).
+/// deliberately not encoded here (ADR-0020). In version 1 it also means
+/// nothing at all is sent: there is no network code, so `Allowed` is "not
+/// forbidden, and no consumer exists" (ADR-0034).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Network {
     Allowed,

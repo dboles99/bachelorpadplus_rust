@@ -39,6 +39,7 @@ Adding a decision means adding both.
 | BP-ADR-0031 | 2026-09-25 | Slint is used under its Royalty-free Licence 2.0, with `AboutSlint` in the About window | Accepted | [ADR-0031](docs/decisions/ADR-0031.md) |
 | BP-ADR-0032 | 2026-09-25 | App id `io.github.dboles99.BachelorPad`; the installer owns Windows registration; DejaVu Sans Mono is bundled | Accepted | [ADR-0032](docs/decisions/ADR-0032.md) |
 | BP-ADR-0033 | 2026-09-25 | `bp-platform-windows` is the one crate allowed `windows-sys` and confined `unsafe` | Accepted | [ADR-0033](docs/decisions/ADR-0033.md) |
+| BP-ADR-0034 | 2026-09-26 | Nothing leaves the machine in v1; `Network::Allowed` means "not forbidden, and no consumer exists" | Accepted | [ADR-0034](docs/decisions/ADR-0034.md) |
 
 ## Decisions needed before the work they block
 
@@ -50,8 +51,12 @@ the moment the queue moved; it no longer duplicates it.
 [`project/RELEASE_PLAN.md`](project/RELEASE_PLAN.md) §4 orders the same
 questions by the milestone each one blocks. Of that list, decisions 1, 2, 4,
 5, 6, 7 and 16 were answered on 2026-09-25 (ADR-0030 to ADR-0033), which
-settles D5, D8, D9 and U2; decision 2's copyright holder is still open, and
-decision 3, the signing identity, is being applied for by the owner.
+settles D5, D8, D9 and U2. On 2026-09-26 the owner answered 17 (nothing
+leaves the machine, ADR-0034, settling D1), 18 (package formats), 19
+(releases built by a local script), 20 (RC1 ships saying the encryption
+envelope is unreviewed, settling D4 for RC1) and decision 2's copyright
+holder (Daniel Boles). Decision 3, the signing identity, is being applied
+for by the owner.
 
 specs.md section 22's warm-start target (75 ms) is a measurement still owed,
 not a decision; it is under *Open items* below with the rest of ADR-0017's

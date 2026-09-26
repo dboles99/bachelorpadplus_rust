@@ -125,6 +125,8 @@ Batch these: every one is a one-line answer. "Deadline" is the milestone that ca
 
 **Answered 2026-09-25:** 1 (scope, ADR-0030), 2 (Slint royalty-free, ADR-0031 -- the copyright holder is still open), 4 (`io.github.dboles99.BachelorPad`), 5 (DejaVu Sans Mono) and 6 (installer-owned registration), all ADR-0032; 7 (ADR-0033); 16 (D5 option c, via 1). Decision 3, the signing identity, is being applied for by the owner, who is also running the Windows gate (M0-12).
 
+**Answered 2026-09-26:** 2's copyright holder (**Daniel Boles**); 17 (a), nothing leaves the machine (ADR-0034); 18 as recommended (Inno Setup per-user + portable zip; deb + rpm + tar.gz + PKGBUILD); 19 as recommended (local script, Linux in a pinned Debian 12 container); 20 (b), RC1 ships saying the envelope is unreviewed.
+
 | # | Decision | Recommendation | Unblocks | Deadline |
 |---|---|---|---|---|
 | 1 | **Scope sign-off** (S1–S6 above) | Defer S1, S2, S5, S6; accept S3; take S4 = D5(c) | The whole plan | Before M0 ends |

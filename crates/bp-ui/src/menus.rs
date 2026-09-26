@@ -788,9 +788,11 @@ pub fn security(
             separator_after: true,
             ..readout(&format!(
                 "Leaves this machine: {}",
+                // ADR-0034: nothing in v1 sends anything anywhere, so a
+                // profile that would allow it has nothing to allow.
                 match policy.network {
-                    bp_security::Network::Allowed => "permitted",
-                    bp_security::Network::Denied => "never",
+                    bp_security::Network::Allowed => "nothing (no network code)",
+                    bp_security::Network::Denied => "never (forbidden by this profile)",
                 }
             ))
         },
@@ -1340,6 +1342,20 @@ mod tests {
                 .iter()
                 .map(|i| i.label.as_str())
                 .collect::<Vec<_>>()
+        );
+
+        let standard = security(
+            bp_security::Security::Named(bp_security::Profile::Standard),
+            false,
+            bp_security::Privacy::Off,
+            true,
+            true,
+        );
+        assert!(
+            standard
+                .iter()
+                .any(|i| i.label == "Leaves this machine: nothing (no network code)"),
+            "ADR-0034: a looser profile must not read as though something is sent"
         );
 
         let maximum = security(
