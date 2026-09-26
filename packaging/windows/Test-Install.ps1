@@ -256,7 +256,7 @@ try {
         Check ($null -ne $actual -and $actual -ceq $entry.Data) "HKCU\$($entry.Subkey) [$label] = $($entry.Data)"
     }
 
-    foreach ($file in 'bachelorpad.exe', 'bpad.cmd', 'LICENSE-MIT', 'LICENSE-APACHE') {
+    foreach ($file in 'bachelorpad.exe', 'bpad.cmd', 'LICENSE-MIT', 'LICENSE-APACHE', 'THIRD-PARTY-NOTICES.txt') {
         Check (Test-Path -LiteralPath (Join-Path $app $file) -PathType Leaf) "installed $file"
     }
     $shortcut = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\BachelorPad+.lnk'

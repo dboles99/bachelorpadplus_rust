@@ -87,6 +87,7 @@ Source: "{#SourceExe}"; DestDir: "{app}"; DestName: "bachelorpad.exe"; Flags: ig
 Source: "{#BpadCmd}"; DestDir: "{app}"; DestName: "bpad.cmd"; Flags: ignoreversion
 Source: "{#RepoRoot}\LICENSE-MIT"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepoRoot}\LICENSE-APACHE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#RepoRoot}\THIRD-PARTY-NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\BachelorPad+"; Filename: "{app}\bachelorpad.exe"
