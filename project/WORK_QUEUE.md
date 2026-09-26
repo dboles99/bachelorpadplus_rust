@@ -245,6 +245,12 @@ All of it, in one pass. What is worth carrying forward:
 
 ## Follow-ups from M3
 
+- **The editor context menu ignores the theme (M1-18).** It is Slint's
+  own fluent popup, light under Dark, Organic and Green, and near the
+  screen's right edge its submenus can be cut off (seen under Xvfb with no
+  window manager). Styling it means a custom popup or a Slint style
+  override; check the cut-off under a real window manager first.
+
 - **A `.bpadx` opened from Recent Files, the command line or a Find in
   Files hit never gets the passphrase flow.** Those paths call
   `AppState::open`, not `open_maybe_encrypted`. It derives nothing, so it
