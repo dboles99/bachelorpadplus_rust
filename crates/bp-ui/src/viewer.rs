@@ -941,7 +941,9 @@ impl<'a> Columns<'a> {
                 break;
             };
             self.at += 1;
-            if ch == '\n' {
+            // A line ends at LF, CRLF or a bare CR (D6). A CRLF moves the
+            // line start twice, landing after the LF, which is where it ends.
+            if ch == '\n' || ch == '\r' {
                 self.line_start = self.at;
                 self.on_first_line = false;
             }
@@ -971,7 +973,7 @@ fn column_where_next_starts(
     let total = before.text.chars().count();
     let at = total.saturating_sub(next.overlap_chars);
     let head: String = before.text.chars().take(at).collect();
-    match head.rfind('\n') {
+    match head.rfind(['\n', '\r']) {
         Some(newline) => head[newline + 1..].chars().count(),
         None => before_column + at,
     }
@@ -1757,6 +1759,21 @@ mod tests {
         let frame = viewer(&mut state).frame(10, 80, 4);
         assert_eq!(frame.rows[1].1, "bad \u{FFFD} byte");
         assert_eq!(find(&mut state, "target"), "line 3");
+    }
+
+    #[test]
+    fn a_bare_cr_ends_a_line_for_find_as_it_does_for_the_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(dir.path(), "old-mac.log", "one\rtwo\r\nthree\rxy target\r");
+        let mut state = limited(8);
+        state.open(path);
+
+        let frame = viewer(&mut state).frame(10, 80, 4);
+        assert_eq!(frame.rows[3].1, "xy target");
+        assert_eq!(find(&mut state, "target"), "line 4");
+        let frame = viewer(&mut state).frame(10, 80, 4);
+        let (_, start, _) = frame.highlight.expect("the match is on screen");
+        assert_eq!(start, 3, "the column counts from the bare CR, not the LF");
     }
 
     #[test]

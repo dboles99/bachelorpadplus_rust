@@ -2872,7 +2872,9 @@ const BPADX_HEADER_READ: u64 = 512;
 fn read_prefix(path: &Path, len: u64) -> std::io::Result<Vec<u8>> {
     use std::io::Read as _;
     let mut head = Vec::new();
-    std::fs::File::open(path)?.take(len).read_to_end(&mut head)?;
+    std::fs::File::open(path)?
+        .take(len)
+        .read_to_end(&mut head)?;
     Ok(head)
 }
 

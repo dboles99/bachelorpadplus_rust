@@ -245,6 +245,21 @@ All of it, in one pass. What is worth carrying forward:
 
 ## Follow-ups from M3
 
+- **A `.bpadx` opened from Recent Files, the command line or a Find in
+  Files hit never gets the passphrase flow.** Those paths call
+  `AppState::open`, not `open_maybe_encrypted`. It derives nothing, so it
+  is not a cost risk (M2-09), but the file cannot be unlocked that way.
+  Pre-existing; found during M2-09.
+- **Line-ending conversion and the bare CR (D6 follow-up).** "Convert to
+  LF" leaves a CR-only file's CRs in place, and `LineEnding` has no CR
+  variant, so a CR-only file is labelled as the platform default. Needs an
+  owner answer: should explicit conversion rewrite bare CRs, and should the
+  status bar say "CR"? Recommended: yes to both, since D6 already made a
+  bare CR a line break everywhere else.
+- **Slint's default TextInput view draws line breaks by its own rules**
+  (probably also U+2028/U+2029, maybe FF). The custom view draws exactly
+  the counted lines; check the default one in a render.
+
 - **Nothing packaged for Windows has run on Windows.** On the owner's
   machine: `packaging/windows/Build-Installer.ps1`, then
   `Test-Install.ps1` on the Windows 10 and 11 VMs. ISCC has never
