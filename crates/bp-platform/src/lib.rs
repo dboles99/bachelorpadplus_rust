@@ -33,7 +33,9 @@
 //!   types we would register for, what the current association actually is,
 //!   and the artefacts registration needs (a `.desktop` entry and a MIME
 //!   package on Linux, an `HKCU\Software\Classes` shape on Windows). It is
-//!   also the single source of the static files in `packaging/linux/`.
+//!   also the single source of the static files in `packaging/linux/` and
+//!   of the generated blocks of the Windows installer
+//!   ([`editor::inno`]).
 //!
 //! ## The line this crate draws
 //!

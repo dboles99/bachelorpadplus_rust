@@ -11,6 +11,12 @@
 # LF sources without complaint.
 * text=auto eol=lf
 
+# Batch files are the exception: with LF endings cmd.exe can fail to find a
+# label a `goto` or `call` names. The `bpad.cmd` shim (packaging/windows) is
+# installed and zipped exactly as checked out, so it must be CRLF there.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
 # Never touched.
 *.png binary
 *.jpg binary

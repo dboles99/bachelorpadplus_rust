@@ -45,7 +45,9 @@
 //! portable build offers the pair through a Save dialog. A file the user
 //! chose where to put and can read before running is a defensible answer,
 //! and arguably a better one than an installer that writes the same keys
-//! invisibly. [`windows::registration_route`] tells the shell which of
+//! invisibly. The installer's `[Registry]` section is rendered from the same
+//! values by [`inno`], so the two cannot disagree.
+//! [`windows::registration_route`] tells the shell which of
 //! "Open Windows Settings" and "Save registration file…" to lead with.
 //!
 //! Every generated key is checked against [`windows::key_objection`], which is
@@ -53,6 +55,7 @@
 
 pub mod desktop;
 pub mod file_type;
+pub mod inno;
 pub mod linux;
 pub mod state;
 pub mod windows;
