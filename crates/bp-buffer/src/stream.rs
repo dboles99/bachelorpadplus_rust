@@ -357,13 +357,17 @@ impl WindowReader {
         // End on a line break when one is close enough to the end that
         // giving the rest back still leaves real progress. Without the
         // half-window floor, a file that is one enormous line would hand back
-        // almost everything it read, forever.
+        // almost everything it read, forever. Failing that, never end on a
+        // CR before the end of the file: its LF may be in the next read, and
+        // a CRLF split between two windows is counted as two breaks.
         let mut take = text.len();
-        if !at_eof
-            && let Some(newline) = text.rfind('\n')
-            && newline + 1 >= self.window_bytes / 2
-        {
-            take = newline + 1;
+        if !at_eof {
+            match crate::breaks::last_line_start(text.as_bytes(), self.window_bytes / 2, text.len())
+            {
+                Some(start) => take = start,
+                None if text.ends_with('\r') => take -= 1,
+                None => {}
+            }
         }
 
         let emitted = &text[..take];
@@ -445,16 +449,21 @@ impl WindowReader {
         while !text.is_char_boundary(reach) {
             reach += 1;
         }
-        if let Some(newline) = text[reach..split].rfind('\n') {
-            split = reach + newline + 1;
+        if let Some(start) = crate::breaks::last_line_start(text.as_bytes(), reach + 1, split) {
+            split = start;
         }
 
+        // Breaks on the rule the rest of the crate uses (decision D6). A CR
+        // ending `head` whose LF opens the repeat is half of a CRLF: the next
+        // window holds the LF and counts the pair there, once.
         let head = &text[..split];
-        self.prefix_line = window.first_line + head.matches('\n').count();
+        let pair_cut = head.ends_with('\r') && text.as_bytes().get(split) == Some(&b'\n');
+        self.prefix_line =
+            window.first_line + crate::breaks::count(head.as_bytes()) - usize::from(pair_cut);
         self.prefix_mid_line = if split == 0 {
             window.starts_mid_line
         } else {
-            !head.ends_with('\n')
+            !(head.ends_with('\n') || (head.ends_with('\r') && !pair_cut))
         };
         self.prefix = text[split..].to_owned();
     }
@@ -663,6 +672,49 @@ mod tests {
             }
         }
         assert!(checked >= 3_000, "only checked {checked} lines");
+    }
+
+    #[test]
+    fn line_numbers_survive_bare_crs_and_crlfs_cut_between_windows() {
+        // Decision D6: a bare CR ends a line, a CRLF is one break wherever a
+        // window boundary falls. Several window sizes and overlaps, zero
+        // among them, so boundaries land on every part of every ending.
+        let dir = TempDir::new().unwrap();
+        let mut text = String::new();
+        for i in 0..4_000 {
+            text.push_str(&format!("line {i}"));
+            text.push_str(["\r", "\n", "\r\n"][i % 3]);
+        }
+        let path = write(&dir, "mixed.txt", text.as_bytes());
+
+        for window in [MIN_WINDOW_BYTES, MIN_WINDOW_BYTES + 1, MIN_WINDOW_BYTES + 7] {
+            for overlap in [0, 1, 64] {
+                let reader = WindowReader::with_config(&path, window, overlap).unwrap();
+                let mut checked = 0;
+                for w in reader {
+                    let w = w.unwrap();
+                    // A one-byte overlap can rarely reach back to a line
+                    // start, so a window may open on a fragment of its first
+                    // line. Its number is still right; its text is partial.
+                    assert!(
+                        overlap == 1 || !w.starts_mid_line,
+                        "window {window} overlap {overlap} lost its alignment"
+                    );
+                    let skip = usize::from(w.starts_mid_line);
+                    for (k, line) in crate::breaks::lines(&w.text).enumerate().skip(skip) {
+                        let absolute = w.absolute_line(k + 1);
+                        assert_eq!(
+                            line,
+                            format!("line {absolute}"),
+                            "window {window} overlap {overlap} at byte {}",
+                            w.byte_offset
+                        );
+                        checked += 1;
+                    }
+                }
+                assert!(checked >= 3_900, "only checked {checked} lines");
+            }
+        }
     }
 
     #[test]

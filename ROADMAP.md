@@ -85,8 +85,9 @@ the stem before the first dot, the way Win32 does, so `con.txt` becomes
 console -- and `bp-files` refuses such a name outright, which closes the
 route sanitising never covered, the name a user types into a Save dialog.
 The sixth session fixed the notebook and extended-length-path defects.
-What remains is one decision, D6 -- which definition of a line wins -- pinned
-by an `#[ignore]`d test naming it. `DECISIONS.md` has the evidence.
+The seventh, which definition of a line wins, was decision D6: answered on
+2026-09-26 with the Notepad rule (LF, CRLF or a bare CR, everywhere), and
+its test runs again.
 
 **Phase 19's harnesses are inside the gate now, which they were not.**
 `fuzz/` declares its own `[workspace]`, so every `--workspace` command in

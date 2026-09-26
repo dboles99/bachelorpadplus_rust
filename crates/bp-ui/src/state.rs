@@ -1169,7 +1169,7 @@ impl AppState {
             if let Err(EncodeError::Unrepresentable(what)) =
                 try_encode(&text, encoding, LineEndingPolicy::Preserve)
             {
-                let line = text[..what.byte_offset].matches('\n').count() + 1;
+                let line = bp_buffer::breaks::line_of(text.as_bytes(), what.byte_offset);
                 let current = self
                     .workspace
                     .get(id)
@@ -3238,26 +3238,15 @@ impl RedactionPlan {
     }
 }
 
-/// Byte offset and text of every line, split exactly as `str::lines` splits.
+/// Byte offset and text of every line, split as `bp_secrets` splits them.
 ///
-/// `bp_secrets` numbers its findings by enumerating `text.lines()`, so this
-/// has to agree with it line for line -- including that `lines` drops the
-/// carriage return of a CRLF ending, which shifts every byte offset after it
-/// if it is not put back.
+/// `bp_secrets` numbers its findings by enumerating its lines on the
+/// editor's rule (decision D6: LF, CRLF or a bare CR), so this has to agree
+/// with it line for line -- including that each break is dropped from the
+/// line, which shifts every byte offset after it if it is not put back.
+/// `bp_buffer::breaks::spans` is that split, with the offsets kept.
 fn line_spans(text: &str) -> Vec<(usize, &str)> {
-    let mut spans = Vec::new();
-    let mut offset = 0usize;
-    for line in text.lines() {
-        spans.push((offset, line));
-        offset += line.len();
-        if text[offset..].starts_with('\r') {
-            offset += 1;
-        }
-        if text[offset..].starts_with('\n') {
-            offset += 1;
-        }
-    }
-    spans
+    bp_buffer::breaks::spans(text).collect()
 }
 
 /// The byte offset of character `index`, or the end of the line past it.
@@ -3271,13 +3260,9 @@ fn byte_of_char(line: &str, index: usize) -> usize {
         .map_or(line.len(), |(offset, _)| offset)
 }
 
-/// The 1-based line a byte offset falls on.
+/// The 1-based line a byte offset falls on, as the gutter numbers it.
 fn line_at(text: &str, offset: usize) -> usize {
-    text[..offset.min(text.len())]
-        .bytes()
-        .filter(|byte| *byte == b'\n')
-        .count()
-        + 1
+    bp_buffer::breaks::line_of(text.as_bytes(), offset)
 }
 
 /// Which shape a document arrived in, from its extension.
@@ -4710,6 +4695,28 @@ mod tests {
             notice.contains('ń') && notice.contains("line 3"),
             "{notice}"
         );
+    }
+
+    #[test]
+    fn an_encoding_refusal_names_the_line_the_gutter_shows_in_a_bare_cr_file() {
+        // Decision D6: the bare CRs are breaks and the form feed is not, so
+        // the character is on line 3, where Go to Line would take the user.
+        let mut state = AppState::new();
+        state.edit("one\rtwo\x0Cstill two\rGdańsk\r".to_owned());
+
+        state.set_encoding(Encoding::Windows1252);
+
+        let notice = state.error.clone().unwrap_or_default();
+        assert!(notice.contains("line 3"), "{notice}");
+    }
+
+    #[test]
+    fn redaction_spans_split_as_the_secret_scanner_numbers_lines() {
+        let text = "a\r\nb\rc\n\x0Cd";
+        let spans = line_spans(text);
+        assert_eq!(spans, [(0, "a"), (3, "b"), (5, "c"), (7, "\x0Cd")]);
+        assert_eq!(line_at(text, 5), 3);
+        assert_eq!(line_at(text, 2), 1, "the LF of a CRLF is on the CR's line");
     }
 
     #[test]

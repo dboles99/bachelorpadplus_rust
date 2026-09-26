@@ -109,6 +109,11 @@ describe behaviour that earlier development builds had.
 - The Markdown outline listed comments inside code blocks as headings.
 - Menu readouts that described features as not yet available after they
   had shipped.
+- Find in Files, the secret scanner, the outline and document statistics
+  could name a different line from the editor in a file with old Mac line
+  endings, and the editor counted a form feed or a Unicode line separator as
+  a new line. A line now ends at LF, CRLF or a bare carriage return, and
+  nothing else, everywhere.
 
 ### Security
 

@@ -158,7 +158,9 @@ pub fn scan(text: &str) -> Vec<Finding> {
     let mut findings = Vec::new();
     let mut raw = Vec::new();
 
-    for (index, line) in text.lines().enumerate() {
+    // Numbered on the editor's rule, so "line 12" here is line 12 in the
+    // gutter and in Go to Line.
+    for (index, line) in lines(text).enumerate() {
         raw.clear();
         scan_known_formats(line, &mut raw);
         scan_assignments(line, &mut raw);
@@ -170,6 +172,32 @@ pub fn scan(text: &str) -> Vec<Finding> {
     }
 
     findings
+}
+
+/// The lines of `text` without their breaks, on the editor's rule (decision
+/// D6): a line ends at LF, CRLF or a bare CR, and nothing else. Shaped like
+/// `str::lines`, which does not end a line at a bare CR: nothing for the
+/// empty line after a trailing break, and nothing at all for empty text.
+///
+/// `bp-buffer` holds the rule; this crate does not depend on it, so it is
+/// restated here and `tests/integration` holds the two to it.
+fn lines(text: &str) -> impl Iterator<Item = &str> {
+    let mut rest = Some(text).filter(|t| !t.is_empty());
+    std::iter::from_fn(move || {
+        let current = rest?;
+        let Some(end) = current.find(['\n', '\r']) else {
+            rest = None;
+            return Some(current);
+        };
+        // Both break bytes are ASCII, so every cut is a character boundary.
+        let len = if current[end..].starts_with("\r\n") {
+            2
+        } else {
+            1
+        };
+        rest = Some(&current[end + len..]).filter(|r| !r.is_empty());
+        Some(&current[..end])
+    })
 }
 
 // --- limits ------------------------------------------------------------
@@ -1533,6 +1561,19 @@ mod tests {
         assert!(findings[1].column < findings[2].column);
         assert_eq!(findings[1].kind, SecretKind::AwsAccessKeyId);
         assert_eq!(findings[2].kind, SecretKind::GitHubToken);
+    }
+
+    #[test]
+    fn a_finding_is_numbered_on_the_editors_line_rule() {
+        // Decision D6: a bare CR ends a line, a form feed does not, so this
+        // key is on line 3 -- where the gutter and Go to Line put it.
+        let text = format!("one\rtwo\x0Cstill two\rid {AWS_KEY_ID}\r");
+        let found = single(&text);
+        assert_eq!(found.line, 3);
+        assert_eq!(
+            found.column,
+            column_of(&format!("id {AWS_KEY_ID}"), AWS_KEY_ID)
+        );
     }
 
     #[test]

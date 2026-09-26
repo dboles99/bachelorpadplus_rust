@@ -195,11 +195,11 @@ the developer's version.
   `SemanticName::to_filename`'s own maximum was unwritable in a deep enough
   directory and blamed on a read-only file -- `std::fs` lengthens long paths
   by itself, but `tempfile`'s rename calls `MoveFileExW` with the path as
-  given. **One test remains `#[ignore]`d**: `bp-search` counts only the
-  newline while `bp-buffer`'s rope also breaks on a bare carriage return and
-  four other separators, so find-in-files can scroll to the wrong line in any
-  file carrying one. One line definition has to win, and that is D6 -- a
-  decision, not a patch.
+  given. The last `#[ignore]`d test, on what a line is, runs again: D6 was
+  answered on 2026-09-26 with the Notepad rule (a line ends at LF, CRLF or a
+  bare carriage return, and nothing else, everywhere). `bp-buffer`'s rope is
+  built with ropey's `cr_lines` and `bp-search` counts the same set, so Find
+  in Files and the editor agree.
 - **Three crates and one module are built and unreachable, and this list is
   now counted rather than remembered.** `bp-research`, `bp-notebook` and
   `bp-storage` have zero reverse dependencies anywhere in the application:

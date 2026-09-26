@@ -7,6 +7,11 @@
 //! Offsets are **character** indices, not bytes, because they are handed
 //! straight to the editor to select a match. A byte offset would land inside
 //! a multi-byte character and select the wrong thing -- or nothing.
+//!
+//! Line numbers follow the editor's rule (decision D6): a line ends at LF,
+//! CRLF or a bare CR, and nothing else. `bp-buffer` is not a dependency, so
+//! the rule is restated in [`ends_line`], and `tests/integration` holds the
+//! two to it -- when they differed, Find in Files jumped to the wrong line.
 
 #![forbid(unsafe_code)]
 
@@ -89,6 +94,43 @@ pub struct Match {
     pub text: String,
 }
 
+/// Whether the byte at `at` ends a line: an LF, or a CR that is not the first
+/// half of a CRLF. Byte-level, which is safe because neither byte can occur
+/// inside a multi-byte UTF-8 character.
+fn ends_line(bytes: &[u8], at: usize) -> bool {
+    match bytes.get(at) {
+        Some(b'\n') => true,
+        Some(b'\r') => bytes.get(at + 1) != Some(&b'\n'),
+        _ => false,
+    }
+}
+
+/// The lines of `text` without their breaks, on the editor's rule (decision
+/// D6): a line ends at LF, CRLF or a bare CR, and nothing else. Shaped like
+/// `str::lines`, which does not end a line at a bare CR: nothing for the
+/// empty line after a trailing break, and nothing at all for empty text.
+///
+/// `bp-buffer` holds the rule; this crate does not depend on it, so it is
+/// restated here and `tests/integration` holds the two to it.
+pub(crate) fn lines(text: &str) -> impl Iterator<Item = &str> {
+    let mut rest = Some(text).filter(|t| !t.is_empty());
+    std::iter::from_fn(move || {
+        let current = rest?;
+        let Some(end) = current.find(['\n', '\r']) else {
+            rest = None;
+            return Some(current);
+        };
+        // Both break bytes are ASCII, so every cut is a character boundary.
+        let len = if current[end..].starts_with("\r\n") {
+            2
+        } else {
+            1
+        };
+        rest = Some(&current[end + len..]).filter(|r| !r.is_empty());
+        Some(&current[..end])
+    })
+}
+
 /// Byte offsets to character offsets, and character offsets to line numbers.
 ///
 /// Built once per pass rather than re-counting from the start of the document
@@ -111,9 +153,9 @@ impl Offsets {
         byte_to_char[text.len()] = chars;
 
         let mut line_starts = vec![0usize];
-        for (index, ch) in text.char_indices() {
-            if ch == '\n' {
-                line_starts.push(byte_to_char[index] + 1);
+        for (index, chars_before) in byte_to_char.iter().enumerate().take(text.len()) {
+            if ends_line(text.as_bytes(), index) {
+                line_starts.push(chars_before + 1);
             }
         }
 
@@ -277,7 +319,9 @@ impl ReplacePlan {
 /// layout, and a very long one would push the arrow off the panel.
 fn elide(text: &str) -> String {
     const MAX: usize = 60;
-    let flat = text.replace('\n', "⏎").replace('\r', "");
+    // Every line break is one arrow, a bare CR included: dropping it would
+    // show two lines run together as one.
+    let flat = text.replace("\r\n", "⏎").replace(['\n', '\r'], "⏎");
     if flat.chars().count() <= MAX {
         return flat;
     }
@@ -431,6 +475,53 @@ mod tests {
         let matches = find_all(text, &q("cat")).unwrap();
         assert_eq!(matches[0].range, 4..7);
         assert_eq!(text.chars().skip(4).take(3).collect::<String>(), "cat");
+    }
+
+    #[test]
+    fn a_line_ends_at_lf_crlf_or_a_bare_cr_and_a_crlf_is_one_break() {
+        // Decision D6, the editor's rule.
+        let text = "a\rb\r\nc\nd\r\re";
+        let lines_of = |needle: &str| find_all(text, &Query::literal(needle)).unwrap()[0].line;
+        assert_eq!(lines_of("a"), 1);
+        assert_eq!(lines_of("b"), 2, "after a bare CR");
+        assert_eq!(lines_of("c"), 3, "after a CRLF, counted once");
+        assert_eq!(lines_of("d"), 4);
+        assert_eq!(lines_of("e"), 6, "two bare CRs are two breaks");
+    }
+
+    #[test]
+    fn form_feed_and_the_unicode_separators_do_not_start_a_line() {
+        for text in [
+            "a\x0Bneedle",
+            "a\x0Cneedle",
+            "a\u{0085}needle",
+            "a\u{2028}needle",
+            "a\u{2029}needle",
+        ] {
+            let m = &find_all(text, &Query::literal("needle")).unwrap()[0];
+            assert_eq!(m.line, 1, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn lines_split_on_the_same_rule_as_line_numbers() {
+        assert_eq!(
+            lines("one\rtwo\r\nthree\nfour\r").collect::<Vec<_>>(),
+            ["one", "two", "three", "four"]
+        );
+        for plain in ["", "a", "a\n", "\n\n", "a\r\nb"] {
+            assert_eq!(
+                lines(plain).collect::<Vec<_>>(),
+                plain.lines().collect::<Vec<_>>(),
+                "{plain:?}"
+            );
+        }
+        assert_eq!(lines("a\x0Cb").count(), 1);
+    }
+
+    #[test]
+    fn a_bare_cr_in_a_previewed_match_shows_as_a_break() {
+        assert_eq!(elide("a\rb\r\nc\nd"), "a⏎b⏎c⏎d");
     }
 
     #[test]

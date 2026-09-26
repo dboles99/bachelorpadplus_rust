@@ -287,8 +287,19 @@ pub fn inspect(text: &str) -> Vec<MetadataFinding> {
 /// Computed once per surviving finding rather than carried through every rule,
 /// because the rules work in byte offsets and a line number is only ever
 /// wanted for display.
+///
+/// A line ends at LF, CRLF or a bare CR, and nothing else (decision D6), so
+/// this is the line the gutter and Go to Line show. A CR counts only when no
+/// LF follows it, looking one byte past `offset` when it has to: a CRLF is
+/// one break.
 fn line_of(text: &str, offset: usize) -> usize {
-    text[..offset].bytes().filter(|byte| *byte == b'\n').count() + 1
+    let bytes = text.as_bytes();
+    let head = bytes.get(..offset).unwrap_or(bytes);
+    head.iter()
+        .enumerate()
+        .filter(|&(i, &b)| b == b'\n' || (b == b'\r' && bytes.get(i + 1) != Some(&b'\n')))
+        .count()
+        + 1
 }
 
 /// Push a finding, with the line left to be filled in by [`inspect`].
@@ -522,7 +533,9 @@ const fn is_key_byte(byte: u8) -> bool {
 fn scan_identity_keys(text: &str, out: &mut Vec<MetadataFinding>) {
     let mut offset = 0usize;
 
-    for raw_line in text.split_inclusive('\n') {
+    // Split on the editor's rule (decision D6), so a bare-CR file's fields
+    // are each at the head of their own line.
+    for raw_line in text.split_inclusive(['\n', '\r']) {
         let line = raw_line.trim_end_matches(['\n', '\r']);
         if let Some((kind, exposure, start, end)) = identity_field(line) {
             push(out, kind, offset + start, offset + end, exposure);
@@ -1150,6 +1163,18 @@ mod tests {
         assert_eq!(value(text, &found[0]), "Daniel Boles <daniel@example.com>");
         assert_eq!(found[1].kind, MetadataKind::LocalAccount);
         assert_eq!(found[1].line, 2, "the line is for display and is 1-based");
+    }
+
+    #[test]
+    fn a_bare_cr_document_is_numbered_and_split_on_the_editors_line_rule() {
+        // Decision D6: a bare CR ends a line and a CRLF is one break, so the
+        // author field is at the head of line 3 and is found there.
+        let text = "title: notes\r\n\x0Cstill line two\rauthor: Daniel Boles\r";
+        let found = inspect(text);
+
+        assert_eq!(found[0].kind, MetadataKind::PersonName);
+        assert_eq!(value(text, &found[0]), "Daniel Boles");
+        assert_eq!(found[0].line, 3);
     }
 
     /// Text that must never produce a finding.

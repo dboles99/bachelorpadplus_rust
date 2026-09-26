@@ -216,8 +216,9 @@ fn search_file(
             report.truncated = true;
             return Ok(true);
         }
-        let preview = text
-            .lines()
+        // The same lines the number counts, or a bare-CR file previews the
+        // wrong one.
+        let preview = crate::lines(&text)
             .nth(m.line - 1)
             .unwrap_or_default()
             .trim()
@@ -313,6 +314,22 @@ mod tests {
 
         assert_eq!(report.hits[0].line, 3);
         assert_eq!(report.hits[0].preview, "needle here", "trimmed for display");
+    }
+
+    #[test]
+    fn a_file_with_bare_cr_endings_reports_the_line_the_editor_shows() {
+        // Decision D6: a classic Mac file is four lines, not one.
+        let dir = TempDir::new().unwrap();
+        write(
+            dir.path(),
+            "mac.txt",
+            "one\rtwo\r\x0Cnot a break\rneedle here\r",
+        );
+
+        let report = search_dir(dir.path(), &Query::literal("needle")).unwrap();
+
+        assert_eq!(report.hits[0].line, 4);
+        assert_eq!(report.hits[0].preview, "needle here");
     }
 
     #[test]

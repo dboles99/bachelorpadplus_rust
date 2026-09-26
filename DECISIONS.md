@@ -101,22 +101,23 @@ unmeasured half.
   `windows-sys` and confined `unsafe`, for when Win32 calls are needed. It
   has not been created yet.
 
-- **`bp-search` and `bp-buffer` do not agree what a line is, and this is
-  now a decision rather than a bug report.** `bp_search::Offsets` counts
-  `'\n'`. `bp_buffer::Buffer` is a `ropey::Rope` built with ropey's default
-  features, which include `unicode_lines`, so ropey also breaks on a bare
-  `\r`, `\x0B`, `\x0C`, U+0085, U+2028 and U+2029. For `"one\rtwo\rneedle"`
-  search reports line 1 and the buffer reports line 3, so a find-in-files
-  result scrolls the editor to the wrong line in any file carrying a bare CR.
-  The same split exists inside `bp-buffer` — the free `line_count` counts
-  newlines, `Buffer::len_lines` asks the rope. `bp-ui` used to use one for
-  the `TextInput` status bar and the other for the `EditorSurface` one; it
-  now asks the rope in both views, so the status bar agrees with itself, and
-  the disagreement left is Find in Files, whose line numbers come from
-  `bp-search`.
-  Either `bp-search` adopts ropey's break set or `bp-buffer` builds its rope
-  without `unicode_lines`; one line definition has to win, and that is an
-  ADR. Found by the cross-crate tests, pinned as an ignored test naming it.
+- **What a line is: answered (D6, 2026-09-26), and the pinned test runs.**
+  `bp-search` used to count `'\n'` while `bp-buffer`'s rope, built with
+  ropey's default `unicode_lines`, also broke on a bare `\r`, `\x0B`,
+  `\x0C`, U+0085, U+2028 and U+2029, so a find-in-files result scrolled the
+  editor to the wrong line in any file carrying one. The owner chose the
+  Notepad rule: a line ends at LF, CRLF or a bare CR, and nothing else,
+  everywhere. The rope is built with `cr_lines`; `bp_buffer::breaks` states
+  the rule for the rope, `line_count`, the large-file index and viewer and
+  the stream windows; and `bp-search`, `bp-secrets`, `bp-semantic` and
+  `bp-redaction`, which do not depend on `bp-buffer`, restate it and are
+  held to it by `tests/integration/tests/search_over_buffer.rs`. Three
+  places still see lines their own way, each deliberately: the default
+  `TextInput` view draws breaks as Slint does (it may draw a form feed or
+  U+2028 as a new line); `bp-files` converts line endings without touching
+  a bare `\r`, because `LineEnding` cannot name a classic Mac file and a
+  conversion that rewrote one would rewrite a `\r` that was data; and the
+  JSON, YAML, TOML and CSV parsers report line numbers by their own rules.
 - **Time to first interaction is unmeasurable under the software renderer.**
   Slint exposes no rendering notifier there, so half of the ADR-0017 startup
   target has no measurement behind it. A hole, not a pass.

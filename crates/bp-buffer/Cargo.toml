@@ -13,7 +13,13 @@ workspace = true
 # 1.x rather than 2.0.0-beta. The buffer is the one component where a
 # mid-flight API break would ripple through everything above it, and
 # BP-ADR-0015 already weighed API stability heavily.
-ropey = "1"
+#
+# `cr_lines` and not the default `unicode_lines`: a line ends at LF, CRLF or
+# a bare CR and nothing else (decision D6, `src/breaks.rs`). `unicode_lines`
+# also broke lines at VT, FF, U+0085, U+2028 and U+2029, which no other part
+# of the product did, so the caret and Find in Files disagreed about line
+# numbers. `simd` is the other default, kept.
+ropey = { version = "1", default-features = false, features = ["cr_lines", "simd"] }
 # Errors that name the file. A chunked read fails halfway through a 2 GB file
 # far more often than a whole-file read fails, so the failure path is part of
 # the interface rather than an afterthought.
