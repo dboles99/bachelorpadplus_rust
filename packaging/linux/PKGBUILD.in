@@ -40,7 +40,7 @@ package() {
     # Arch keeps licences under /usr/share/licenses/<pkgname>.
     install -d "${pkgdir}/usr/share/licenses/${pkgname}"
     mv "${pkgdir}/usr/share/doc/bachelorpad/"LICENSE-* "${pkgdir}/usr/share/licenses/${pkgname}/"
-    if [[ -f "${pkgdir}/usr/share/doc/bachelorpad/THIRD-PARTY-NOTICES" ]]; then
-        mv "${pkgdir}/usr/share/doc/bachelorpad/THIRD-PARTY-NOTICES" "${pkgdir}/usr/share/licenses/${pkgname}/"
+    if [[ -f "${pkgdir}/usr/share/doc/bachelorpad/THIRD-PARTY-NOTICES.txt" ]]; then
+        mv "${pkgdir}/usr/share/doc/bachelorpad/THIRD-PARTY-NOTICES.txt" "${pkgdir}/usr/share/licenses/${pkgname}/"
     fi
 }

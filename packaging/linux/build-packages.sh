@@ -11,7 +11,7 @@
 #   --no-build         package the binary already at <target>/release/bachelorpad
 #                      instead of building it; it must still carry its symbols
 #                      (built with `--config profile.release.strip=false`)
-#   --require-notices  fail, rather than warn, when THIRD-PARTY-NOTICES is
+#   --require-notices  fail, rather than warn, when THIRD-PARTY-NOTICES.txt is
 #                      missing at the repository root (a release sets this)
 #   -- ARGS            passed to `cargo build` after the script's own flags
 #
@@ -134,19 +134,19 @@ install -m 0644 "$work/$name.debug" "$debug_out"
 note "debuginfo: $(du -h "$debug_out" | cut -f1)  stripped binary: $(du -h "$work/$name" | cut -f1)"
 
 # --- licences ----------------------------------------------------------------
-# ADR-0031: LICENSE-MIT, LICENSE-APACHE and THIRD-PARTY-NOTICES ship in every
+# ADR-0031: LICENSE-MIT, LICENSE-APACHE and THIRD-PARTY-NOTICES.txt ship in every
 # package. The first two are required; the notices come from `cargo about`
 # (release plan M1-14) and are only a warning until a release asks for them.
 for f in LICENSE-MIT LICENSE-APACHE; do
     [[ -f $repo/$f ]] || fail "$f is missing at the repository root; every package ships it (ADR-0031)"
     install -m 0644 "$repo/$f" "$work/licenses/$f"
 done
-if [[ -f $repo/THIRD-PARTY-NOTICES ]]; then
-    install -m 0644 "$repo/THIRD-PARTY-NOTICES" "$work/licenses/THIRD-PARTY-NOTICES"
+if [[ -f $repo/THIRD-PARTY-NOTICES.txt ]]; then
+    install -m 0644 "$repo/THIRD-PARTY-NOTICES.txt" "$work/licenses/THIRD-PARTY-NOTICES.txt"
 elif ((require_notices)); then
-    fail "THIRD-PARTY-NOTICES is missing at the repository root (generate it with cargo about, release plan M1-14)"
+    fail "THIRD-PARTY-NOTICES.txt is missing at the repository root (generate it with cargo about, release plan M1-14)"
 else
-    echo "build-packages: WARNING: THIRD-PARTY-NOTICES is missing; the packages ship without it" >&2
+    echo "build-packages: WARNING: THIRD-PARTY-NOTICES.txt is missing; the packages ship without it" >&2
 fi
 
 # --- the staged tree -----------------------------------------------------------
@@ -214,8 +214,8 @@ rpmtop=$work/rpmbuild
 mkdir -p "$rpmtop"/{BUILD,RPMS,SPECS,SRPMS,BUILDROOT}
 sed -e "s|@VERSION@|$pkg_version|g" -e "s|@RELEASE@|$pkg_release|g" \
     "$here/bachelorpad.spec.in" > "$rpmtop/SPECS/$name.spec"
-if [[ ! -f $repo/THIRD-PARTY-NOTICES ]]; then
-    sed -i '/THIRD-PARTY-NOTICES/d' "$rpmtop/SPECS/$name.spec"
+if [[ ! -f $repo/THIRD-PARTY-NOTICES.txt ]]; then
+    sed -i '/THIRD-PARTY-NOTICES.txt/d' "$rpmtop/SPECS/$name.spec"
 fi
 # --nodeps: rpmbuild checks build requirements against an rpm database, and
 # a Debian build host has none (the spec declares no BuildRequires anyway).

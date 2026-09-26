@@ -62,7 +62,9 @@ remap="target.'cfg(all())'.rustflags = [\
 # into a .debug file with objcopy and ship the stripped binary; the profile's
 # own strip would throw them away before anything could keep them.
 cd "$src"
-cargo build --release --locked -p bachelorpad \
+# `cargo auditable build` is `cargo build` plus the embedded dependency list
+# (release plan M3-03); the flags are cargo's own.
+cargo auditable build --release --locked -p bachelorpad \
     --config profile.release.strip=false \
     --config "$remap"
 

@@ -181,11 +181,35 @@ try {
         }
     }
     else {
-        Step "Linux packages ($(if ($Container) { 'pinned Debian 12 container' } else { 'native build' }))" {
-            $script = Join-Path $Root 'packaging/linux/release.sh'
-            $releaseArgs = @('--output', $files)
-            if ($Container) { $releaseArgs += '--container' }
-            Invoke-Native 'packaging/linux/release.sh' { bash $script @releaseArgs }
+        if ($Container) {
+            Step 'Linux packages (pinned Debian 12 container)' {
+                # Builds with cargo auditable and the path remap inside, checks
+                # the glibc ceiling before packaging, and fails on a missing
+                # licence or notices file (packaging/linux/README.md).
+                Invoke-Native 'build-in-container.sh' {
+                    bash (Join-Path $Root 'packaging/linux/build-in-container.sh') --out $files -- --require-notices
+                }
+            }
+        }
+        else {
+            Step 'Linux packages (native build on this host)' {
+                Require-Tool cargo-deb 'cargo install --locked cargo-deb'
+                Require-Tool rpmbuild 'apt install rpm'
+                $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $HOME '.cargo' }
+                $remap = "target.'cfg(all())'.rustflags = ['--remap-path-prefix=$cargoHome=/cargo', '--remap-path-prefix=$Root=/bachelorpad']"
+                Invoke-Native 'build-packages.sh' {
+                    bash (Join-Path $Root 'packaging/linux/build-packages.sh') --out $files --require-notices -- --config $remap
+                }
+                # The container checks this before packaging; a native build
+                # can only report it. This host's glibc is whatever it is,
+                # which is exactly why a release uses -Container.
+                $targetDir = ((cargo metadata --format-version 1 --no-deps) -join "`n" | ConvertFrom-Json).target_directory
+                bash (Join-Path $Root 'packaging/linux/check-glibc.sh') (Join-Path $targetDir 'release/bachelorpad')
+                if ($LASTEXITCODE -ne 0) {
+                    if (-not $DryRun) { throw "the binary needs a newer glibc than the 2.36 promise; build with -Container" }
+                    Write-Host "  dry run: glibc above the 2.36 ceiling on this host (recorded); a release uses -Container" -ForegroundColor Yellow
+                }
+            }
         }
     }
 
@@ -242,6 +266,10 @@ try {
                 machine = [System.Environment]::MachineName
             }
             container   = [bool]$Container
+            glibc_required = $(
+                $glibc = Join-Path $files 'glibc-required.txt'
+                if (Test-Path $glibc) { (Get-Content -Raw $glibc).Trim() } else { $null }
+            )
             rustc       = ((rustc -vV) -join "`n")
             cargo       = ((cargo -V) -join '')
             cargo_lock_sha256 = Get-Sha256 (Join-Path $Root 'Cargo.lock')

@@ -55,7 +55,7 @@ its own .bpadx format.
 cp -a %{_stage}/. %{buildroot}/
 mkdir -p %{buildroot}%{_datadir}/licenses/%{name}
 mv %{buildroot}%{_docdir}/%{name}/LICENSE-* %{buildroot}%{_datadir}/licenses/%{name}/
-mv %{buildroot}%{_docdir}/%{name}/THIRD-PARTY-NOTICES %{buildroot}%{_datadir}/licenses/%{name}/
+mv %{buildroot}%{_docdir}/%{name}/THIRD-PARTY-NOTICES.txt %{buildroot}%{_datadir}/licenses/%{name}/
 
 # Fedora's desktop-file-utils, shared-mime-info and hicolor-icon-theme
 # update their caches from file triggers on these directories, so there
@@ -71,4 +71,4 @@ mv %{buildroot}%{_docdir}/%{name}/THIRD-PARTY-NOTICES %{buildroot}%{_datadir}/li
 %doc %{_docdir}/%{name}/copyright
 %license %{_datadir}/licenses/%{name}/LICENSE-MIT
 %license %{_datadir}/licenses/%{name}/LICENSE-APACHE
-%license %{_datadir}/licenses/%{name}/THIRD-PARTY-NOTICES
+%license %{_datadir}/licenses/%{name}/THIRD-PARTY-NOTICES.txt

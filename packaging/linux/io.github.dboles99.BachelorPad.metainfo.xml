@@ -26,6 +26,6 @@
     <mediatype>text/x-log</mediatype>
   </provides>
   <releases>
-    <release version="0.1.0" date="2026-09-25"/>
+    <release version="1.0.0-rc.0" date="2026-09-26"/>
   </releases>
 </component>

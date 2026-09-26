@@ -69,8 +69,8 @@ pub struct Release {
 /// newest `<release>` as "what's new" and a stale one tells users they are
 /// running something they are not.
 pub const RELEASES: &[Release] = &[Release {
-    version: "0.1.0",
-    date: "2026-09-25",
+    version: "1.0.0-rc.0",
+    date: "2026-09-26",
 }];
 
 /// The freedesktop menu categories, for the `.desktop` entry's `Categories=`

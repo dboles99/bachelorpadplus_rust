@@ -61,7 +61,7 @@ todo = "warn"
 unimplemented = "warn"
 
 [workspace.package]
-version = "0.1.0"
+version = "1.0.0-rc.0"
 edition = "2024"
 # The floor, not the pin. `rust-toolchain.toml` pins the exact compiler every
 # build here uses (1.94.1); this states the oldest one the code claims to
