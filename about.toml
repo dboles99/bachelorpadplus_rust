@@ -1,0 +1,30 @@
+# cargo-about: the third-party notices shipped with every package (release
+# plan M1-14). `scripts/New-ThirdPartyNotices.ps1` renders about.hbs with
+# this and appends the bundled font's licence, which is not a crate.
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "BSL-1.0",
+    "LicenseRef-Slint-Royalty-free-2.0",
+]
+targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+# Only what ships: the application and what it links, not test or build
+# tooling.
+ignore-dev-dependencies = true
+ignore-build-dependencies = true
+# The workspace's own crates are covered by LICENSE-MIT and LICENSE-APACHE.
+private = { ignore = true }
+
+# Slint's crates keep their licence texts under LICENSES/, and cargo-about
+# 0.9 drops a clarified LicenseRef-* text (generate.rs skips a file whose
+# licence equals the one being looked up). So they are left out of the
+# template's output with a warning, and New-ThirdPartyNotices.ps1 appends
+# the royalty-free text itself, read from the Slint crate that is actually
+# built, with the list of Slint crates.

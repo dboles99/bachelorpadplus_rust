@@ -145,6 +145,23 @@ try {
         Invoke-Stage 'check (locked)' { cargo check --workspace --all-targets --locked }
     }
 
+    # Licences, RustSec advisories, bans and sources (release plan M1-14),
+    # against deny.toml. One tool for what the plan named two: cargo-deny's
+    # advisories check reads the same RustSec database cargo-audit does.
+    # Skipped in quick mode because it fetches that database.
+    if ($Quick) {
+        Skip-Stage 'deny' 'quick mode -- pre-push runs it'
+    }
+    else {
+        Invoke-Stage 'deny' {
+            if (-not (Get-Command cargo-deny -ErrorAction SilentlyContinue)) {
+                throw "cargo-deny is not installed: cargo install --locked cargo-deny"
+            }
+            cargo deny check
+            if ($LASTEXITCODE -ne 0) { throw "cargo deny check failed" }
+        }
+    }
+
     Invoke-Stage 'clippy' { cargo clippy --workspace --all-targets -- -D warnings }
     Invoke-Stage 'test' { cargo test --workspace }
 
