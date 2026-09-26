@@ -33,6 +33,21 @@ machine, M2-11), and the Windows gate run, which now also covers M2-02/03/04
 owner: M3** (packaging and the release pipeline), and the M2 follow-ups at
 the end of `WORK_QUEUE.md`.
 
+**2026-09-26: M3 done as far as this machine can take it.** The plan's M3
+"Progress" note has the detail. Every package format is built. A Linux dry run
+of the release script is recorded in `artifacts/releases/v1.0.0-rc.0/linux/`.
+Licences, notices, cargo-deny and the user docs are in, and a plaintext leak in
+Save a Copy was found and fixed. What remains needs other machines or the
+owner:
+- the Windows gate and a Windows dry run (`Invoke-Release.ps1` on Windows);
+- a `-Container` run where Debian's mirrors are reachable;
+- the signing identity (decision 3);
+- decisions 15, 21 and U3/D6/U5;
+- the icon's approval.
+
+**Next without them: M4's automatable parts**, and the follow-ups in
+`project/WORK_QUEUE.md`.
+
 Two tools worth knowing about:
 
 - `scripts/smoke-linux.sh` drives the real binary on Xvfb in both views.
