@@ -503,8 +503,10 @@ pub fn utf16le_with_bom(text: &str) -> Vec<u8> {
 /// accepts as ours: `HKCU\Software\Classes\BachelorPadPlus.<ext>` (and
 /// anything below it), and [`OWN_SOFTWARE_KEY`] (and anything below it).
 /// Everything else -- `OpenWithProgids` above all -- is shared, and its key
-/// is never deleted.
-fn owned_root(key: &str) -> Option<String> {
+/// is never deleted. The installer generator ([`super::inno`]) draws the same
+/// line for its uninstall flags, so the `.reg` pair and the installer cannot
+/// disagree about what is ours.
+pub(crate) fn owned_root(key: &str) -> Option<String> {
     let parts: Vec<&str> = key.split('\\').collect();
     let [hive, software, third, ..] = parts.as_slice() else {
         return None;
