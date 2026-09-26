@@ -1,8 +1,9 @@
-# DORMANT -- GitHub Actions is not available for this project.
+# DORMANT -- GitHub Actions is not available for this project (ADR-0016).
 #
 # The authoritative gate is local: scripts/Invoke-LocalCI.ps1, wired into
 # pre-commit and pre-push by scripts/Install-GitHooks.ps1. See
-# docs/governance/LOCAL_CI.md.
+# docs/governance/LOCAL_CI.md. Releases are built by a local script too
+# (release plan decision 19), so nothing here builds or uploads a release.
 #
 # This file is kept, and kept correct, so hosted CI can be switched back on
 # without rebuilding it. The trigger is `workflow_dispatch` only, so pushes
@@ -12,8 +13,12 @@
 #     push:
 #     pull_request:
 #
-# Keep the steps below in sync with Invoke-LocalCI.ps1 -- two gates that
-# disagree are worse than one.
+# It runs the gate script itself rather than a copy of its steps (release
+# plan M3-07). An earlier version listed fmt, check, clippy and test by hand
+# and had already fallen behind: no launch stage, no log-hygiene stage, no
+# licence and advisory checks, and no system packages, so it could not even
+# have built the shell on Linux. Two gates that disagree are worse than one;
+# one gate run in two places cannot disagree.
 
 name: CI
 
@@ -21,34 +26,32 @@ on:
   workflow_dispatch:
 
 jobs:
-  check:
+  gate:
     strategy:
+      fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        os: [windows-latest, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          # About's commit line and the build script's dirty flag read git.
+          fetch-depth: 0
+      # No toolchain action: `rust-toolchain.toml` pins the exact compiler,
+      # and rustup (preinstalled on both runners) honours it on first use.
+      - name: Linux build and launch dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libfontconfig1-dev \
+            libxkbcommon-dev libxcb1-dev libgl1-mesa-dev libwayland-dev libssl-dev \
+            libxkbcommon-x11-0 libxcb-cursor0 xvfb xauth
+      - name: Licence and advisory tools
+        run: cargo install --locked cargo-deny
       - uses: Swatinem/rust-cache@v2
-      - name: Format
-        run: cargo fmt --all -- --check
-      - name: Check
-        run: cargo check --workspace --all-targets --locked
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Test
-        run: cargo test --workspace
-      # `fuzz/` declares its own `[workspace]`, so every `--workspace` step
-      # above walks past it. It holds the hostile-input harnesses for
-      # bp-crypto, bp-data, bp-files, bp-formats and bp-notebook.
-      - name: Format (fuzz)
-        working-directory: fuzz
-        run: cargo fmt --all -- --check
-      - name: Clippy (fuzz)
-        working-directory: fuzz
-        run: cargo clippy --all-targets -- -D warnings
-      - name: Test (fuzz)
-        working-directory: fuzz
-        run: cargo test
+      # PowerShell 7 is preinstalled on both runners. On Windows the gate
+      # runs its native leg only: the WSL leg (-Linux) is what the ubuntu
+      # job is for.
+      - name: Gate
+        shell: pwsh
+        run: ./scripts/Invoke-LocalCI.ps1

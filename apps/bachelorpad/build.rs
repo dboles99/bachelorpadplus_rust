@@ -28,8 +28,11 @@ fn main() -> std::io::Result<()> {
         .set("ProductName", "BachelorPad+")
         .set("FileDescription", "BachelorPad+")
         .set("InternalName", "bachelorpad")
-        .set("OriginalFilename", "bachelorpad.exe");
-    // LegalCopyright is left out until the owner names the copyright holder
-    // (release plan decision 2); a placeholder there would ship.
+        .set("OriginalFilename", "bachelorpad.exe")
+        .set("CompanyName", "Daniel Boles")
+        .set(
+            "LegalCopyright",
+            "Copyright (c) 2026 Daniel Boles; MIT OR Apache-2.0",
+        );
     resource.compile()
 }

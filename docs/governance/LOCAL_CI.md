@@ -35,6 +35,7 @@ pwsh -NoProfile -File scripts/Invoke-LocalCI.ps1 -Quick   # what pre-commit runs
 | --- | --- |
 | fmt | `cargo fmt --all -- --check` |
 | check (locked) | `cargo check --workspace --all-targets --locked` |
+| deny | `cargo deny check` against `deny.toml`: licences, RustSec advisories, bans, sources. Needs `cargo install --locked cargo-deny` and network for the advisory database; skipped by `-Quick` |
 | clippy | `cargo clippy --workspace --all-targets -- -D warnings` |
 | test | `cargo test --workspace` |
 | launch | Runs `bachelorpad --self-check` and asserts it starts (Linux: under `xvfb-run -a` when there is no display) |
