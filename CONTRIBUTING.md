@@ -9,9 +9,13 @@ Security problems are not reported here; see [SECURITY.md](SECURITY.md).
 
 ## Build and run
 
-There are **no installers or packages yet**: a Windows installer and Linux
-deb, rpm, tar.gz and PKGBUILD packages are release-plan milestone M3. Today
-you build from source.
+No release has been published yet, so today you build from source. The
+packaging exists: `packaging/windows/` builds the per-user Inno Setup
+installer and the portable zip (not yet run on Windows), and
+`packaging/linux/` builds the `.deb`, `.rpm`, `.tar.gz` and AUR `PKGBUILD`
+inside a pinned Debian 12 container. `scripts/Invoke-Release.ps1` drives
+both and records each run under `artifacts/releases/` (ADR-0016
+amendment). Each directory's README says how.
 
 The toolchain is pinned in `rust-toolchain.toml` (Rust 1.94.1, with rustfmt
 and clippy); rustup picks it up by itself.
