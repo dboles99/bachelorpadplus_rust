@@ -264,9 +264,10 @@ profile says. The status bar shows "Privacy Mode" while it is on. It is off
 again at the next start.
 
 **Nothing leaves the machine.** Version 1 has no network code. Under
-Standard the readout row says leaving the machine is "permitted"; that means
-only that the profile would not forbid it. There is nothing in the program
-that sends anything.
+Standard and Private the readout row says "Leaves this machine: nothing (no
+network code)"; under Confidential and Maximum it says "never (forbidden by
+this profile)", which is the rule any future networked feature will have to
+obey.
 
 The full account of what each profile setting does, and where each stops, is
 in [SECURITY_MODEL.md](../architecture/SECURITY_MODEL.md).

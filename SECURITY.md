@@ -77,9 +77,11 @@ updates, send telemetry or crash reports, fetch anything, or send a document
 anywhere. Crash reports and logs are written to a folder on your machine
 (Tools ▸ Open Log Folder) and go nowhere unless you send them yourself.
 
-The Security menu's readout under the Standard profile says leaving the
-machine is "permitted". That means only that the profile would not forbid
-it: there is nothing in the program that sends anything.
+The Security menu says so: under Standard and Private its readout is
+"Leaves this machine: nothing (no network code)", and under Confidential and
+Maximum "never (forbidden by this profile)". The profile setting is a
+constraint on future features, not a permission anything uses today
+(ADR-0034).
 
 ## The `.bpadx` encryption format has not been independently reviewed
 

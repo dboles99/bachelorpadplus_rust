@@ -13,10 +13,10 @@ the code and regenerate; never edit the second table by hand.
 | Core editor | Yes | Yes | Yes |
 | Semantic naming | Yes | Yes | Yes |
 | Structured formats | Yes | Yes | Yes |
-| Notebook mode | Yes | Yes | Yes |
+| Notebook mode | Not in 1.0 (`.ipynb` opens as JSON; ADR-0030 S1, planned 1.1) | Same | Same |
 | `.bpadx` encryption | Yes | Yes | Yes |
-| Huge-file mode | Yes | Yes | Yes |
-| Hybrid search | Yes | Yes | Yes |
+| Huge-file mode | Not yet: files over 32 MiB are refused with a notice (M1-06, waiting on decision U3) | Same | Same |
+| Hybrid search | Not in 1.0 (ADR-0030 S2, planned 1.2); Find and Find in Files are plain and regex search | Same | Same |
 | BachelorPad+ clipboard history | Yes | Yes | Yes |
 | Private copies cleared off the OS clipboard after a minute | Yes | Yes | Yes |
 | Sign Document (key sealed in a passphrase `.bpadx`, data directory) | Yes | Yes | Yes |
@@ -61,7 +61,7 @@ Why, wherever the answer is not a plain yes:
 
 - **`desktop-entry`, Windows**: Windows has no `.desktop` entry; file types are registered under HKCU\Software\Classes instead.
 - **`mime-association`, Windows**: Windows associates by file extension, not by MIME type.
-- **`windows-file-type-registration`, Windows**: The registry values are generated and can be saved as a `.reg` file for you to run. Applying them is the per-user installer's job, which is not built yet; the application itself never writes the registry (ADR-0032).
+- **`windows-file-type-registration`, Windows**: The per-user installer (packaging/windows, release plan M3-01) writes these values and removes them; a portable copy saves them as a `.reg` pair for you to run. The application itself never writes the registry (ADR-0032). The installer has not yet been run on Windows.
 - **`windows-file-type-registration`, Linux**: There is no registry on Linux.
 - **`default-app-handoff`, Linux**: Linux has no single default-apps settings page to hand the user to; the association is set directly through `xdg-mime`.
 - **`association-install`, Windows**: The application never writes the registry (ADR-0032): the per-user installer applies the registration, and a portable copy saves it as a `.reg` file for you to read and run.
