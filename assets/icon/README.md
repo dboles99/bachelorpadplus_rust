@@ -1,6 +1,6 @@
 # BachelorPad+ application icon
 
-**Status: awaiting the owner's approval (release plan M2-01)**
+**Status: approved by the owner on 2026-09-26 (release plan M2-01)**, as drawn and as shown in `artifacts/ui/icon-preview-2026-09-25.png`.
 
 ## The mark
 
