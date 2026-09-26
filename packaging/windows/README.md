@@ -28,7 +28,7 @@ cargo build --release --locked -p bachelorpad
 ```
 
 Neither script runs cargo to build anything: the caller passes the exe it
-built (and, once M3-04 exists, signed). Both read the version from
+built (and, for a release, signed). Both read the version from
 `Cargo.toml` through `cargo metadata`, and on Windows both refuse an exe
 whose version resource says otherwise, which catches a stale exe.
 
@@ -45,8 +45,39 @@ For the release script (M3-03):
 ISCC is found from `-IsccPath`, then `PATH`, then the default Inno Setup 6
 locations (Program Files (x86), Program Files, `%LOCALAPPDATA%\Programs`).
 `-Version` exists for a caller that has already read the version; it must
-still match the exe. The installer is unsigned; M3-04 signs the exe before
-it is packaged and the installer after.
+still match the exe. With `-Sign`, ISCC signs the setup and the uninstaller
+it embeds as it writes them; the caller signs the exe beforehand
+(`Invoke-Release.ps1 -Sign` does both).
+
+## Signing
+
+`Signing.ps1` holds the signing step (M3-04). It reads the identity from
+environment variables on the signing machine, so no secret enters the
+repository. For Azure Artifact Signing (decision 3):
+
+```powershell
+winget install -e --id Microsoft.Azure.ArtifactSigningClientTools
+az login
+$env:BP_SIGN_METADATA = 'C:\signing\metadata.json'
+./scripts/Invoke-Release.ps1 -Tag v1.0.0-rc.1 -Sign
+```
+
+`metadata.json` is Microsoft's format:
+
+```json
+{
+  "Endpoint": "https://<region>.codesigning.azure.net",
+  "CodeSigningAccountName": "<account>",
+  "CertificateProfileName": "<profile>"
+}
+```
+
+For an OV certificate from a CA instead, set `BP_SIGN_CERT_SHA1` (the
+thumbprint in the certificate store) and `BP_SIGN_TIMESTAMP` (the CA's
+RFC 3161 URL). Setting both routes is an error. Every signature is checked
+with `signtool verify /pa`, and a failure stops the release. A Windows
+release without `-Sign` must say `-AllowUnsigned`, and its manifest records
+`windows_signed: false`.
 
 The zip holds one folder, named like the zip, with `bachelorpad.exe`,
 `bpad.cmd`, both licence files and `README.txt`. The script reads the zip

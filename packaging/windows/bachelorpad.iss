@@ -43,6 +43,13 @@ AppId={{97D93154-2AAB-4EA8-BAB8-43B7869AA059}
 AppName=BachelorPad+
 AppVersion={#AppVersion}
 AppVerName=BachelorPad+ {#AppVersion}
+#ifdef SignInstaller
+; Build-Installer.ps1 -Sign defines the bpsign tool with /S (Signing.ps1).
+; ISCC then signs the setup and the uninstaller it embeds, so neither
+; reaches a user unsigned (release plan M3-04).
+SignTool=bpsign
+SignedUninstaller=yes
+#endif
 AppPublisher=Daniel Boles
 AppCopyright=Copyright (C) Daniel Boles
 VersionInfoVersion={#AppVersionNumeric}

@@ -35,6 +35,11 @@
     Overrides the version read from Cargo.toml. For a release script that
     has already read it; it must still match the exe's version resource.
 
+.PARAMETER Sign
+    Sign the setup and its uninstaller as ISCC writes them, with the
+    identity configured on this machine (Signing.ps1, release plan M3-04).
+    The exe passed in must already be signed.
+
 .PARAMETER OutputBaseName
     The installer's file name without .exe. Default:
     BachelorPadPlus-<version>-windows-x64-setup
@@ -49,7 +54,8 @@ param(
     [Parameter(Mandatory)][string]$OutputDir,
     [string]$IsccPath,
     [string]$Version,
-    [string]$OutputBaseName
+    [string]$OutputBaseName,
+    [switch]$Sign
 )
 
 Set-StrictMode -Version Latest
@@ -100,7 +106,10 @@ $staging = New-StagingDirectory
 try {
     $licenceText = "BachelorPad+ is copyright (C) Daniel Boles and is available under either of`n" +
         "the two licences below, at your option (SPDX: MIT OR Apache-2.0).`n"
-    foreach ($licence in $licences) {
+    # The licence page shows the product's two licences only. The
+    # third-party notices (a third of a megabyte) are installed beside the
+    # exe instead of being scrolled through before Next.
+    foreach ($licence in $licences | Where-Object { (Split-Path -Leaf $_) -like 'LICENSE-*' }) {
         $licenceText += "`n==== $(Split-Path -Leaf $licence) ====`n`n" + [System.IO.File]::ReadAllText($licence)
     }
     $licenceFile = Join-Path $staging 'LICENCE.txt'
@@ -117,9 +126,15 @@ try {
         "/DLicenceFile=$licenceFile",
         "/DBpadCmd=$bpad",
         "/O$output",
-        "/F$OutputBaseName",
-        (Join-Path $PSScriptRoot 'bachelorpad.iss')
+        "/F$OutputBaseName"
     )
+    if ($Sign) {
+        . (Join-Path $PSScriptRoot 'Signing.ps1')
+        $signCommand = Get-InnoSignCommand
+        if (-not $signCommand) { throw "-Sign was given but no signing identity is configured (see Signing.ps1)" }
+        $arguments += @("/Sbpsign=$signCommand", '/DSignInstaller')
+    }
+    $arguments += (Join-Path $PSScriptRoot 'bachelorpad.iss')
     Write-Host "Building the installer for BachelorPad+ $Version with $iscc"
     & $iscc @arguments | Write-Host
     if ($LASTEXITCODE -ne 0) { throw "ISCC failed (exit code $LASTEXITCODE)" }
