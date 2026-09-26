@@ -63,14 +63,16 @@ function Assert-ExeVersion {
     }
 }
 
-# The licence files at the repository root, which every package ships.
+# The licence files at the repository root, which every package ships: the
+# product's two (MIT OR Apache-2.0) and the third-party notices
+# (scripts/New-ThirdPartyNotices.ps1).
 function Get-LicenceFiles {
     param([Parameter(Mandatory)][string]$RepoRoot)
 
-    $files = foreach ($name in 'LICENSE-MIT', 'LICENSE-APACHE') {
+    $files = foreach ($name in 'LICENSE-MIT', 'LICENSE-APACHE', 'THIRD-PARTY-NOTICES.txt') {
         $path = Join-Path $RepoRoot $name
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-            throw "$path is missing. The packages ship both licence files (MIT OR Apache-2.0)."
+            throw "$path is missing. Every package ships LICENSE-MIT, LICENSE-APACHE and THIRD-PARTY-NOTICES.txt."
         }
         $path
     }

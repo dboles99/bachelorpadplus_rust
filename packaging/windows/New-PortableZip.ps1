@@ -10,6 +10,7 @@
       bpad.cmd          the short command, with CRLF line endings
       LICENSE-MIT       both licence files from the repository root
       LICENSE-APACHE
+      THIRD-PARTY-NOTICES.txt  every bundled component's licence
       README.txt        packaging/windows/README-portable.txt, CRLF
 
     No .reg files. A registration names the exe's absolute path, which is
@@ -98,7 +99,7 @@ finally {
 }
 
 # Read back what was written: exactly the expected files, and no .reg.
-$expected = @('LICENSE-APACHE', 'LICENSE-MIT', 'README.txt', 'bachelorpad.exe', 'bpad.cmd') |
+$expected = @('LICENSE-APACHE', 'LICENSE-MIT', 'README.txt', 'THIRD-PARTY-NOTICES.txt', 'bachelorpad.exe', 'bpad.cmd') |
     ForEach-Object { "$OutputBaseName/$_" } | Sort-Object
 $reader = [System.IO.Compression.ZipFile]::OpenRead($zip)
 try {
