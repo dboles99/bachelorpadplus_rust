@@ -80,6 +80,7 @@ $Root = Split-Path -Parent $PSScriptRoot
 $OnWindows = $IsWindows -or ($env:OS -eq 'Windows_NT')
 $Os = if ($OnWindows) { 'windows' } else { 'linux' }
 $started = Get-Date
+$script:NativeGlibc = $null
 
 function Step {
     param([string]$Name, [scriptblock]$Body)
@@ -204,8 +205,14 @@ try {
                 # can only report it. This host's glibc is whatever it is,
                 # which is exactly why a release uses -Container.
                 $targetDir = ((cargo metadata --format-version 1 --no-deps) -join "`n" | ConvertFrom-Json).target_directory
-                bash (Join-Path $Root 'packaging/linux/check-glibc.sh') (Join-Path $targetDir 'release/bachelorpad')
-                if ($LASTEXITCODE -ne 0) {
+                $glibcReport = @(bash (Join-Path $Root 'packaging/linux/check-glibc.sh') (Join-Path $targetDir 'release/bachelorpad'))
+                $glibcStatus = $LASTEXITCODE
+                $glibcReport | ForEach-Object { Write-Host "  $_" }
+                # The first line is the figure; recorded in the manifest as
+                # the container records it, so a native dry run shows how far
+                # this host is from the promise.
+                $script:NativeGlibc = $glibcReport | Select-Object -First 1
+                if ($glibcStatus -ne 0) {
                     if (-not $DryRun) { throw "the binary needs a newer glibc than the 2.36 promise; build with -Container" }
                     Write-Host "  dry run: glibc above the 2.36 ceiling on this host (recorded); a release uses -Container" -ForegroundColor Yellow
                 }
@@ -226,7 +233,15 @@ try {
         finally {
             Pop-Location
         }
-        Move-Item -Force (Join-Path $Root "apps/bachelorpad/bachelorpad-$version-$Os.cdx.json") $files
+        # cargo-cyclonedx has no package filter in a workspace: it writes one
+        # SBOM into every member's directory. The application's is the one
+        # that describes what ships (its dependency graph includes every
+        # crate it links); the rest are removed rather than left in the tree.
+        $sbomName = "bachelorpad-$version-$Os.cdx.json"
+        Move-Item -Force (Join-Path $Root "apps/bachelorpad/$sbomName") $files
+        Get-ChildItem -Path $Root -Recurse -File -Filter $sbomName |
+            Where-Object { $_.FullName -notlike "$files*" } |
+            Remove-Item -Force
     }
 
     $artefacts = @(Get-ChildItem -LiteralPath $files -File | Sort-Object Name)
@@ -268,7 +283,7 @@ try {
             container   = [bool]$Container
             glibc_required = $(
                 $glibc = Join-Path $files 'glibc-required.txt'
-                if (Test-Path $glibc) { (Get-Content -Raw $glibc).Trim() } else { $null }
+                if (Test-Path $glibc) { (Get-Content -Raw $glibc).Trim() } else { $script:NativeGlibc }
             )
             rustc       = ((rustc -vV) -join "`n")
             cargo       = ((cargo -V) -join '')
