@@ -286,7 +286,7 @@ pub fn metainfo(app: &AppInfo, selection: &AssociationSelection) -> String {
     }
     out.push_str("  </description>\n");
     out.push_str("  <developer id=\"io.github.dboles99\">\n");
-    out.push_str("    <name>BachelorPad+ contributors</name>\n");
+    out.push_str("    <name>Daniel Boles</name>\n");
     out.push_str("  </developer>\n");
     out.push_str(&format!(
         "  <url type=\"homepage\">{}</url>\n",

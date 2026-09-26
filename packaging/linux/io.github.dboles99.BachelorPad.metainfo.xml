@@ -10,7 +10,7 @@
     <p>It reads plain text, logs, Markdown, JSON, YAML, TOML, CSV and XML, keeps a recovery journal so unsaved work survives a crash, and can save a document encrypted with a passphrase in its own .bpadx format.</p>
   </description>
   <developer id="io.github.dboles99">
-    <name>BachelorPad+ contributors</name>
+    <name>Daniel Boles</name>
   </developer>
   <url type="homepage">https://github.com/dboles99/bachelorpadplus_rust</url>
   <launchable type="desktop-id">io.github.dboles99.BachelorPad.desktop</launchable>
