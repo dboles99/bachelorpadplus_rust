@@ -218,9 +218,10 @@ impl Capability {
                 reason: "Windows associates by file extension, not by MIME type.",
             },
             (Self::WindowsFileTypeRegistration, Platform::Windows) => NotImplemented {
-                reason: "The registry values are generated and can be saved as a `.reg` file for \
-                         you to run. Applying them is the per-user installer's job, which is not \
-                         built yet; the application itself never writes the registry (ADR-0032).",
+                reason: "The per-user installer (packaging/windows, release plan M3-01) writes \
+                         these values and removes them; a portable copy saves them as a `.reg` \
+                         pair for you to run. The application itself never writes the registry \
+                         (ADR-0032). The installer has not yet been run on Windows.",
             },
             (Self::WindowsFileTypeRegistration, Platform::Linux) => Unsupported {
                 reason: "There is no registry on Linux.",

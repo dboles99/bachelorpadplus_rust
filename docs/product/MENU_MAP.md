@@ -135,14 +135,10 @@ and 16. Redaction and the metadata inspector are no longer among them; both are
 rows above.
 
 Hash, sign and verify are no longer among them: `bp-crypto`'s hashing half and
-`bp-integrity`'s sidecar are wired into the rows above. **Signing is the one
-that is not**, and the reason
-is worth writing down rather than rediscovering — an Ed25519 signing key has
-to live somewhere, and this product has no key store, no platform-keyring
-integration and no decision on file permissions for a key on disk. That is a
-decision with consequences past one file, so the row greys and says why
-instead of a key appearing in the config directory because a menu row needed
-one.
+`bp-integrity`'s sidecar are wired into the rows above. Signing was the last
+of the three, waiting on where an Ed25519 key could live; decision 16 put it
+in a passphrase envelope in the data directory, and the row went live with
+release plan M2-10 (see its row above).
 
 The three things that were waiting on profiles now read them: the recovery
 journal refuses rather than writing plaintext under a profile that forbids it,
