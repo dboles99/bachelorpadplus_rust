@@ -162,13 +162,21 @@ unmeasured half.
   Ln/Col all work in the default `TextInput` view too, which reads the
   widget's caret. The default is still `TextInput`, so a bad answer here
   affects only those who opt in.
-- **A clipboard menu row can act on a different entry than the one it
-  names.** Row ids are decoded against the clipboard history as it is at the
-  moment of the click, not as it was when the menu was built, and a 1.2 s
-  poll timer can add an entry in between. Predates the paste-transformation
-  rows and applies equally to plain paste. Fixing it properly means freezing
-  a snapshot of the history while a menu is open, which is a design question
-  rather than a patch (U5 in `project/DECISIONS_NEEDED.md`).
+- **A clipboard menu row could act on a different entry than the one it
+  named. Fixed** (release-plan item M1-18, U5 answered "snapshot on open").
+  Row ids were decoded against the history as it stood at the click, and the
+  1.2 s poll could add an entry between the menu being built and the click.
+  Now opening Edit or the editor context menu freezes a snapshot of the
+  history as one fingerprint per entry (`bp_clipboard::Snapshot`, hashes
+  only, so it keeps no text the history has forgotten). A row's id is a slot
+  in that snapshot, and a click finds the entry the slot names wherever the
+  history has moved it; if it has gone, the status bar says so and nothing is
+  pasted, pinned or cleared. A copy made while a menu is open appears the
+  next time one opens. What is left: an entry *removed* while a menu is open
+  (a stricter profile clearing the history) takes its row with it, so the
+  rows below move up. That is deliberate -- the alternative is keeping a
+  preview of forgotten text on screen -- and every row still acts on the
+  entry it shows.
 - **Most of the product has not been used.** Over 2,000 tests cover the
   pieces and, since the window tests, some of the seams. One manual pass
   found two defects no test caught: a menu bar where twelve of fourteen menus

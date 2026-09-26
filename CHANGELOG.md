@@ -35,6 +35,10 @@ describe behaviour that earlier development builds had.
   statistics; suggested file names in the form `Title_DDMMMYYYY.ext`.
 - A clipboard history of copies made in the editor, with paste
   transformations; recording other programs' copies is an opt-in setting.
+- A context menu in the editor (right-click, the Menu key or Shift+F10), in
+  both editor views: Cut, Copy, Paste, Select All, Paste Special...,
+  Clipboard History, Pin and Clear Clipboard History. Paste Special... and
+  Clear Clipboard History are in the Edit menu too.
 - A crash-recovery journal, offered back at the next start with Restore,
   Discard and Not Now.
 - Encrypted `.bpadx` documents (Security ▸ Encrypt Document), unlocked when
@@ -114,6 +118,10 @@ describe behaviour that earlier development builds had.
   endings, and the editor counted a form feed or a Unicode line separator as
   a new line. A line now ends at LF, CRLF or a bare carriage return, and
   nothing else, everywhere.
+- A clipboard history row could paste a different entry from the one it
+  showed, if something was copied while the menu was open. The menus now
+  show the history as it was when they opened, and a row whose entry has
+  gone says so and does nothing.
 
 ### Security
 

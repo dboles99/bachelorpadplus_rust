@@ -216,6 +216,29 @@ as **Join Lines**, **Strip Markdown**, **Pretty-Print JSON**, **Minify
 JSON**, **Forward Slashes**, **As Bullet List** and **As Code Block**. A
 transformation is offered only when it would change the text.
 
+**Right-click in the text**, or press the Menu key or Shift+F10, for the
+editor's context menu. It works in both editor views, and right-clicking does
+not move the caret, so Cut and Copy act on the selection you already have.
+The large-file viewer has no context menu.
+
+- **Cut, Copy, Paste, Select All** as in the Edit menu.
+- **Paste Special...** asks how to paste what is on the clipboard now:
+  through one of the transformations that suit it, or unchanged. It says what
+  kind of text it is and how long, but does not show the text itself, which
+  may be another program's copy. It is in the Edit menu too.
+- **Clipboard History** holds the same entries and transformations as the
+  Edit menu.
+- **Pin** lists the entries; choosing one pins it (ticked) or unpins it.
+  Pinned entries are kept when the history is cleared or full.
+- **Clear Clipboard History** forgets the unpinned entries the menu showed.
+  It is in the Edit menu too.
+
+The menus show the history **as it was when you opened them**. Something
+copied while a menu is open appears the next time you open one, and never
+moves the rows you are looking at. A row always acts on the entry it shows:
+if that entry has gone from the history in the meantime, the status bar says
+so and nothing is pasted.
+
 What is recorded:
 
 - **Copies and cuts you make inside the editor** are recorded, unless the
@@ -572,12 +595,14 @@ every option.
 | Ctrl+, | Settings |
 | Escape | Close the find, go-to-line or passphrase bar and return to the text |
 | F10 | Open the menu bar at File |
+| Shift+F10, or the Menu key | Open the editor's context menu at the caret |
 | Alt+F, E, V, I, O | Open File, Edit, View, Insert, Format |
 | Alt+D, N, S, T, H | Open Data, Note, Security, Tools, Help |
 
 **In an open menu:** Up and Down move between rows, skipping greyed ones and
 wrapping round; Left and Right move to the neighbouring menu; Enter chooses
-the row; Escape closes the menu and returns to the text.
+the row; Escape closes the menu and returns to the text. In the editor's
+context menu, Right opens a submenu (Clipboard History, Pin).
 
 **In a question dialog:** Enter chooses the highlighted button and Escape
 chooses the safe one (Cancel, or Not Now).
