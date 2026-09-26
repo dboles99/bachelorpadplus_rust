@@ -46,6 +46,20 @@ pub(crate) enum SaveResult {
     Unrepresentable(bp_core::Unrepresentable),
 }
 
+/// What asking to open a file led to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Opening {
+    /// Opened, or refused with the reason in `AppState::error`. Nothing is
+    /// waiting on the user.
+    Done,
+    /// Encrypted: the passphrase bar is asking.
+    Passphrase,
+    /// Encrypted, and its header asks for an unusually expensive unlock
+    /// (decision 15). Ask `question` first, and hand the answer to
+    /// [`AppState::answer_unlock_cost`].
+    Expensive { path: PathBuf, question: String },
+}
+
 /// What a Note-menu action decided to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum NoteOutcome {
@@ -2041,50 +2055,91 @@ impl AppState {
 
     /// Begin opening `path`, asking for a passphrase if it is encrypted.
     ///
-    /// Only the head is read, for the magic number: this used to read the
-    /// whole file to look at six bytes, which for a file bound for the
-    /// large-file viewer was the very read the viewer exists to avoid.
+    /// Only the head is read, for the magic number and the header: this used
+    /// to read the whole file to look at six bytes, which for a file bound
+    /// for the large-file viewer was the very read the viewer exists to
+    /// avoid.
     ///
     /// An encrypted file does **not** become a tab until it is unlocked. A tab
     /// nobody can read is worse than no tab: it looks like an empty document,
     /// and saving it would write emptiness over the real one.
-    pub(crate) fn open_maybe_encrypted(&mut self, path: PathBuf) -> bool {
-        match read_head(&path) {
-            Ok(bytes) if bp_crypto::is_bpadx(&bytes) => {
-                self.ask = Some(crate::passphrase::Ask::Unlock(path));
-                self.passphrase_status.clear();
-                true
-            }
+    ///
+    /// Its header is read before anything is asked (decision 15). A damaged
+    /// or unknown header, or a cost past the ceiling, is reported now rather
+    /// than after the user has typed a passphrase for a file that was never
+    /// going to open; a cost above four times the default is a question for
+    /// the caller to ask first.
+    pub(crate) fn open_maybe_encrypted(&mut self, path: PathBuf) -> Opening {
+        match read_prefix(&path, BPADX_HEADER_READ) {
+            Ok(bytes) if bp_crypto::is_bpadx(&bytes) => match bp_crypto::unlock_cost(&bytes) {
+                Ok(bp_crypto::UnlockCost::Normal) => {
+                    self.ask = Some(crate::passphrase::Ask::Unlock {
+                        path,
+                        agreed_cost: false,
+                    });
+                    self.passphrase_status.clear();
+                    Opening::Passphrase
+                }
+                Ok(bp_crypto::UnlockCost::NeedsConfirmation {
+                    memory_kib,
+                    iterations,
+                    estimate,
+                }) => Opening::Expensive {
+                    path,
+                    question: unlock_cost_question(memory_kib, iterations, estimate),
+                },
+                Ok(bp_crypto::UnlockCost::Refused(refused)) | Err(refused) => {
+                    self.error = Some(format!("{}: {refused}", file_label(&path)));
+                    Opening::Done
+                }
+            },
             // Not encrypted, or unreadable -- either way `open` handles it and
             // reports properly.
             _ => {
                 self.open(path);
-                false
+                Opening::Done
             }
+        }
+    }
+
+    /// The user answered the expensive-unlock question for `path`.
+    ///
+    /// Yes puts the passphrase bar up with the agreement recorded in the
+    /// question itself, so it cannot outlive it; no says in the status bar
+    /// that nothing was opened, so the silence is not mistaken for a failure.
+    pub(crate) fn answer_unlock_cost(&mut self, path: PathBuf, agreed: bool) {
+        if agreed {
+            self.ask = Some(crate::passphrase::Ask::Unlock {
+                path,
+                agreed_cost: true,
+            });
+            self.passphrase_status.clear();
+        } else {
+            self.error = Some(format!("{} was not opened", file_label(&path)));
         }
     }
 
     /// Open every file in `paths`, as File ▸ Open with several chosen does.
     ///
-    /// Returns whether the passphrase bar should open. Only one passphrase
-    /// can be asked at a time, so the first encrypted file asks and any
-    /// further ones are named in the status bar to open one by one --
-    /// better than guessing that one passphrase fits them all. What each
-    /// open reports is kept, rather than each wiping the last.
-    pub(crate) fn open_many(&mut self, paths: Vec<PathBuf>) -> bool {
+    /// Returns what the first encrypted file needs asked. Only one question
+    /// can be put at a time, so any further encrypted ones are named in the
+    /// status bar to open one by one -- better than guessing that one
+    /// passphrase fits them all. What each open reports is kept, rather than
+    /// each wiping the last.
+    pub(crate) fn open_many(&mut self, paths: Vec<PathBuf>) -> Opening {
         let mut notices = Vec::new();
-        let mut asking = false;
+        let mut asking = Opening::Done;
         let mut locked_later = Vec::new();
         for path in paths {
             let encrypted = read_head(&path).is_ok_and(|bytes| bp_crypto::is_bpadx(&bytes));
-            if encrypted && asking {
-                locked_later.push(path.file_name().map_or_else(
-                    || path.display().to_string(),
-                    |n| n.to_string_lossy().into_owned(),
-                ));
+            if encrypted && asking != Opening::Done {
+                locked_later.push(file_label(&path));
                 continue;
             }
-            asking |= self.open_maybe_encrypted(path);
+            let opened = self.open_maybe_encrypted(path);
+            if opened != Opening::Done {
+                asking = opened;
+            }
             notices.extend(self.error.take());
         }
         if !locked_later.is_empty() {
@@ -2128,7 +2183,7 @@ impl AppState {
         };
 
         match ask {
-            Ask::Unlock(path) => self.unlock(path, entered),
+            Ask::Unlock { path, agreed_cost } => self.unlock(path, entered, agreed_cost),
             Ask::Set { id, target } => {
                 if entered.is_empty() {
                     // `bp_crypto::seal` refuses this too, but saying so here
@@ -2182,7 +2237,11 @@ impl AppState {
     }
 
     /// Decrypt `path` and open it as a tab.
-    fn unlock(&mut self, path: PathBuf, passphrase: &str) -> bool {
+    ///
+    /// `agreed_cost` is whether the user agreed to an expensive unlock
+    /// (decision 15). Without it `bp_crypto::open` refuses one, which also
+    /// covers a file replaced by a costlier one since it was asked about.
+    fn unlock(&mut self, path: PathBuf, passphrase: &str, agreed_cost: bool) -> bool {
         let bytes = match std::fs::read(&path) {
             Ok(bytes) => bytes,
             Err(e) => {
@@ -2191,7 +2250,12 @@ impl AppState {
             }
         };
 
-        match bp_crypto::open(&bytes, passphrase) {
+        let opened = if agreed_cost {
+            bp_crypto::open_confirmed(&bytes, passphrase)
+        } else {
+            bp_crypto::open(&bytes, passphrase)
+        };
+        match opened {
             Ok(plain) => {
                 // Lossy rather than refusing: a document that decrypted and
                 // authenticated is the user's own text, and refusing to show
@@ -2234,12 +2298,22 @@ impl AppState {
                 }
                 false
             }
+            Err(
+                e @ (bp_crypto::CryptoError::UnconfirmedCost { .. }
+                | bp_crypto::CryptoError::UnreasonableCost { .. }),
+            ) => {
+                // The file changed under the question. Another passphrase
+                // would not help, so the bar closes and says why.
+                self.error = Some(format!("{}: {e}", file_label(&path)));
+                self.passphrase_status.clear();
+                false
+            }
             Err(e) => {
                 // The bar stays up. A wrong passphrase is the expected
                 // failure, and it is indistinguishable from a damaged file --
                 // see `bp_crypto`'s docs for why nothing can do better.
                 self.passphrase_status = e.to_string();
-                self.ask = Some(crate::passphrase::Ask::Unlock(path));
+                self.ask = Some(crate::passphrase::Ask::Unlock { path, agreed_cost });
                 true
             }
         }
@@ -2786,9 +2860,19 @@ impl AppState {
 /// The first few bytes of a file: enough to tell an encrypted one by its
 /// magic number without reading a 2 GB log whole to find out it is not one.
 pub(crate) fn read_head(path: &Path) -> std::io::Result<Vec<u8>> {
+    read_prefix(path, 16)
+}
+
+/// Enough of a `.bpadx` file for its whole header, whose longest form is
+/// under 300 bytes: the unlock-cost question (decision 15) is answered from
+/// the header alone, without reading a file that may be large.
+const BPADX_HEADER_READ: u64 = 512;
+
+/// At most the first `len` bytes of `path`.
+fn read_prefix(path: &Path, len: u64) -> std::io::Result<Vec<u8>> {
     use std::io::Read as _;
-    let mut head = Vec::with_capacity(16);
-    std::fs::File::open(path)?.take(16).read_to_end(&mut head)?;
+    let mut head = Vec::new();
+    std::fs::File::open(path)?.take(len).read_to_end(&mut head)?;
     Ok(head)
 }
 
@@ -2822,6 +2906,42 @@ pub(crate) fn save_state_label(doc: &Document) -> String {
 /// be a large one.
 pub(crate) fn now() -> OffsetDateTime {
     OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc())
+}
+
+/// A file's name for the status bar, or its whole path if it has none.
+fn file_label(path: &Path) -> String {
+    path.file_name().map_or_else(
+        || path.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    )
+}
+
+/// The question decision 15 asks before an unlock above four times the
+/// default cost. One line, with the numbers the user is being asked to
+/// accept: memory, passes and a pessimistic time.
+pub(crate) fn unlock_cost_question(
+    memory_kib: u32,
+    iterations: u32,
+    estimate: std::time::Duration,
+) -> String {
+    let memory = if memory_kib.is_multiple_of(1024) {
+        format!("{} MiB", memory_kib / 1024)
+    } else {
+        format!("{:.1} MiB", f64::from(memory_kib) / 1024.0)
+    };
+    let passes = if iterations == 1 { "pass" } else { "passes" };
+    let seconds = estimate.as_secs_f64();
+    // Tenths only while they mean something: "about 0.4 s" is useful, "about
+    // 12.3 s" is false precision about an estimate.
+    let time = if seconds < 10.0 {
+        format!("{seconds:.1} s")
+    } else {
+        format!("{seconds:.0} s")
+    };
+    format!(
+        "This file asks for an unusually expensive unlock ({memory}, {iterations} {passes}, \
+         about {time}). Open it anyway?"
+    )
 }
 
 /// When the document at `path` was created, for naming (release plan M1-15).
@@ -4221,7 +4341,11 @@ mod tests {
 
         let asking = state.open_many(vec![plain.clone(), missing, one, two]);
 
-        assert!(asking, "the first encrypted file should ask");
+        assert_eq!(
+            asking,
+            Opening::Passphrase,
+            "the first encrypted file should ask"
+        );
         assert!(
             state
                 .workspace
@@ -5735,8 +5859,9 @@ mod tests {
         );
 
         let mut reader = AppState::new();
-        assert!(
+        assert_eq!(
             reader.open_maybe_encrypted(target.clone()),
+            Opening::Passphrase,
             "an encrypted file asks for a passphrase"
         );
         assert!(!answer(&mut reader, "hunter2"), "and then opens");
@@ -5756,7 +5881,7 @@ mod tests {
 
         let mut state = AppState::new();
         let before = state.workspace.len();
-        assert!(state.open_maybe_encrypted(target));
+        assert_eq!(state.open_maybe_encrypted(target), Opening::Passphrase);
 
         assert_eq!(state.workspace.len(), before, "no tab was opened");
     }
@@ -5811,6 +5936,149 @@ mod tests {
         );
     }
 
+    // --- decision 15: an expensive unlock asks first ----------------------
+
+    /// A `.bpadx` sealed cheaply, then its declared cost rewritten. It no
+    /// longer authenticates, which does not matter to anything that refuses
+    /// it before deriving -- the thing under test.
+    fn declaring_cost(path: &Path, memory_kib: u32, iterations: u32) {
+        let cheap = bp_crypto::SealOptions {
+            kdf: bp_crypto::KdfParams {
+                memory_kib: 8,
+                iterations: 1,
+                lanes: 1,
+            },
+            ..bp_crypto::SealOptions::default()
+        };
+        let mut bytes = bp_crypto::seal(b"secret", "hunter2", cheap).unwrap();
+        // magic 6 + version 2 + suite 1 + kdf id 1 = 10.
+        bytes[10..14].copy_from_slice(&memory_kib.to_le_bytes());
+        bytes[14..18].copy_from_slice(&iterations.to_le_bytes());
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn the_expensive_unlock_question_names_memory_passes_and_time() {
+        assert_eq!(
+            unlock_cost_question(256 * 1024, 8, std::time::Duration::from_secs(4)),
+            "This file asks for an unusually expensive unlock (256 MiB, 8 passes, \
+             about 4.0 s). Open it anyway?"
+        );
+        assert_eq!(
+            unlock_cost_question(77_825, 1, std::time::Duration::from_millis(148)),
+            "This file asks for an unusually expensive unlock (76.0 MiB, 1 pass, \
+             about 0.1 s). Open it anyway?"
+        );
+    }
+
+    #[test]
+    fn an_expensive_file_asks_before_the_passphrase_bar_and_opens_once_agreed() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("strong.bpadx");
+        // The cheapest cost that asks: just over four times the default's
+        // memory, at one pass.
+        let options = bp_crypto::SealOptions {
+            kdf: bp_crypto::KdfParams {
+                memory_kib: 4 * 19 * 1024 + 1,
+                iterations: 1,
+                lanes: 1,
+            },
+            ..bp_crypto::SealOptions::default()
+        };
+        std::fs::write(
+            &target,
+            bp_crypto::seal(b"strong secret", "hunter2", options).unwrap(),
+        )
+        .unwrap();
+        let mut state = AppState::new();
+        let before = state.workspace.len();
+
+        let Opening::Expensive { path, question } = state.open_maybe_encrypted(target.clone())
+        else {
+            unreachable!("an expensive file must ask first");
+        };
+        assert!(question.starts_with("This file asks for an unusually expensive unlock"));
+        assert!(question.contains("76.0 MiB, 1 pass"), "{question}");
+        assert_eq!(state.ask, None, "the passphrase bar waits for the answer");
+
+        state.answer_unlock_cost(path, true);
+        assert_eq!(
+            state.ask,
+            Some(crate::passphrase::Ask::Unlock {
+                path: target,
+                agreed_cost: true,
+            })
+        );
+        assert!(!answer(&mut state, "hunter2"), "the bar closes on success");
+        assert_eq!(state.workspace.len(), before + 1);
+        assert_eq!(state.active_text(), "strong secret");
+    }
+
+    #[test]
+    fn declining_an_expensive_unlock_opens_nothing_and_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("strong.bpadx");
+        declaring_cost(
+            &target,
+            bp_crypto::MAX_MEMORY_KIB,
+            bp_crypto::MAX_ITERATIONS,
+        );
+        let mut state = AppState::new();
+        let before = state.workspace.len();
+
+        let Opening::Expensive { path, .. } = state.open_maybe_encrypted(target) else {
+            unreachable!("at the ceiling, a file asks first");
+        };
+        state.answer_unlock_cost(path, false);
+
+        assert_eq!(state.ask, None);
+        assert_eq!(state.workspace.len(), before);
+        assert_eq!(state.error.as_deref(), Some("strong.bpadx was not opened"));
+    }
+
+    #[test]
+    fn a_file_past_the_cost_ceiling_is_refused_in_the_status_bar_without_asking() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("hostile.bpadx");
+        declaring_cost(&target, 512 * 1024, 1);
+        let mut state = AppState::new();
+
+        assert_eq!(state.open_maybe_encrypted(target), Opening::Done);
+
+        assert_eq!(state.ask, None, "nothing to type a passphrase into");
+        let error = state.error.clone().unwrap_or_default();
+        assert!(error.starts_with("hostile.bpadx: "), "{error}");
+        assert!(
+            error.contains("256 MiB"),
+            "the reason names the ceiling: {error}"
+        );
+    }
+
+    #[test]
+    fn a_file_made_expensive_after_it_was_asked_about_is_refused_not_paid() {
+        // The bar asked without the agreement; the file is then replaced by
+        // one at the ceiling. Unlocking must not pay four seconds for it.
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("notes.bpadx");
+        declaring_cost(&target, 8, 1);
+        let mut state = AppState::new();
+        assert_eq!(
+            state.open_maybe_encrypted(target.clone()),
+            Opening::Passphrase
+        );
+        declaring_cost(
+            &target,
+            bp_crypto::MAX_MEMORY_KIB,
+            bp_crypto::MAX_ITERATIONS,
+        );
+
+        let started = std::time::Instant::now();
+        assert!(!answer(&mut state, "hunter2"), "the bar closes");
+        assert!(started.elapsed() < std::time::Duration::from_millis(50));
+        let error = state.error.clone().unwrap_or_default();
+        assert!(error.contains("unusually expensive unlock"), "{error}");
+    }
+
     #[test]
     fn a_plain_document_is_opened_without_asking_for_anything() {
         let dir = tempfile::tempdir().unwrap();
@@ -5818,8 +6086,9 @@ mod tests {
         std::fs::write(&plain, "ordinary text").unwrap();
 
         let mut state = AppState::new();
-        assert!(
-            !state.open_maybe_encrypted(plain),
+        assert_eq!(
+            state.open_maybe_encrypted(plain),
+            Opening::Done,
             "a plain file must not prompt"
         );
         assert_eq!(state.active_text(), "ordinary text");

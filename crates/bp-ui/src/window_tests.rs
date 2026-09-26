@@ -573,6 +573,83 @@ fn a_long_body_pages_from_the_keyboard_and_starts_at_the_top_each_time() {
     );
 }
 
+/// A `.bpadx` whose header asks for the ceiling's cost, and the state that
+/// was asked to open it (decision 15).
+fn opening_an_expensive_file() -> (
+    tempfile::TempDir,
+    Rc<std::cell::RefCell<crate::state::AppState>>,
+    crate::state::Opening,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("strong.bpadx");
+    let cheap = bp_crypto::SealOptions {
+        kdf: bp_crypto::KdfParams {
+            memory_kib: 8,
+            iterations: 1,
+            lanes: 1,
+        },
+        ..bp_crypto::SealOptions::default()
+    };
+    let mut bytes = bp_crypto::seal(b"secret", "hunter2", cheap).unwrap();
+    bytes[10..14].copy_from_slice(&bp_crypto::MAX_MEMORY_KIB.to_le_bytes());
+    bytes[14..18].copy_from_slice(&bp_crypto::MAX_ITERATIONS.to_le_bytes());
+    std::fs::write(&path, bytes).unwrap();
+    let mut state = crate::state::AppState::new();
+    let opening = state.open_maybe_encrypted(path);
+    (dir, Rc::new(std::cell::RefCell::new(state)), opening)
+}
+
+#[test]
+fn an_expensive_unlock_asks_in_the_sheet_and_a_yes_brings_up_the_passphrase_bar() {
+    let ui = window();
+    answer_through_dialog(&ui);
+    let (_dir, cell, opening) = opening_an_expensive_file();
+
+    crate::dispatch::ask_to_unlock(&ui, &cell, opening);
+
+    assert!(
+        ui.get_dialog_open(),
+        "an expensive unlock opened without asking"
+    );
+    assert_eq!(buttons(&ui), ["Open Anyway", "Cancel"]);
+    assert_eq!(
+        ui.get_dialog_body().as_str(),
+        "This file asks for an unusually expensive unlock (256 MiB, 8 passes, \
+         about 4.0 s). Open it anyway?"
+    );
+    assert!(!ui.get_passphrase_open(), "the bar waits for the answer");
+
+    press(&ui, Key::Return);
+
+    assert!(!ui.get_dialog_open());
+    assert!(ui.get_passphrase_open(), "a yes asks for the passphrase");
+    assert!(matches!(
+        cell.borrow().ask,
+        Some(crate::passphrase::Ask::Unlock {
+            agreed_cost: true,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn cancelling_an_expensive_unlock_asks_for_no_passphrase() {
+    let ui = window();
+    answer_through_dialog(&ui);
+    let (_dir, cell, opening) = opening_an_expensive_file();
+
+    crate::dispatch::ask_to_unlock(&ui, &cell, opening);
+    press(&ui, Key::Escape);
+
+    assert!(!ui.get_dialog_open());
+    assert!(!ui.get_passphrase_open());
+    assert_eq!(cell.borrow().ask, None);
+    assert_eq!(
+        cell.borrow().error.as_deref(),
+        Some("strong.bpadx was not opened")
+    );
+}
+
 #[test]
 fn a_save_windows_1252_cannot_hold_offers_utf8_and_saves_it_there() {
     let ui = window();

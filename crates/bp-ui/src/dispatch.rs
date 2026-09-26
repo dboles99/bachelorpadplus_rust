@@ -13,7 +13,7 @@ use bp_platform::editor::{Consent, InstallRefusal, RegistrationPlan};
 use bp_theme::ThemeId;
 
 use crate::menus::{self, action};
-use crate::state::{AppState, NoteOutcome, PushText, secret_scan_report};
+use crate::state::{AppState, NoteOutcome, Opening, PushText, secret_scan_report};
 use crate::{AppWindow, dialog, set_os_clipboard};
 
 const SHORTCUTS: &str = "\
@@ -277,6 +277,43 @@ pub(crate) fn confirm_replace(
     });
 }
 
+/// Put up whatever question opening an encrypted file needs.
+///
+/// An ordinary one goes straight to the passphrase bar. One whose header asks
+/// for an unusually expensive unlock asks first, in the sheet, as every other
+/// consent does (decision 15); the bar comes up only on a yes, so nobody types
+/// a passphrase for a file they then decline to pay for.
+pub(crate) fn ask_to_unlock(ui: &AppWindow, state: &Rc<RefCell<AppState>>, opening: Opening) {
+    use crate::refresh;
+
+    match opening {
+        Opening::Done => refresh(ui, &mut state.borrow_mut(), PushText::Yes),
+        Opening::Passphrase => {
+            // Refreshed first, so the bar shows this question's prompt.
+            refresh(ui, &mut state.borrow_mut(), PushText::Yes);
+            ui.invoke_focus_passphrase();
+        }
+        Opening::Expensive { path, question } => {
+            // Whatever the other files reported shows behind the question.
+            refresh(ui, &mut state.borrow_mut(), PushText::Yes);
+            let cell = Rc::clone(state);
+            dialog::confirm(
+                ui,
+                "Expensive unlock",
+                question,
+                "Open Anyway",
+                move |ui, go| {
+                    cell.borrow_mut().answer_unlock_cost(path, go);
+                    refresh(ui, &mut cell.borrow_mut(), PushText::No);
+                    if go {
+                        ui.invoke_focus_passphrase();
+                    }
+                },
+            );
+        }
+    }
+}
+
 /// Select a character range in the editor.
 ///
 /// Under the custom surface we own the selection, so this sets it and asks
@@ -351,11 +388,9 @@ pub fn handle_menu_action(
             // An encrypted file does not become a tab until it is unlocked:
             // a tab nobody can read looks like an empty document, and saving
             // it would write emptiness over the real one.
-            let asking = state.borrow_mut().open_many(chosen);
-            if asking {
-                // Refreshed first, so the bar shows this question's prompt.
-                refresh(ui, &mut state.borrow_mut(), PushText::Yes);
-                ui.invoke_focus_passphrase();
+            let opening = state.borrow_mut().open_many(chosen);
+            if opening != Opening::Done {
+                ask_to_unlock(ui, state, opening);
                 return None;
             }
         }

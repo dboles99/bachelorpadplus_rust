@@ -354,6 +354,14 @@ the tab only once it is unlocked. A wrong passphrase and a damaged file give
 the same message: the format cannot tell them apart. Escape abandons the
 entry.
 
+A `.bpadx` file records how much work unlocking it takes. If it asks for
+more than four times what this editor writes, you are asked first ("This
+file asks for an unusually expensive unlock ... Open it anyway?") and the
+passphrase bar comes up only if you choose **Open Anyway**. A file asking
+for more than 256 MiB of memory or more than 8 passes is refused, with the
+reason in the status bar: no document this editor writes needs that, and a
+damaged or hostile file could otherwise keep it busy for a long time.
+
 Things to know:
 
 - **Forgetting the passphrase loses the document.** There is no recovery.

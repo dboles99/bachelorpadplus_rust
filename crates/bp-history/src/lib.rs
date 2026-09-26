@@ -857,6 +857,12 @@ impl Journal {
                 .iter()
                 .filter_map(|place| {
                     let bytes = std::fs::read(place.files.join(&name)).ok()?;
+                    // `open`, never `open_confirmed`: a checkpoint is sealed
+                    // here at the default cost, so one declaring more than
+                    // four times it (decision 15) has been edited, and is
+                    // refused before anything is derived rather than asked
+                    // about. Nobody should be asked to agree to the cost of
+                    // a file they did not open.
                     let plain = bp_crypto::open(&bytes, passphrase).ok()?;
                     serde_json::from_slice::<Checkpoint>(&plain).ok()
                 })
@@ -1116,6 +1122,8 @@ fn seal(checkpoint: &Checkpoint, passphrase: &str, name: String) -> Outcome {
     let sealed = serde_json::to_vec(checkpoint)
         .map_err(invalid_data)
         .and_then(|json| {
+            // The default cost, always: it is what lets `sealed_pending` read
+            // with `bp_crypto::open`, which never asks the user anything.
             bp_crypto::seal(&json, passphrase, bp_crypto::SealOptions::default())
                 .map_err(|e| invalid_data(e.to_string()))
         });
@@ -2078,6 +2086,75 @@ mod tests {
             .unwrap();
 
         assert_eq!(journal.sealed_pending(&path, "wrong"), None);
+    }
+
+    /// Every sealed checkpoint file under `journal`'s directory.
+    fn sealed_files(journal: &Journal) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        let mut dirs = vec![journal.location().to_path_buf()];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    dirs.push(path);
+                } else if is_sealed_file(&path) {
+                    found.push(path);
+                }
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn a_sealed_checkpoint_is_written_at_a_cost_that_never_needs_confirmation() {
+        // Decision 15 asks the user before an unlock above four times the
+        // default cost. The journal cannot ask, so what it writes must never
+        // be that expensive.
+        let (_dir, journal) = journal();
+        journal
+            .checkpoint(1, &checkpoint("secret"), Recovery::Encrypted, Some("k"))
+            .unwrap();
+
+        let files = sealed_files(&journal);
+        assert_eq!(files.len(), 1);
+        let bytes = std::fs::read(&files[0]).unwrap();
+        assert_eq!(
+            bp_crypto::declared_cost(&bytes),
+            Ok(bp_crypto::KdfParams::default())
+        );
+        assert_eq!(
+            bp_crypto::unlock_cost(&bytes),
+            Ok(bp_crypto::UnlockCost::Normal)
+        );
+    }
+
+    #[test]
+    fn a_sealed_checkpoint_whose_cost_was_raised_is_refused_rather_than_asked_about() {
+        let (_dir, journal) = journal();
+        let entry = checkpoint("secret");
+        let path = entry.path.clone().unwrap();
+        journal
+            .checkpoint(1, &entry, Recovery::Encrypted, Some("hunter2"))
+            .unwrap();
+
+        // Within the ceiling, so the shell would ask about it for a document;
+        // four seconds of derivation, so a refusal inside milliseconds shows
+        // none of it was paid.
+        for file in sealed_files(&journal) {
+            let mut bytes = std::fs::read(&file).unwrap();
+            // magic 6 + version 2 + suite 1 + kdf id 1 = 10.
+            bytes[10..14].copy_from_slice(&bp_crypto::MAX_MEMORY_KIB.to_le_bytes());
+            bytes[14..18].copy_from_slice(&bp_crypto::MAX_ITERATIONS.to_le_bytes());
+            std::fs::write(&file, bytes).unwrap();
+        }
+
+        let started = std::time::Instant::now();
+        assert_eq!(journal.sealed_pending(&path, "hunter2"), None);
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_millis(50),
+            "the raised cost was paid: {elapsed:?}"
+        );
     }
 
     #[test]

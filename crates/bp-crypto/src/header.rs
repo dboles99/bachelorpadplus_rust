@@ -7,7 +7,9 @@
 //!
 //! * every field is range-checked on the way in, and the checks are the point
 //!   rather than defensive decoration -- a stored Argon2id cost of 64 GiB is a
-//!   denial-of-service, not a strong document;
+//!   denial-of-service, not a strong document, and even an allowed cost above
+//!   four times the default is paid only once the user has agreed to it
+//!   (decision 15);
 //! * the header's own bytes are authenticated later, as additional data on
 //!   every chunk (ADR-0021), so an edit to any field below makes the whole
 //!   document fail to open rather than silently changing how it is read.
@@ -64,22 +66,81 @@ impl Default for KdfParams {
     }
 }
 
+/// The most memory a document may ask a reader to spend: 256 MiB (decision
+/// 15, ADR-0021 as amended 2026-09-26).
+///
+/// Thirteen times the default. Room for a writer that deliberately chose a
+/// stronger cost, and small enough that no ordinary machine is pushed into
+/// swap by a file it has not yet authenticated.
+pub const MAX_MEMORY_KIB: u32 = 256 * 1024;
+
+/// The most Argon2 passes a document may ask for (decision 15).
+///
+/// With [`MAX_MEMORY_KIB`] this caps the worst file at 2 GiB-passes, a few
+/// seconds, where the old ceiling of 1 GiB at 64 passes was over a minute.
+pub const MAX_ITERATIONS: u32 = 8;
+
+/// The most lanes a document may declare.
+///
+/// Not a cost bound. This implementation fills the lanes one after another,
+/// so they add no work -- total memory and passes are what cost time. Lanes
+/// are capped only because a value nobody would write is a sign of damage:
+/// RFC 9106's recommendations use 4, and 16 leaves room for a future writer
+/// on a many-core machine without accepting the thousands the field can
+/// hold.
+pub const MAX_LANES: u32 = 16;
+
+/// How many times the default's cost a document may ask for before the user
+/// is asked first (decision 15).
+const CONFIRM_ABOVE: u64 = 4;
+
+/// The derivation rate the time estimate assumes, in KiB-passes per second.
+///
+/// 512 MiB-passes per second. ADR-0021's 50-100 ms for the default's 38
+/// MiB-passes is 380-760; the measurement behind decision 15 (1 GiB at 64
+/// passes in about 75 s) is nearer 870. The slow end is taken so "about N
+/// seconds" errs long: a user told two seconds who waits one is not misled.
+const ASSUMED_KIB_PASSES_PER_SECOND: u64 = 512 * 1024;
+
+/// What opening a document will cost, read from its header before anything
+/// is derived.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnlockCost {
+    /// Within four times the default. Open it without asking.
+    Normal,
+    /// Allowed, but expensive enough that the user should agree first.
+    /// [`crate::open`] refuses these; [`crate::open_confirmed`] is the path
+    /// for after they have.
+    NeedsConfirmation {
+        memory_kib: u32,
+        iterations: u32,
+        /// How long the derivation will take, pessimistically. See
+        /// [`ASSUMED_KIB_PASSES_PER_SECOND`].
+        estimate: std::time::Duration,
+    },
+    /// Past the hard ceiling, or below what Argon2 can run at all. Never
+    /// attempted, whoever agrees. The error names the reason.
+    Refused(CryptoError),
+}
+
 impl KdfParams {
     /// Refuse costs that would be an attack on the reader rather than a
     /// strong document.
     ///
-    /// The upper bounds are generous -- a legitimate document may well be
-    /// stronger than the baseline -- but finite. A file asking for 64 GiB is
-    /// not a document anyone wrote.
+    /// The ceilings are decision 15's, and they are what a reader will pay
+    /// for a file it has not authenticated, which is why they are far below
+    /// what Argon2 itself accepts.
     pub(crate) fn validate(self) -> Result<(), CryptoError> {
         // Argon2's own minimum is 8 KiB per lane; below that it refuses
         // anyway, and refusing here names the reason.
-        let sane = self.memory_kib >= 8
-            && self.memory_kib <= 1024 * 1024
+        // Lanes first: the memory minimum multiplies by them, and a bounded
+        // lane count is what keeps that product from overflowing.
+        let sane = self.lanes >= 1
+            && self.lanes <= MAX_LANES
+            && self.memory_kib >= 8 * self.lanes
+            && self.memory_kib <= MAX_MEMORY_KIB
             && self.iterations >= 1
-            && self.iterations <= 64
-            && self.lanes >= 1
-            && self.lanes <= 64;
+            && self.iterations <= MAX_ITERATIONS;
 
         if sane {
             Ok(())
@@ -89,6 +150,46 @@ impl KdfParams {
                 iterations: self.iterations,
                 lanes: self.lanes,
             })
+        }
+    }
+
+    /// Argon2id's work, in KiB-passes: every pass fills the whole memory
+    /// once, so time grows with the product of the two. Lanes are left out
+    /// because this implementation runs them in sequence, over the same
+    /// total memory.
+    fn work(self) -> u64 {
+        u64::from(self.memory_kib) * u64::from(self.iterations)
+    }
+
+    /// Whether opening a document at this cost needs the user's agreement.
+    ///
+    /// "Above four times the default" is measured two ways, and either is
+    /// enough: the work (memory x passes, which is what the user waits for)
+    /// and the memory alone (which is what a small machine runs out of). A
+    /// file at 150 MiB and one pass is quick enough to pass the first test
+    /// and still asks for eight times the default's memory.
+    ///
+    /// Exactly four times is still normal. The threshold is "above".
+    pub(crate) fn needs_confirmation(self) -> bool {
+        let default = Self::default();
+        self.work() > CONFIRM_ABOVE * default.work()
+            || u64::from(self.memory_kib) > CONFIRM_ABOVE * u64::from(default.memory_kib)
+    }
+
+    /// Classify this cost, without deriving anything (decision 15).
+    #[must_use]
+    pub fn unlock_cost(self) -> UnlockCost {
+        if let Err(refused) = self.validate() {
+            return UnlockCost::Refused(refused);
+        }
+        if !self.needs_confirmation() {
+            return UnlockCost::Normal;
+        }
+        let millis = self.work().saturating_mul(1000) / ASSUMED_KIB_PASSES_PER_SECOND;
+        UnlockCost::NeedsConfirmation {
+            memory_kib: self.memory_kib,
+            iterations: self.iterations,
+            estimate: std::time::Duration::from_millis(millis),
         }
     }
 }
@@ -141,7 +242,21 @@ impl Header {
     /// nothing they can act on, and the difference between "this is not a
     /// BachelorPad+ document" and "this was written by a newer version"
     /// decides what they do next.
+    ///
+    /// The declared cost is checked against the ceiling here, so nothing that
+    /// parses can make a reader derive past it.
     pub(crate) fn parse(bytes: &[u8]) -> Result<(Self, usize), CryptoError> {
+        let (header, len) = Self::parse_declared(bytes)?;
+        header.kdf.validate()?;
+        Ok((header, len))
+    }
+
+    /// Parse every field and check all but the KDF cost, which is returned
+    /// as declared.
+    ///
+    /// For [`crate::unlock_cost`], which has to be able to say "refused, and
+    /// here is why" about a cost [`Self::parse`] would reject outright.
+    pub(crate) fn parse_declared(bytes: &[u8]) -> Result<(Self, usize), CryptoError> {
         let mut at = 0usize;
 
         let magic = take(bytes, &mut at, MAGIC.len())?;
@@ -169,7 +284,6 @@ impl Header {
             iterations: u32::from_le_bytes(take_array::<4>(bytes, &mut at)?),
             lanes: u32::from_le_bytes(take_array::<4>(bytes, &mut at)?),
         };
-        kdf.validate()?;
 
         let salt = take_array::<SALT_LEN>(bytes, &mut at)?;
 

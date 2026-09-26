@@ -30,7 +30,12 @@ pub(crate) enum Ask {
     /// A `.bpadx` file was opened and needs its passphrase before it can
     /// become a tab. The path is held here rather than opened first, because
     /// a document nobody can read should not appear as an empty tab.
-    Unlock(PathBuf),
+    ///
+    /// `agreed_cost` records that the user agreed to an unusually expensive
+    /// unlock (decision 15). It travels with the question for the reason
+    /// [`Ask::Confirm`]'s first entry does: it cannot outlive it, so an
+    /// agreement about one file is never applied to the next.
+    Unlock { path: PathBuf, agreed_cost: bool },
     /// Encrypting the active document: the first of two entries.
     Set { id: DocumentId, target: PathBuf },
     /// The second entry, compared against the first.
@@ -62,7 +67,7 @@ impl Ask {
     /// The words on the bar.
     pub(crate) fn prompt(&self) -> &'static str {
         match self {
-            Self::Unlock(_) => "Passphrase",
+            Self::Unlock { .. } => "Passphrase",
             Self::Set { .. } => "New passphrase",
             // Named differently on purpose. "Passphrase" twice gives no sign
             // that the first entry was accepted, and a user who thinks the
@@ -76,7 +81,7 @@ impl Ask {
 
     pub(crate) fn action(&self) -> &'static str {
         match self {
-            Self::Unlock(_) => "Unlock",
+            Self::Unlock { .. } => "Unlock",
             Self::Set { .. } => "Next",
             Self::Confirm { .. } => "Encrypt",
             Self::Sign { .. } => "Sign",
@@ -122,10 +127,11 @@ mod tests {
     fn unlocking_and_setting_do_not_look_the_same() {
         // The two have opposite consequences for a typo, so they must not be
         // mistakable for each other.
-        assert_ne!(
-            Ask::Unlock(PathBuf::from("/a.bpadx")).prompt(),
-            set().prompt()
-        );
-        assert_eq!(Ask::Unlock(PathBuf::from("/a.bpadx")).action(), "Unlock");
+        let unlock = Ask::Unlock {
+            path: PathBuf::from("/a.bpadx"),
+            agreed_cost: false,
+        };
+        assert_ne!(unlock.prompt(), set().prompt());
+        assert_eq!(unlock.action(), "Unlock");
     }
 }

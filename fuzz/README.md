@@ -260,14 +260,14 @@ Corpus: `files/utf8-bom-then-zwnbsp.bin`.
 
 ### A document's declared KDF cost is paid before anything is authenticated
 
-`bp-crypto`. `open` parses the header, derives a key at the cost the header
+`bp-crypto`. Opening parses the header, derives a key at the cost the header
 declares, and only then checks a tag. It cannot be otherwise — a tag check
 needs a key — but it means the cost written in an **unauthenticated** header
 is paid in full before the reader can say the document is rubbish. A single
 flipped bit in the cost field of a real document is enough.
 
-`KdfParams::validate` is the bound, and it is doing its job: 4 GiB is refused
-in microseconds. Measured on this machine (release, `--ignored`):
+`KdfParams::validate` is the bound. Measured on this machine (release,
+`--ignored`) before decision 15, when the ceiling was 1 GiB × 64 passes:
 
 ```text
 declared cost       8 KiB ->   46.5µs to refuse
@@ -281,13 +281,15 @@ declared cost 1048576 KiB ->     2.1s to refuse
 declared cost 4 GiB -> refused immediately
 ```
 
-The ceiling `validate` permits is 1 GiB × 64 passes × 64 lanes. Argon2's time
-is linear in passes, so that corner is roughly **75 seconds and a gigabyte of
-resident memory per attempt**, on an unauthenticated header, before the user
-is told the file is damaged. That is a bound rather than an unbounded
-denial-of-service, which is what ADR-0021 set out to achieve, and it is
-written down here because "generous but finite" is easier to review with the
-number attached. Test:
+That corner was roughly **75 seconds and a gigabyte of resident memory per
+attempt**. Decision 15 (ADR-0021, amended 2026-09-26) closed it in two steps.
+The ceiling is now **256 MiB and 8 passes**, which by the rows above is
+about 2.6 seconds at worst, and anything is refused in microseconds past it.
+And a cost above **four times the default** (by memory, or by memory ×
+passes) is not paid at all by `bp_crypto::open`: the shell asks the user
+first and calls `open_confirmed` only on a yes, and every caller that cannot
+ask — the recovery journal, the audit log, the signing-key store — refuses.
+The test now measures `open_confirmed`, the price of saying yes. Test:
 `envelope::the_declared_kdf_cost_is_paid_before_anything_is_authenticated`.
 
 ### The corpus is hostile to the editor, too
