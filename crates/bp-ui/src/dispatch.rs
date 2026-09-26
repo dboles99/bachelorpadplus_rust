@@ -34,6 +34,7 @@ Alt+Up / Down   Move line up / down
 Insert          Overwrite on / off
 Ctrl+,          Settings
 F10             Open the menu bar (arrows, Enter, Esc)
+Shift+F10, Menu The editor's context menu, at the caret
 Alt+F E V I O   File, Edit, View, Insert, Format
 Alt+D N S T H   Data, Note, Security, Tools, Help";
 

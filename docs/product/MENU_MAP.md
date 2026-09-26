@@ -34,8 +34,10 @@ cheapest items in `project/WORK_QUEUE.md`.
 | --- | --- |
 | Undo, Redo, Cut, Copy, Paste, Select All | **live** (both editor views) |
 | Double-click a word, triple-click a line | **live** — native under `TextInput`, `bp_editor::{select_word_at, select_line_at}` under `--editor-view` |
-| Clipboard History | **live** |
+| Clipboard History | **live** — the history **as it was when the menu opened** (U5, release plan M1-18): opening Edit or the editor context menu freezes a snapshot of the history as one fingerprint per entry (`bp_clipboard::Snapshot`), a row's id is a slot in it, and a click acts on the entry the slot names wherever the 1.2 s poll has moved it. An entry that has gone since is reported in the status bar and nothing is done. A copy made while the menu is open appears the next time it opens |
 | Paste transformations | **live** — offered per entry kind, and only where the result would differ |
+| Paste Special... | **live** — a question over what is on the clipboard *now*: each transformation that would change it, then Paste Unchanged and Cancel. The body gives its kind, lines and characters and never a preview, because the clipboard may hold another program's copy |
+| Clear Clipboard History | **live** — forgets the unpinned entries the menu showed and nothing copied since; greyed when everything shown is pinned |
 | Sort / Deduplicate / Reverse / Trim lines | **live** |
 | Duplicate Line, Move Line Up / Down | **live** (Ctrl+D, Alt+Up / Alt+Down) |
 | Go to Line | **live** (Ctrl+G) |
@@ -177,9 +179,10 @@ by a shortcut, so a row cannot be grey and still reachable.
 | --- | --- |
 | New, Open, Open Recent, Save All, Reload, Close Tab, the tab context menu | **live** — Reload reads the file again and keeps the line |
 | Save, Save As, Save as New Revision, Save a Copy | greyed, hint **read-only** |
-| Undo, Redo, Cut, Paste, Select All, clipboard history, the line operations, Insert, Format's line endings and encodings, the Data conversions, Semantic Rename, Encrypt, Redact, Sign | greyed, hint **read-only** |
+| Undo, Redo, Cut, Paste, Paste Special, Select All, clipboard history, the line operations, Insert, Format's line endings and encodings, the Data conversions, Semantic Rename, Encrypt, Redact, Sign | greyed, hint **read-only** |
 | Copy, Word Wrap, Hash, Scan for Secrets, Inspect Metadata, Verify Signature, Document Statistics, the Note extractions, Data Validate / Report / Column Types | greyed, hint **not in the viewer** — each would need the whole file in memory, which the viewer exists not to do |
-| Go to Line, Find bar (Find, Next, Previous), themes, Line Numbers, zoom, indentation settings, profiles, Privacy Mode, Security History, Tools, Help | **live** |
+| Go to Line, Find bar (Find, Next, Previous), themes, Line Numbers, zoom, indentation settings, profiles, Privacy Mode, Security History, Clear Clipboard History, Tools, Help | **live** |
+| The editor context menu | **not shown** — the viewer has no selection to cut or copy and nowhere to paste |
 | Replace All | refused in the find bar ("read-only") |
 
 ## Find bar
@@ -209,6 +212,28 @@ separate event, by which time the pointer has moved.
 | --- | --- |
 | Close Tab, Close Other Tabs, Close All Tabs | **live** — each goes through the same unsaved-changes prompt as closing one |
 | Copy Full Path | **live** — greyed for a document that has never been saved |
+
+## Editor context menu
+
+Right-click in the text, or press the Menu key or Shift+F10 (release plan
+M1-18, locked requirement 11). **live** in both editor views, and not over
+the viewer. A right-click does not move the caret, so Cut and Copy act on
+the selection there already is. The keyboard opens it just below the caret.
+
+| Row | State |
+| --- | --- |
+| Cut, Copy, Paste, Select All | **live** — the same ids as Edit's, so they go to the widget under `TextInput` and to `bp-editor` under `--editor-view` |
+| Paste Special... | **live** — as in Edit |
+| Clipboard History ▸ | **live** — Edit's clipboard rows and transformations, built by the same function from the same snapshot, with the entry's kind in the label because a context menu has no hint column |
+| Pin ▸ | **live** — one row per entry shown, ticked when pinned; choosing one pins or unpins that entry, found by its fingerprint (U5) |
+| Clear Clipboard History | **live** — as in Edit |
+
+Slint's `ContextMenuArea` opens itself on a right-click that reaches it and
+on the Menu key, and says nothing when it does. Neither view lets it: the
+custom surface's `TouchArea` and the `TextInput` view's `Flickable` both take
+every button, so each view catches the right-click (and both catch the Menu
+key and Shift+F10) and opens the menu through one function that takes the
+clipboard snapshot first.
 
 ## Drag and drop to open
 
