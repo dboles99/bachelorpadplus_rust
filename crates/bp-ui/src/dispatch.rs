@@ -559,7 +559,10 @@ pub fn handle_menu_action(
                 let suggested = pick_save_path(&state.borrow(), id);
                 if let Some(path) = suggested {
                     let path = with_bpadx_extension(path);
-                    state.borrow_mut().ask = Some(crate::passphrase::Ask::Set { id, target: path });
+                    state.borrow_mut().begin_encrypting(id, path);
+                    // Refreshed first, so the bar shows this question's
+                    // prompt and note rather than whatever it last held.
+                    refresh(ui, &mut state.borrow_mut(), PushText::No);
                     ui.invoke_focus_passphrase();
                 }
             }
@@ -592,7 +595,12 @@ pub fn handle_menu_action(
             // or a new one twice when there is no key yet. Refusals (never
             // saved, unsaved changes, nowhere to keep a key) are in the
             // status bar and open nothing.
-            if state.borrow_mut().begin_signing() {
+            let asking = state.borrow_mut().begin_signing();
+            // Refreshed either way: the bar's prompt and note, or the
+            // refusal in the status bar, would otherwise wait for the next
+            // unrelated refresh.
+            refresh(ui, &mut state.borrow_mut(), PushText::No);
+            if asking {
                 ui.invoke_focus_passphrase();
             }
             return None;

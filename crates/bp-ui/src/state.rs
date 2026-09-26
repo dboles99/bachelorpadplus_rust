@@ -2191,6 +2191,15 @@ impl AppState {
         }
     }
 
+    /// Begin Encrypt Document: the passphrase bar asks for a new passphrase
+    /// for `target`, and its first question says the format has not had an
+    /// independent review (release plan decision 20). Only the first: an
+    /// empty entry or a mismatch replaces the sentence with the reason.
+    pub(crate) fn begin_encrypting(&mut self, id: DocumentId, target: PathBuf) {
+        self.ask = Some(crate::passphrase::Ask::Set { id, target });
+        crate::passphrase::UNREVIEWED_FORMAT.clone_into(&mut self.passphrase_status);
+    }
+
     /// Begin Sign Document (release plan M2-10, D5 option c): ask for the
     /// kept key's passphrase, or, with no key yet, for a new one.
     ///
@@ -5484,6 +5493,40 @@ mod tests {
         assert!(!answer(&mut state, "hunter2"), "the bar closes on a match");
         assert!(target.exists(), "and the document is written");
         assert!(state.is_encrypted(id));
+    }
+
+    #[test]
+    fn encrypting_first_says_the_format_has_not_been_reviewed() {
+        // Release plan decision 20: RC1 ships the `.bpadx` envelope without
+        // an independent review, and the first prompt says so in one line.
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = AppState::new();
+        state.edit("secret".to_owned());
+        let id = state.workspace.active_id().unwrap();
+
+        state.begin_encrypting(id, dir.path().join("notes.bpadx"));
+
+        assert!(matches!(
+            state.ask,
+            Some(crate::passphrase::Ask::Set { .. })
+        ));
+        assert_eq!(
+            state.passphrase_status,
+            crate::passphrase::UNREVIEWED_FORMAT
+        );
+        assert!(
+            state.passphrase_status.contains("independent"),
+            "the note names what has not happened; got {}",
+            state.passphrase_status
+        );
+        assert!(
+            !state.passphrase_status.contains('\n') && state.passphrase_status.len() < 80,
+            "a status line, not an essay"
+        );
+
+        // The confirmation is its own question and does not repeat it.
+        assert!(answer(&mut state, "hunter2"));
+        assert!(state.passphrase_status.is_empty());
     }
 
     #[test]

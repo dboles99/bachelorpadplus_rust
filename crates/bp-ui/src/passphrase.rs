@@ -15,6 +15,15 @@ use std::path::PathBuf;
 use bp_core::DocumentId;
 use zeroize::Zeroizing;
 
+/// Said on the bar when Encrypt Document first asks for a passphrase.
+///
+/// Release plan decision 20 (D4, option b): RC1 ships with the `.bpadx`
+/// envelope not yet independently reviewed, and says so where somebody is
+/// about to rely on it as well as in `SECURITY.md`. One short sentence,
+/// because the bar is a status line.
+pub(crate) const UNREVIEWED_FORMAT: &str =
+    "this encryption format has not yet had an independent security review";
+
 /// What the bar is asking.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Ask {
