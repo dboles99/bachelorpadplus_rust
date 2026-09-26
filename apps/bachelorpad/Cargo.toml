@@ -5,6 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
+description = "Text editor for notes, data and logs"
+homepage = "https://github.com/dboles99/bachelorpadplus_rust"
+repository = "https://github.com/dboles99/bachelorpadplus_rust"
 
 [lints]
 workspace = true
@@ -32,3 +35,55 @@ winresource = "0.1"
 # The process tests point the log directory at a temporary one: running the
 # binary must never write into the developer's own state directory.
 tempfile.workspace = true
+
+# The .deb (release plan M3-02), built by packaging/linux/build-packages.sh
+# with `cargo deb --no-build --no-strip` -- not by `cargo deb` alone. The
+# script builds the binary with its symbols, splits them off with objcopy,
+# and leaves the stripped binary and the licences under
+# `target/release/linux-package/`; cargo-deb reads any `target/release/` path
+# from the real target directory. It then checks that this list and the
+# .rpm's install exactly the same files. The version is the workspace's.
+[package.metadata.deb]
+maintainer = "Daniel Boles"
+copyright = "2026 Daniel Boles"
+# Already in Debian's machine-readable format, so cargo-deb installs it as
+# /usr/share/doc/bachelorpad/copyright unchanged.
+license-file = ["../../packaging/linux/copyright", "0"]
+extended-description = """\
+BachelorPad+ is a plain-text editor that starts as fast as Notepad and stays \
+out of the way: open a file, change it, save it. It reads plain text, logs, \
+Markdown, JSON, YAML, TOML, CSV and XML, keeps a recovery journal so unsaved \
+work survives a crash, and can save a document encrypted with a passphrase in \
+its own .bpadx format."""
+section = "editors"
+priority = "optional"
+# `$auto` is dpkg-shlibdeps on the binary: what it links -- libc6 at the
+# version its symbols need, and libfontconfig1, which brings libfreetype6.
+# (cargo-deb drops libgcc-s1, which libc6 itself depends on.) The rest is
+# what it dlopens when the window opens, which no tool can see -- found from
+# the sonames in the binary, see packaging/linux/README.md:
+#   libxkbcommon0, libxkbcommon-x11-0 -- keyboard handling (winit)
+#   libx11-6, libx11-xcb1, libxcb1, libxcursor1, libxi6 -- X11 (winit)
+#   libwayland-client0 -- Wayland (winit)
+#   libdbus-1-3 -- the file dialogs' portal calls (rfd)
+depends = "$auto, libxkbcommon0, libxkbcommon-x11-0, libx11-6, libx11-xcb1, libxcb1, libxcursor1, libxi6, libwayland-client0, libdbus-1-3"
+# File pickers go through the XDG desktop portal, which needs a backend;
+# the GL libraries serve only `--renderer platform` (femtovg), since the
+# default software renderer draws without them.
+recommends = "xdg-desktop-portal-gtk | xdg-desktop-portal-kde | xdg-desktop-portal-gnome, libegl1, libgl1, libwayland-egl1"
+# No maintainer scripts: desktop-file-utils, shared-mime-info and
+# hicolor-icon-theme declare dpkg file triggers on the directories these
+# files go to, and refresh their caches themselves.
+assets = [
+    ["target/release/linux-package/bachelorpad", "usr/bin/", "755"],
+    # M2-16: the short name.
+    { dest = "usr/bin/bpad", link_name = "bachelorpad" },
+    ["../../packaging/linux/io.github.dboles99.BachelorPad.desktop", "usr/share/applications/", "644"],
+    ["../../packaging/linux/io.github.dboles99.BachelorPad.metainfo.xml", "usr/share/metainfo/", "644"],
+    ["../../packaging/linux/io.github.dboles99.BachelorPad.xml", "usr/share/mime/packages/", "644"],
+    # <size>/apps/io.github.dboles99.BachelorPad.{png,svg}, sizes 16 to 512
+    # and scalable, keeping the directory below hicolor/.
+    ["../../assets/icon/hicolor/*/apps/io.github.dboles99.BachelorPad.*", "usr/share/icons/hicolor/", "644"],
+    # LICENSE-MIT, LICENSE-APACHE and, once generated, THIRD-PARTY-NOTICES.
+    ["target/release/linux-package/licenses/*", "usr/share/doc/bachelorpad/", "644"],
+]
