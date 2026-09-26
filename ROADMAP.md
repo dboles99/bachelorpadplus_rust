@@ -2,7 +2,7 @@
 
 This is not an MVP roadmap. Each phase contributes to the full v1 target.
 
-Status as of **2026-09-25**. Three words, meaning three different things:
+Status as of **2026-09-26**. Three words, meaning three different things:
 
 - **Done** — the phase's work is finished.
 - **Started** — a real, tested slice exists *and is reachable from the
@@ -16,7 +16,7 @@ Status as of **2026-09-25**. Three words, meaning three different things:
 | 1 | Foundation and workspace | **Done** | [01-foundation](project/tasks/01-foundation/) | `bp-core`, `bp-config`, `bp-theme`, `bp-ui` |
 | 2 | Core editor | **Started** | [02-core-editor](project/tasks/02-core-editor/) | `bp-buffer`, `bp-editor` |
 | 3 | File safety and recovery | **Done** | [03-file-safety](project/tasks/03-file-safety/) | `bp-files`, `bp-history` |
-| 4 | Large-file engine | **Built, unwired** | [04-large-files](project/tasks/04-large-files/) | `bp-buffer` |
+| 4 | Large-file engine | **Started** (read-only viewer tab, M1-06) | [04-large-files](project/tasks/04-large-files/) | `bp-buffer` |
 | 5 | Format registry and parser framework | **Started** | [05-formats](project/tasks/05-formats/) | `bp-formats` |
 | 6 | Structured formats | **Started** | [05-formats](project/tasks/05-formats/) | `bp-data` |
 | 7 | Search engine | **Started** | [06-search](project/tasks/06-search/) | `bp-search` |
