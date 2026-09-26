@@ -25,7 +25,9 @@ Update what is now untrue. Each of these has been left stale before:
 
 | File | When |
 | --- | --- |
-| `README.md` | user-visible behaviour changed; the crate and test counts; the known-gaps list |
+| `README.md`, `docs/user/GUIDE.md` | user-visible behaviour changed; the known-gaps list |
+| `CONTRIBUTING.md` | the crate and test counts; the current-state table; the detailed known gaps |
+| `CHANGELOG.md` | a user-visible change, under `[Unreleased]` |
 | `ROADMAP.md` | a phase moved between Not started / Started / Built, unwired / Done |
 | `docs/product/MENU_MAP.md` | any menu row changed state |
 | `project/WORK_QUEUE.md` | an item was taken, finished, or turned out to be blocked |

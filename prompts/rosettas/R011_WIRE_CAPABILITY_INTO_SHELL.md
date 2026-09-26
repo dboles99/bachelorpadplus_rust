@@ -129,8 +129,9 @@ From `docs/governance/DEFINITION_OF_DONE.md`, the parts that apply here:
   says)
 - a user-visible error state exists — an operation that can fail says so in
   the status bar rather than doing nothing
-- documentation updated: `README.md`'s current-state table if it is
-  user-visible, `ROADMAP.md` if it moves a phase
+- documentation updated: `CONTRIBUTING.md`'s current-state table, and
+  `README.md` and `docs/user/GUIDE.md` if it is user-visible, `ROADMAP.md`
+  if it moves a phase
 - an ADR if the decision has consequences beyond one file
 
 ## The gate
