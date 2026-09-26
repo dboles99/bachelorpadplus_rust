@@ -143,8 +143,12 @@ unproven. The honest list:
   command line.
 - **Each file opened from your file manager opens a new window.** There is
   no hand-off to a window that is already running.
-- **Find in Files can land on the wrong line** in a file that uses a bare
-  carriage return (old Mac style) as a line break.
+- **The default editor view draws line breaks as its toolkit does.** A line
+  ends at LF, CRLF or a bare carriage return, and nothing else, for line
+  numbers, Go to Line, Find and Find in Files. The toolkit behind the default
+  view may still draw a form feed or a Unicode line separator as a new line,
+  which the line numbers do not count. The custom editor view draws the lines
+  that are counted.
 - **Some profiles mean no crash recovery.** Under Private or Confidential, a
   document that is not encrypted has no recovery journal, because the journal
   would have to be sealed with the document's passphrase. Under Maximum, and

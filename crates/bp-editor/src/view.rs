@@ -90,10 +90,11 @@ pub struct Span {
     pub columns: Range<usize>,
 }
 
-/// Strip the line break from a line read out of the buffer.
+/// Strip the line break from a line read out of the buffer: LF, CRLF or a
+/// bare CR (decision D6). Stripping only LF and CRLF drew a bare CR's line
+/// with the CR still on the end.
 fn content(line: &str) -> &str {
-    line.strip_suffix('\n')
-        .map_or(line, |l| l.strip_suffix('\r').unwrap_or(l))
+    bp_buffer::breaks::strip(line)
 }
 
 /// Where the character at `char_column` appears, in visual columns.

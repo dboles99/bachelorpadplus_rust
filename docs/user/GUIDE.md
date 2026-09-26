@@ -201,8 +201,11 @@ sessions.
   matches.
 - Escape, or **×**, closes the bar.
 
-Find in Files can place the caret on the wrong line in a file that uses a
-bare carriage return (old Mac style) as a line break. This is a known gap.
+A line ends at a line feed, a carriage return and line feed, or a bare
+carriage return (old Mac style), and nothing else, as in Notepad. Line
+numbers in the status bar, Go to Line, Find and Find in Files all count
+lines this way. A form feed or a Unicode line separator does not start a new
+line, although the default view may draw one as if it did.
 
 ## Clipboard history and privacy
 

@@ -961,13 +961,14 @@ impl Editor {
         (first, last)
     }
 
-    /// Length of the line break starting at `at`: 0, 1 for `\n`, or 2 for
-    /// `\r\n`. Mirrors the pairing `Buffer::line_len_chars` strips, so the
-    /// two never disagree about where a line actually ends.
+    /// Length of the line break starting at `at`: 0, 1 for `\n` or a bare
+    /// `\r`, or 2 for `\r\n` (decision D6). Mirrors what
+    /// `Buffer::line_len_chars` strips, so the two never disagree about where
+    /// a line actually ends.
     fn line_break_len(&self, at: usize) -> usize {
         match (self.buffer.char_at(at), self.buffer.char_at(at + 1)) {
             (Some('\r'), Some('\n')) => 2,
-            (Some('\n'), _) => 1,
+            (Some('\n' | '\r'), _) => 1,
             _ => 0,
         }
     }
@@ -1550,6 +1551,24 @@ mod tests {
         e.set_cursor(0);
         e.move_caret(Motion::LineEnd, false);
         assert_eq!(e.cursor(), 2, "on the newline would put it on line 2");
+    }
+
+    #[test]
+    fn a_bare_cr_ends_a_line_for_the_caret_and_a_form_feed_does_not() {
+        // Decision D6. End stops before the CR, the next line starts after
+        // it, and moving a line carries its CR with its slot.
+        let mut e = Editor::new("ab\rcd\x0Cef");
+        e.set_cursor(0);
+        e.move_caret(Motion::LineEnd, false);
+        assert_eq!(e.cursor(), 2, "on the CR would put it on line 2");
+        assert!(e.go_to_line(2));
+        assert_eq!(e.cursor(), 3);
+        assert_eq!(e.position(), Position::new(2, 1));
+        e.move_caret(Motion::LineEnd, false);
+        assert_eq!(e.cursor(), 8, "the form feed is content, not a break");
+
+        e.move_line_up();
+        assert_eq!(e.text(), "cd\x0Cef\rab");
     }
 
     #[test]

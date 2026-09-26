@@ -54,7 +54,7 @@ pub struct Heading {
 pub fn suggest_title(text: &str) -> Option<String> {
     let from_heading = outline(text).into_iter().next().map(|h| h.text);
     let candidate = from_heading.or_else(|| {
-        text.lines()
+        lines(text)
             .map(str::trim)
             .find(|l| !l.is_empty())
             .map(clean_line)
@@ -62,6 +62,33 @@ pub fn suggest_title(text: &str) -> Option<String> {
 
     let title = tidy(&candidate);
     (!title.is_empty()).then_some(title)
+}
+
+/// The lines of `text` without their breaks, on the editor's rule (decision
+/// D6): a line ends at LF, CRLF or a bare CR, and nothing else. Shaped like
+/// `str::lines`, which does not end a line at a bare CR: nothing for the
+/// empty line after a trailing break, and nothing at all for empty text.
+///
+/// `bp-buffer` holds the rule; this crate does not depend on it, so it is
+/// restated here and `tests/integration` holds the two to it. It is what
+/// keeps a heading's line number the one the gutter shows.
+fn lines(text: &str) -> impl Iterator<Item = &str> {
+    let mut rest = Some(text).filter(|t| !t.is_empty());
+    std::iter::from_fn(move || {
+        let current = rest?;
+        let Some(end) = current.find(['\n', '\r']) else {
+            rest = None;
+            return Some(current);
+        };
+        // Both break bytes are ASCII, so every cut is a character boundary.
+        let len = if current[end..].starts_with("\r\n") {
+            2
+        } else {
+            1
+        };
+        rest = Some(&current[end + len..]).filter(|r| !r.is_empty());
+        Some(&current[..end])
+    })
 }
 
 /// Strip the punctuation and markup that decorate a line but do not describe
@@ -113,7 +140,7 @@ pub fn outline(text: &str) -> Vec<Heading> {
 
     // Enumerating every line, including the ones skipped, is what keeps
     // `Heading::line` the line the user sees in the gutter.
-    for (index, raw) in text.lines().enumerate() {
+    for (index, raw) in lines(text).enumerate() {
         // Four columns in is indented code outside a fence, and cannot be a
         // closing fence inside one, so either way it is nothing to us.
         let Some(line) = block_indent(raw) else {
@@ -280,7 +307,7 @@ pub fn keywords(text: &str, limit: usize) -> Vec<String> {
 /// produces a summary that reads like a fault.
 pub fn summary(text: &str, max_chars: usize) -> String {
     let mut paragraph = String::new();
-    for line in text.lines() {
+    for line in lines(text) {
         let trimmed = line.trim();
         // Skip headings, so the summary is the prose under the title rather
         // than the title again.
@@ -360,14 +387,18 @@ pub fn statistics(text: &str) -> Statistics {
     let mut line_has_content = false;
     let mut in_paragraph = false;
 
-    for c in text.chars() {
-        // `\r` is line-ending encoding, not content: dropping it here
-        // unconditionally (not only as half of "\r\n") means the remaining
-        // character stream for a CRLF document is identical to its LF
-        // equivalent, so every field below agrees between the two, not
-        // just the line count.
+    let mut stream = text.chars().peekable();
+    while let Some(mut c) = stream.next() {
+        // `\r` is line-ending encoding, not content. Half of a CRLF is
+        // dropped, and a bare one is a line break in its own right (decision
+        // D6) and read as `\n`, so the character stream for a CRLF or a
+        // classic Mac document is identical to its LF equivalent and every
+        // field below agrees between them, not just the line count.
         if c == '\r' {
-            continue;
+            if stream.peek() == Some(&'\n') {
+                continue;
+            }
+            c = '\n';
         }
 
         characters += 1;
@@ -785,6 +816,30 @@ mod tests {
         // empty line, and the gutter has to number it.
         let stats = statistics("a\n");
         assert_eq!(stats.lines, 2, "str::lines() says 1, and is wrong here");
+    }
+
+    #[test]
+    fn bare_cr_documents_count_the_same_as_their_lf_equivalent() {
+        // Decision D6: a bare CR is a line break, so a classic Mac file is
+        // the same document as its LF form in every count.
+        let lf = "# Title\n\nOne para.\nStill it.\n\nTwo\n";
+        let cr = lf.replace('\n', "\r");
+        assert_eq!(statistics(lf), statistics(&cr));
+        assert_eq!(statistics(&cr).lines, 7);
+        // And a form feed or U+2028 is not a break.
+        assert_eq!(statistics("a\x0Cb\u{2028}c").lines, 1);
+    }
+
+    #[test]
+    fn an_outline_numbers_headings_on_the_editors_line_rule() {
+        let text = "intro\r\x0Cstill intro\r\n# Heading\r";
+        let headings = outline(text);
+        assert_eq!(headings.len(), 1);
+        assert_eq!(headings[0].line, 3);
+        assert_eq!(
+            suggest_title("\r\rTitle here\rbody").as_deref(),
+            Some("Title here")
+        );
     }
 
     #[test]

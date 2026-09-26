@@ -89,6 +89,12 @@ pub struct LineEndingSurvey {
     /// really data -- in a paste from a terminal, say -- is exactly the
     /// silent rewrite this module exists to avoid. They pass through
     /// untouched under every policy.
+    ///
+    /// Since decision D6 a bare `\r` *does* end a line everywhere lines are
+    /// counted or shown -- the rope, Ln/Col, Go to Line, search -- so this
+    /// module is now the one place that treats it as data. That is a
+    /// conversion policy rather than a line count, and it stays until
+    /// `LineEnding` can name a classic Mac file; see DECISIONS.md.
     pub lone_cr: usize,
     /// Bare carriage returns that sit immediately before a line break, as in
     /// `"\r\r\n"` -- the fingerprint of a document some other tool has

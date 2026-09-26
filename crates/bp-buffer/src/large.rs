@@ -672,6 +672,9 @@ impl LargeFile {
         let mut pos = start;
         let mut truncated = false;
         let mut returned_bytes = 0usize;
+        // The last line ended in a CR that was the last byte of a chunk, so
+        // an LF opening the next chunk is the rest of that CRLF, not a line.
+        let mut lf_owed = false;
 
         loop {
             let read = self.read_chunk()?;
@@ -687,7 +690,13 @@ impl LargeFile {
             let mut consumed = 0usize;
             while consumed < read {
                 let rest = &chunk[consumed..read];
-                match rest.iter().position(|b| *b == b'\n') {
+                if std::mem::take(&mut lf_owed) && rest.first() == Some(&b'\n') {
+                    consumed += 1;
+                    line_start += 1;
+                    continue;
+                }
+                // LF, CRLF or a bare CR (decision D6, `crate::breaks`).
+                match rest.iter().position(|b| *b == b'\n' || *b == b'\r') {
                     Some(at) => {
                         Self::extend_capped(&mut current, &rest[..at], &mut truncated);
                         let done = self.finish_line(line, &current, line_start, truncated)?;
@@ -695,7 +704,9 @@ impl LargeFile {
                         out.push(done);
                         current.clear();
                         truncated = false;
-                        consumed += at + 1;
+                        let break_len = crate::breaks::break_len(rest, at);
+                        lf_owed = rest[at] == b'\r' && at + 1 == rest.len();
+                        consumed += at + break_len;
                         line_start = pos + consumed as u64;
                         line += 1;
                         if out.len() == count || returned_bytes >= MAX_DISPLAY_BYTES {
@@ -821,13 +832,19 @@ impl LargeFile {
         };
         Ok(DisplayLine {
             line,
-            text: body.strip_suffix('\r').unwrap_or(body).to_owned(),
+            // The break was never collected: `display_lines` splits on it.
+            text: body.to_owned(),
             truncated,
         })
     }
 
     /// From `from`, skip forward past `newlines` line breaks and return the
     /// offset just after the last of them.
+    ///
+    /// Breaks on the same rule as the index (decision D6), with the same
+    /// scanner, so the line this lands on is the line the index counted.
+    /// `from` is always a line start, so no CR before it can be waiting for
+    /// an LF here.
     fn scan_past_newlines(
         &mut self,
         from: u64,
@@ -835,24 +852,26 @@ impl LargeFile {
     ) -> Result<Option<u64>, LargeFileError> {
         self.seek(from)?;
         let mut at = from;
-        let mut remaining = newlines;
+        let mut seen = 0usize;
+        let mut found = None;
+        let mut breaks = crate::breaks::Scanner::default();
         loop {
             let read = self.read_chunk()?;
-            if read == 0 {
-                return Ok(None);
-            }
-            let chunk = std::mem::take(&mut self.scratch);
-            for (offset, byte) in chunk[..read].iter().enumerate() {
-                if *byte == b'\n' {
-                    remaining -= 1;
-                    if remaining == 0 {
-                        self.scratch = chunk;
-                        return Ok(Some(at + offset as u64 + 1));
-                    }
+            let mut count = |start: u64| {
+                seen += 1;
+                if seen == newlines {
+                    found.get_or_insert(start);
                 }
+            };
+            if read == 0 {
+                breaks.finish(at, &mut count);
+                return Ok(found);
+            }
+            breaks.feed(&self.scratch[..read], at, &mut count);
+            if found.is_some() {
+                return Ok(found);
             }
             at += read as u64;
-            self.scratch = chunk;
         }
     }
 
@@ -892,11 +911,7 @@ mod tests {
     fn reference_lines(text: &str) -> Vec<String> {
         let buffer = crate::Buffer::from_text(text);
         (0..buffer.len_lines())
-            .map(|i| {
-                let line = buffer.line(i);
-                let line = line.strip_suffix('\n').unwrap_or(&line);
-                line.strip_suffix('\r').unwrap_or(line).to_owned()
-            })
+            .map(|i| crate::breaks::strip(&buffer.line(i)).to_owned())
             .collect()
     }
 
@@ -1012,6 +1027,9 @@ mod tests {
             "crlf\r\nlines\r\nhere\r\n",
             "日本語\nと🙂\r\nmixed\n",
             "trailing spaces   \nand\ttabs\n",
+            "classic\rmac\rlines\r",
+            "a\r\r\nb\n\rc",
+            "form\x0Cfeed\u{2028}stays\u{0085}one line",
         ];
         for (n, text) in corpus.iter().enumerate() {
             let path = write(&dir, &format!("c{n}.txt"), text.as_bytes());
@@ -1052,6 +1070,77 @@ mod tests {
             assert_eq!(file.line_start(line).unwrap(), Some(*offset), "line {line}");
         }
         assert_eq!(file.line_start(expected.len()).unwrap(), None);
+    }
+
+    #[test]
+    fn a_crlf_split_by_a_chunk_boundary_is_one_break_and_a_bare_cr_there_is_one_too() {
+        // Decision D6. The CR is the last byte of one read and the LF the
+        // first of the next: seen one chunk at a time, the CR looks bare.
+        // Short lines up to each boundary, so nothing is truncated for
+        // display and the lines compare whole.
+        let dir = TempDir::new().unwrap();
+        let before_crlf = (CHUNK_BYTES - 2) / 2;
+        let mut text = "a\n".repeat(before_crlf);
+        text.push('b');
+        assert_eq!(text.len(), CHUNK_BYTES - 1);
+        text.push_str("\r\n");
+        let before_cr = (CHUNK_BYTES - 4) / 2;
+        text.push_str(&"c\n".repeat(before_cr));
+        text.push_str("dd");
+        assert_eq!(text.len(), 2 * CHUNK_BYTES - 1);
+        text.push_str("\rthird\r");
+        let path = write(&dir, "split.txt", text.as_bytes());
+        let expected = reference_lines(&text);
+
+        let mut file = LargeFile::open(&path).unwrap();
+        let mut read = |first: usize, count: usize| -> Vec<String> {
+            file.display_lines(first, count)
+                .unwrap()
+                .into_iter()
+                .map(|l| l.text)
+                .collect()
+        };
+        let b = before_crlf;
+        assert_eq!(read(b, 2), ["b", "c"], "the CRLF made one break");
+        let dd = b + 1 + before_cr;
+        assert_eq!(read(dd, 3), ["dd", "third", ""], "the bare CR made one");
+        assert_eq!(read(dd, 3), expected[dd..]);
+
+        assert_eq!(file.index_fully().unwrap().lines, expected.len());
+        assert_eq!(
+            file.line_start(b + 1).unwrap(),
+            Some(CHUNK_BYTES as u64 + 1)
+        );
+        assert_eq!(
+            file.line_start(dd + 1).unwrap(),
+            Some(2 * CHUNK_BYTES as u64)
+        );
+    }
+
+    #[test]
+    fn scanning_forward_from_an_anchor_counts_bare_crs_as_the_index_does() {
+        // Enough lines that the index halves, so most lines are reached by
+        // the forward scan rather than an anchor.
+        let dir = TempDir::new().unwrap();
+        let mut text = String::new();
+        let mut expected = vec![0u64];
+        for i in 0..140_000 {
+            text.push_str(&format!("{i}"));
+            text.push_str(["\r", "\n", "\r\n"][i % 3]);
+            expected.push(text.len() as u64);
+        }
+        let path = write(&dir, "mixed.txt", text.as_bytes());
+
+        let mut file = LargeFile::open(&path).unwrap();
+        file.index_fully().unwrap();
+        assert!(file.index().stride() > 1, "the forward scan must be used");
+        for line in (0..expected.len()).step_by(997).chain([expected.len() - 1]) {
+            assert_eq!(
+                file.line_start(line).unwrap(),
+                Some(expected[line]),
+                "line {line}"
+            );
+        }
     }
 
     #[test]

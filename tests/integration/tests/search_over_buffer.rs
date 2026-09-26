@@ -31,9 +31,12 @@ use proptest::prelude::*;
 /// `é` is two bytes, `中` three and `😀` four, so any place a byte offset was
 /// used where a character offset was meant lands inside one of them. `\r\n`
 /// is here because a CRLF document is two characters per line break and one
-/// line break, and something has to reconcile that.
+/// line break, and something has to reconcile that. A bare `\r` is a line
+/// break too, and a form feed and U+2028 are not (decision D6); a `\r`
+/// drawn before a `\n` makes a CRLF, which is the pairing most likely to be
+/// counted twice.
 const TOKENS: &[&str] = &[
-    "needle", "a", " ", "é", "中", "😀", "\n", "\r\n", "haystack", "\t",
+    "needle", "a", " ", "é", "中", "😀", "\n", "\r\n", "\r", "\x0C", "\u{2028}", "haystack", "\t",
 ];
 
 fn document() -> impl Strategy<Value = String> {
@@ -270,39 +273,39 @@ fn searching_an_empty_document_finds_nothing_rather_than_everything() {
     );
 }
 
-// --- a disagreement between the crates, left failing ---------------------
+// --- what a line is (decision D6) ------------------------------------------
 
-/// **DEFECT.** `bp-search` and `bp-buffer` do not agree on what a line is.
+/// `bp-search` and `bp-buffer` agree on what a line is.
 ///
-/// `bp_search::Offsets` counts line starts by looking for `'\n'` and nothing
-/// else. `bp_buffer::Buffer` is a `ropey::Rope` built with ropey's default
-/// features, which include `unicode_lines`: ropey treats a bare `\r`, `\x0B`,
-/// `\x0C`, U+0085, U+2028 and U+2029 as line breaks too.
+/// They used not to. `bp_search` counted line starts at `'\n'` only, while
+/// `bp_buffer::Buffer` was a `ropey::Rope` with ropey's default
+/// `unicode_lines`, which also broke lines at a bare `\r`, `\x0B`, `\x0C`,
+/// U+0085, U+2028 and U+2029. For a document containing any of those a find
+/// reported one line number and the caret another, and Find in Files scrolled
+/// the editor to the wrong line. A bare `\r` is not exotic: it is what a file
+/// written on a classic Mac, or by a program that drew a progress bar,
+/// contains.
 ///
-/// So for a document containing any of those, a find reports one line number
-/// and the editor's caret reports another. The user sees a result panel that
-/// scrolls to the wrong line, and "go to line 12" from a search result lands
-/// somewhere else. A bare `\r` is not exotic: it is what a file written on a
-/// classic Mac, or by a program that emitted a progress bar, contains.
-///
-/// The same split exists *inside* `bp-buffer`, between its two public answers
-/// to "how many lines": the free `line_count` counts `'\n'`, and
-/// `Buffer::len_lines` asks the rope. `bp-ui`'s status bar uses the first for
-/// one editor view and the second for the other, so the same document reports
-/// two different line counts depending on which view is showing it.
-///
-/// Fixing it is a decision, not a patch -- either `bp-search` adopts ropey's
-/// line-break set, or `bp-buffer` builds its rope without `unicode_lines` --
-/// so this is left named rather than papered over. Run with
-/// `cargo test -p bp-integration-tests -- --ignored` to see it.
+/// The owner's answer (D6) is the Notepad rule: a line ends at LF, CRLF or a
+/// bare CR, and nothing else, everywhere. The rope is built with ropey's
+/// `cr_lines`, and `bp-search` counts the same set. So a bare CR moves the
+/// needle to line 3 in both, and every other separator leaves it on line 1
+/// in both.
 #[test]
-#[ignore = "known defect: bp-search counts only \\n as a line break, bp-buffer's rope counts every Unicode line break"]
 fn search_and_the_buffer_agree_on_lines_containing_any_line_break() {
-    for (text, breaks) in [
-        ("one\rtwo\rneedle", "a bare carriage return"),
-        ("one\u{2028}two\u{2028}needle", "U+2028 LINE SEPARATOR"),
-        ("one\u{0085}two\u{0085}needle", "U+0085 NEXT LINE"),
-        ("one\x0Btwo\x0Bneedle", "a vertical tab"),
+    for (text, breaks, line) in [
+        ("one\rtwo\rneedle", "a bare carriage return", 3),
+        ("one\r\ntwo\rneedle", "a CRLF then a bare CR", 3),
+        ("one\r\rneedle", "two bare carriage returns", 3),
+        ("one\u{2028}two\u{2028}needle", "U+2028 LINE SEPARATOR", 1),
+        (
+            "one\u{2029}two\u{2029}needle",
+            "U+2029 PARAGRAPH SEPARATOR",
+            1,
+        ),
+        ("one\u{0085}two\u{0085}needle", "U+0085 NEXT LINE", 1),
+        ("one\x0Btwo\x0Bneedle", "a vertical tab", 1),
+        ("one\x0Ctwo\x0Cneedle", "a form feed", 1),
     ] {
         let buffer = Buffer::from_text(text);
         let m = &find_all(text, &Query::literal("needle")).expect("find")[0];
@@ -312,10 +315,96 @@ fn search_and_the_buffer_agree_on_lines_containing_any_line_break() {
             buffer.position_of(m.range.start).line,
             "search and the buffer disagree about a document separated by {breaks}"
         );
+        assert_eq!(m.line, line, "{breaks} is not a break of the kind D6 says");
         assert_eq!(
             bp_buffer::line_count(text),
             buffer.len_lines(),
             "bp-buffer's own two line counts disagree about {breaks}"
         );
+    }
+}
+
+/// The same agreement through the two places a user actually meets it: Find
+/// in Files names a line, and the editor's caret, once the file is open and
+/// the match selected, is on that line.
+#[test]
+fn a_bare_cr_document_reports_the_same_line_in_find_in_files_and_in_the_editor() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let text = "first\rsecond\r\nthird\x0Cstill third\rthe needle\r";
+    std::fs::write(dir.path().join("mac.txt"), text).expect("write the fixture");
+
+    let report = bp_search::search_dir(dir.path(), &Query::literal("needle")).expect("search");
+    let hit = &report.hits[0];
+
+    let mut editor = Editor::new(text);
+    editor.select(hit.offset, hit.offset + "needle".chars().count());
+    assert_eq!(
+        hit.line, 4,
+        "Find in Files counts the bare CRs and the CRLF once"
+    );
+    assert_eq!(
+        editor.position().line,
+        hit.line,
+        "the editor puts the caret on a different line from the one Find in Files named"
+    );
+    assert_eq!(hit.preview, "the needle", "the preview is of that line");
+
+    // And Go to Line with that number lands on the line that holds it.
+    assert!(editor.go_to_position(Position::new(hit.line, 1)));
+    let line = editor.buffer().line(hit.line - 1);
+    assert_eq!(bp_buffer::breaks::strip(&line), "the needle");
+}
+
+/// Every crate that numbers lines, against the rope, on one document that
+/// uses each kind of break and each separator that is not one.
+///
+/// `bp-secrets`, `bp-semantic` and `bp-redaction` do not depend on
+/// `bp-buffer` -- they are leaf crates on purpose -- so each restates the
+/// rule. This is what holds them to it: a scan result, an outline entry or a
+/// metadata row that names a line the gutter numbers differently sends the
+/// user to the wrong place exactly as Find in Files used to.
+#[test]
+fn every_crate_that_numbers_lines_agrees_with_the_buffer() {
+    // A fabricated AWS key id, as in `bp-secrets`' own tests: well formed and
+    // never issued.
+    let lines = [
+        "intro\x0Cstill intro\u{2028}and more\u{0085}and more",
+        "# Heading",
+        "author: Daniel Boles",
+        "id AKIA3G7QVHBRN2WPKZ5F",
+        "the needle",
+    ];
+    for breaks in [
+        ["\r", "\r\n", "\n", "\r"],
+        ["\n", "\n", "\n", "\n"],
+        ["\r\n", "\r", "\r", "\r\n"],
+    ] {
+        let mut text = String::new();
+        for (line, end) in lines.iter().zip(breaks.iter().chain([&""])) {
+            text.push_str(line);
+            text.push_str(end);
+        }
+        let buffer = Buffer::from_text(&text);
+        let line_of_byte = |byte: usize| buffer.position_of(text[..byte].chars().count()).line;
+        let what = format!("breaks {breaks:?}");
+
+        assert_eq!(buffer.len_lines(), 5, "{what}");
+        assert_eq!(bp_semantic::statistics(&text).lines, 5, "{what}");
+
+        let heading = &bp_semantic::outline(&text)[0];
+        assert_eq!(heading.line, 2, "{what}");
+        assert_eq!(heading.line, line_of_byte(text.find("# Heading").unwrap()));
+
+        let author = &bp_redaction::inspect(&text)[0];
+        assert_eq!(author.line, 3, "{what}");
+        assert_eq!(author.line, line_of_byte(author.start));
+
+        let key = &bp_secrets::scan(&text)[0];
+        assert_eq!(key.line, 4, "{what}");
+        assert_eq!(key.line, line_of_byte(text.find("AKIA").unwrap()));
+
+        let needle = &find_all(&text, &Query::literal("needle")).unwrap()[0];
+        assert_eq!(needle.line, 5, "{what}");
+        assert_eq!(needle.line, buffer.position_of(needle.range.start).line);
     }
 }
