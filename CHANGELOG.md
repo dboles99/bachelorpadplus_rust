@@ -103,6 +103,8 @@ describe behaviour that earlier development builds had.
 
 ### Security
 
+- Save a Copy of an encrypted document now writes an encrypted copy with the
+  same passphrase. It used to write the text unencrypted, without warning.
 - The `.bpadx` envelope uses Argon2id and XChaCha20-Poly1305 (AES-256-GCM
   files can also be read), with every chunk's position authenticated. **It
   has not had an independent cryptographic review**; the Encrypt Document

@@ -312,8 +312,9 @@ Things to know:
 - **Save As** keeps an encrypted document encrypted, whatever name you give
   it. Keep the `.bpadx` extension so that you and other programs can tell
   what the file is.
-- **Save a Copy writes the text unencrypted**, without asking. It is
-  currently the only way to write a decrypted copy, so use it deliberately.
+- **Save a Copy** of an encrypted document is encrypted too, with the same
+  passphrase, and is given the `.bpadx` extension. There is no way to write
+  a decrypted copy from inside the program.
 - Crash recovery for an encrypted document is sealed with its passphrase;
   see [Recovering after a crash](#recovering-after-a-crash).
 

@@ -60,7 +60,6 @@ In short:
   wiped.
 - It does not securely erase files. Encrypting a document writes a new
   `.bpadx` file and leaves the original, unencrypted file where it was.
-  **Save a Copy of an encrypted document writes the text unencrypted.**
 - It does not control copies other programs make. A clipboard manager that
   ignores the "exclude from history" marking keeps its own copy, and for up
   to a minute the system clipboard holds whatever you copied.
