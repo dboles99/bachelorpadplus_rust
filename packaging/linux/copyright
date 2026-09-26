@@ -5,7 +5,7 @@ Source: https://github.com/dboles99/bachelorpadplus_rust
 Comment:
  The binary also contains third-party Rust crates, the Slint toolkit (under
  the Slint Royalty-free Licence 2.0) and the DejaVu Sans Mono font. Their
- notices are in THIRD-PARTY-NOTICES beside this file.
+ notices are in THIRD-PARTY-NOTICES.txt beside this file.
 
 Files: *
 Copyright: 2026 Daniel Boles
@@ -16,7 +16,7 @@ Copyright: 2003 Bitstream, Inc.
            2006 Tavmjong Bah
            DejaVu changes are in the public domain
 License: Bitstream-Vera
- The full text is in THIRD-PARTY-NOTICES, and in
+ The full text is in THIRD-PARTY-NOTICES.txt, and in
  crates/bp-ui/fonts/LICENSE-DejaVu.txt in the source.
 
 License: MIT

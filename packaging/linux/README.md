@@ -54,7 +54,7 @@ the mounted repository, which
 
 Options: `--target-dir DIR` and `--cargo-cache DIR` keep the target
 directory and the crate downloads between runs (by default in docker
-volumes); `-- --require-notices` makes a missing `THIRD-PARTY-NOTICES` an
+volumes); `-- --require-notices` makes a missing `THIRD-PARTY-NOTICES.txt` an
 error rather than a warning, which a release wants. `--base-image` and
 `--extra-ca` exist only to prove the Dockerfile on a machine that cannot
 reach Debian's mirrors or sits behind a TLS-intercepting proxy; a release is
@@ -121,13 +121,13 @@ records).
 /usr/share/icons/hicolor/<N>x<N>/apps/io.github.dboles99.BachelorPad.png  (N = 16 ... 512)
 /usr/share/icons/hicolor/scalable/apps/io.github.dboles99.BachelorPad.svg
 /usr/share/doc/bachelorpad/copyright
-/usr/share/doc/bachelorpad/LICENSE-MIT, LICENSE-APACHE, THIRD-PARTY-NOTICES
+/usr/share/doc/bachelorpad/LICENSE-MIT, LICENSE-APACHE, THIRD-PARTY-NOTICES.txt
 ```
 
 The `.rpm` and the AUR package put the licence files under
 `/usr/share/licenses/<name>/` instead, as those distributions do. ADR-0031
 has every package ship `LICENSE-MIT`, `LICENSE-APACHE` and
-`THIRD-PARTY-NOTICES`: `build-packages.sh` stops if either licence file is
+`THIRD-PARTY-NOTICES.txt`: `build-packages.sh` stops if either licence file is
 missing from the repository root, and warns (or, with `--require-notices`,
 stops) if the notices are.
 

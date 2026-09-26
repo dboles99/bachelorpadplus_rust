@@ -91,8 +91,12 @@ RUN set -eu; \
 # cargo-deb builds the .deb. `--locked` so the tool is built from the
 # dependency set its authors released, not whatever resolves today.
 ARG CARGO_DEB_VERSION=3.8.0
+# cargo-auditable embeds the resolved dependency list in the binary, so the
+# shipped executable itself says what it was built from (release plan M3-03).
+ARG CARGO_AUDITABLE_VERSION=0.7.6
 RUN set -eu; \
     cargo install --locked "cargo-deb@${CARGO_DEB_VERSION}"; \
+    cargo install --locked "cargo-auditable@${CARGO_AUDITABLE_VERSION}"; \
     rm -rf "${CARGO_HOME}/registry" "${CARGO_HOME}/git"; \
     cargo deb --version
 
