@@ -5,7 +5,9 @@ Everything that turns a release build into what Linux users install
 Ubuntu 22.04 or later, an `.rpm` for Fedora, a relocatable `.tar.gz`, and a
 `PKGBUILD` for the AUR's `bachelorpad-bin` (decision 18; AppImage and Flatpak
 come later). All of them are built in a pinned Debian 12 container, so the
-binary runs on glibc 2.36 and newer (decision 19, exit criterion L2).
+binary runs on glibc 2.36 and newer (decision 19, exit criterion L2). That is
+the design; the Debian 12 image itself has not been built yet -- see
+[What has run](#what-has-run).
 
 The application id is `io.github.dboles99.BachelorPad` (ADR-0032); every
 desktop file and icon is named for it.
@@ -59,6 +61,26 @@ error rather than a warning, which a release wants. `--base-image` and
 `--extra-ca` exist only to prove the Dockerfile on a machine that cannot
 reach Debian's mirrors or sits behind a TLS-intercepting proxy; a release is
 built from the pinned Debian 12 image.
+
+### What has run
+
+As of 2026-09-27:
+
+- **The Debian 12 image has never been built.** Debian's mirrors are blocked
+  from the build host, so `Dockerfile.release` was proven with
+  `--base-image ubuntu:22.04` (glibc 2.35) instead. That shows the Dockerfile
+  and the entrypoint work; it does not show the pinned image does.
+- **The recorded dry run is a native build**, not a container one:
+  `artifacts/releases/v1.0.0-rc.0/linux/manifest.json` says
+  `"container": false` and `"glibc_required": "GLIBC_2.39"`, from an Ubuntu
+  24.04 host. Those packages need glibc 2.39, so they are not the ones a
+  release would ship.
+- **`test-packages.sh` has run on Ubuntu 22.04 and 24.04 only.** The Fedora
+  and Arch legs have not run, for the same reason as the Debian image: their
+  mirrors are unreachable from the build host.
+
+An `Invoke-Release.ps1 -Container` run and the Fedora and Arch package tests are
+waiting on a host that reaches those mirrors.
 
 `build-packages.sh` also runs outside the container, to try the packaging
 on a workstation -- but the binary it packages then needs the workstation's
