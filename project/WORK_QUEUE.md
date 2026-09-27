@@ -258,10 +258,8 @@ All of it, in one pass. What is worth carrying forward:
   Pre-existing; found during M2-09.
 - **Line-ending conversion and the bare CR (D6 follow-up).** "Convert to
   LF" leaves a CR-only file's CRs in place, and `LineEnding` has no CR
-  variant, so a CR-only file is labelled as the platform default. Needs an
-  owner answer: should explicit conversion rewrite bare CRs, and should the
-  status bar say "CR"? Recommended: yes to both, since D6 already made a
-  bare CR a line break everywhere else.
+  variant, so a CR-only file is labelled as the platform default. Waits on
+  D11 in `DECISIONS_NEEDED.md` (recommended: yes to both).
 - **Slint's default TextInput view draws line breaks by its own rules**
   (probably also U+2028/U+2029, maybe FF). The custom view draws exactly
   the counted lines; check the default one in a render.
@@ -280,8 +278,12 @@ All of it, in one pass. What is worth carrying forward:
 - **The installer's "Add bpad to PATH" task is the installer agent's
   addition** (unchecked by default, removed on uninstall). Keep it or drop
   it; the plan did not ask for it.
-- **M3-04, Windows signing**, waits on decision 3. The release script
-  records `windows_signed: false` in every manifest until then.
+- **M3-04, Windows signing, is wired but has never signed anything.**
+  `packaging/windows/Signing.ps1` takes Artifact Signing or an OV
+  certificate from environment variables; it needs an identity (decision
+  3, eligibility question 3a in `DECISIONS_NEEDED.md`) and a first run on
+  Windows. Until then a Windows release needs `-AllowUnsigned` and records
+  `windows_signed: false`.
 - **`artifacts/test-evidence/*.json` is ignored** by `.gitignore`, which
   clashes with committing RC evidence there. The RC checklist uses per-tag
   subfolders to get around it; decide which is meant before M4.
