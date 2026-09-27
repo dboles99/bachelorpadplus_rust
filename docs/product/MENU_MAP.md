@@ -105,7 +105,7 @@ no data rows rather than a column of greyed ones.
 | Security History... | **live** — `bp-audit` under ADR-0024. The reading end of every row above it: a profile change, Privacy Mode, a secret scan, a redaction and a signature check each append one. What is recorded is governed by the document's own profile, so under Confidential and Maximum, and under Privacy Mode, **nothing is written at all** — `Destination::for_policy` resolves those to `SessionOnly`. A tightening is therefore silent and a loosening is recorded, which is the direction worth having: a move down to Standard re-enables everything the profile was switched on to stop. Under Private the history is sealed with the document's own passphrase, so an unencrypted document under that profile gets the notice telling it so rather than a plaintext line |
 | Redact Found Secrets... | **live** — `bp_secrets::scan` produces the spans and `bp_redaction::redact` destroys them. `Placeholder`, not `Mask`: `MatchOriginal` publishes the length of what was removed, which for a PIN or a short token is most of the secret. The marker is `[REDACTED: kind]`, labelled with the name of the rule that matched and never with what it matched. A confirmation dialog lists line and kind first and states plainly that this changes the document and not the file — the file on disk, the recovery journal, the undo history and the clipboard all still hold the originals, and saying "redacted" without saying that is the same lie the black rectangle tells. Applied as an ordinary undoable edit for the same reason. **A private key block is deliberately not redacted**: `bp-secrets` marks only its `-----BEGIN` line, so redacting the span would take out the label and leave the key body — the row says so rather than half-doing it. `bp_redaction::verify` runs afterwards and a survivor is reported by line number, never by text. Greyed on an empty document, with the reason on the row |
 | Inspect Metadata | **live** — `bp_redaction::metadata::inspect` over the text, reporting kind, exposure and line and never the value. For a container this build cannot open — `.docx`, `.pdf`, `.rtf`, an image — `Container::hidden()` and `requires()` are reported instead of silence: "no metadata found" about a `.docx` reads as an all-clear and would be a lie. For plain text it says the opposite thing it is easy to leave out — that the filesystem entry around the file, its timestamps, ownership and alternate data streams, is not part of the check |
-| Lock Document, audit history | planned — phase 16 |
+| Lock Document | planned — phase 16, deferred to 1.x by the release plan. (Audit history is live, as Security History above) |
 
 ## Notebook
 
@@ -132,9 +132,13 @@ scratchpad. All planned — phase 12.
 
 ## Security (the rest)
 
-Lock, decrypt in place, secure clipboard, audit, settings. Planned — phases 15
-and 16. Redaction and the metadata inspector are no longer among them; both are
-rows above.
+Lock (and auto-lock), decrypt in place, and security settings. Planned —
+phases 15 and 16; Lock Document is deferred to 1.x by the release plan.
+Redaction and the metadata inspector are no longer among them; both are rows
+above. Nor is audit, which shipped as Security History, nor the secure
+clipboard: copies from a Private or stricter document are marked to stay out
+of clipboard managers' history and are cleared off the system clipboard after
+a minute (`bp_clipboard::PRIVATE_CLEAR_AFTER`, release plan M2-08).
 
 Hash, sign and verify are no longer among them: `bp-crypto`'s hashing half and
 `bp-integrity`'s sidecar are wired into the rows above. Signing was the last

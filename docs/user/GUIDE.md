@@ -135,6 +135,11 @@ the Linux convention, CRLF the Windows one). A new document starts with the
 convention of the system you are on. Changing it marks the document as
 unsaved. Otherwise a save writes the line endings back as they were read.
 
+A file whose lines end only in bare carriage returns (an old Mac file) is
+numbered and searched line by line like any other, but it is labelled with
+your system's default line ending, and converting it to LF or CRLF leaves
+the bare carriage returns as they are. This is a known gap for now.
+
 ## The two editor views
 
 The **default view** uses the text-editing widget of Slint, the toolkit the
@@ -374,9 +379,12 @@ memory until you close the tab. The row then reads "Encrypted (.bpadx)".
 if you no longer want it, bearing in mind that deleting a file does not
 securely erase it from the disk.
 
-**To open an encrypted document**, open it as any other file. The editor
+**To open an encrypted document**, use **File ▸ Open** (Ctrl+O). The editor
 recognises it by its contents, asks for the passphrase in the bar, and opens
-the tab only once it is unlocked. A wrong passphrase and a damaged file give
+the tab only once it is unlocked. Opening a `.bpadx` file from Recent Files,
+from the command line (which includes double-clicking it in your file
+manager) or from a Find in Files result does not ask for the passphrase
+yet: that is a known issue, being fixed. Use File ▸ Open until it is. A wrong passphrase and a damaged file give
 the same message: the format cannot tell them apart. Escape abandons the
 entry.
 
@@ -384,9 +392,10 @@ A `.bpadx` file records how much work unlocking it takes. If it asks for
 more than four times what this editor writes, you are asked first ("This
 file asks for an unusually expensive unlock ... Open it anyway?") and the
 passphrase bar comes up only if you choose **Open Anyway**. A file asking
-for more than 256 MiB of memory or more than 8 passes is refused, with the
-reason in the status bar: no document this editor writes needs that, and a
-damaged or hostile file could otherwise keep it busy for a long time.
+for more than 256 MiB of memory, more than 8 passes or more than 16 parallel
+lanes is refused, with the reason in the status bar: no document this editor
+writes needs that, and a damaged or hostile file could otherwise keep it
+busy for a long time.
 
 Things to know:
 

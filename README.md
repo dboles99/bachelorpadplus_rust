@@ -32,8 +32,8 @@ the project's [GitHub releases page](https://github.com/dboles99/bachelorpadplus
 | Windows 10, Windows 11 | A per-user installer (no administrator rights needed), and a portable zip |
 | Linux | `.deb` (Debian, Ubuntu), `.rpm` (Fedora), a `.tar.gz`, and an Arch `PKGBUILD` |
 
-AppImage and Flatpak builds may follow later. Until the packages exist,
-**build from source**: see [CONTRIBUTING.md](CONTRIBUTING.md#build-and-run).
+AppImage and Flatpak builds may follow later. Until the packages are
+published, **build from source**: see [CONTRIBUTING.md](CONTRIBUTING.md#build-and-run).
 
 ## Requirements
 
@@ -79,6 +79,8 @@ needed.
   UTF-16 (both byte orders) open and save as they came. A file that is none
   of those opens as Windows-1252 (what Notepad calls "ANSI") and saves back
   byte for byte. LF and CRLF line endings, switchable from the Format menu.
+  A bare carriage return (an old Mac file) also ends a line, but converting
+  to LF or CRLF does not yet rewrite bare carriage returns.
 - **Find.** Find and replace in the current document, with case, whole-word
   and regular-expression options, and Replace All shows the changes before
   making them. Find in Files searches a folder and its subfolders without
@@ -122,7 +124,18 @@ unproven. The honest list:
   nobody has run it on a Windows 10 or 11 machine since the last Windows test
   run, many changes ago. The Windows-only parts (default-editor registration,
   the console for `--help`, the crash message box) have never run at all.
-- **No installers or packages yet.** They arrive with the release candidate.
+- **Installers and packages are built but not published.** The Linux
+  packages have been tested on Ubuntu 22.04 and 24.04 only. The Windows
+  installer and portable zip have never been run on Windows.
+- **An encrypted `.bpadx` document opened from Recent Files, the command
+  line (including double-clicking a registered file) or a Find in Files
+  result does not ask for its passphrase.** Use File ▸ Open (Ctrl+O) for
+  now, which does. A fix is planned before the release candidate.
+- **A file whose lines end in bare carriage returns only** is labelled in
+  the status bar with the platform's default line ending, and Format ▸ LF
+  or CRLF leaves its bare carriage returns as they are. Whether conversion
+  should rewrite them is an open decision.
+- **The editor's right-click menu is drawn light under every theme.**
 - **The `.bpadx` encryption format has not had an independent
   cryptographic review.** It is built from standard, widely used components,
   but the way they are put together has only been reviewed by this project.
