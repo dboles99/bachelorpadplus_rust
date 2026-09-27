@@ -1,24 +1,24 @@
 # 08-clipboard
 
-Roadmap phase 11. **Partly done.** In-app history, kind detection and
-format-aware paste ship; the editor context menu with pin and clear
-(release-plan M1-18, waiting on U5) and timed clearing (M2-08) are open;
-Windows' native clipboard history is deferred to 1.x (release plan §3).
-Status checked against the code on 2026-09-25.
+Roadmap phase 11. **Done for RC1.** In-app history, kind detection and
+format-aware paste ship, as do the editor context menu with Pin and Clear
+(release-plan M1-18) and timed clearing (M2-08). Windows' native clipboard
+history is deferred to 1.x (release plan §3). Status checked against the
+code on 2026-09-27.
 
 | Task | Status |
 | --- | --- |
 | windows-history | Not started; deferred to 1.x |
 | local-history | Done — `bp-clipboard`. Records in-app copies only; other programs' copies need an opt-in setting (M0-07) |
 | paste-transformations | Done — join lines, strip Markdown, pretty or minified JSON, bullet list, code block, forward slashes, offered by the entry's kind |
-| secure-clipboard | Partly: copies from Private and stricter documents are marked for exclusion from Win+V, cloud sync and Klipper (M0-07). Timed clearing is M2-08 |
+| secure-clipboard | Done: copies from Private and stricter documents are marked for exclusion from Win+V, cloud sync and Klipper (M0-07), and cleared off the OS clipboard after a minute if it still holds them (M2-08) |
 
 The four task files were empty templates and were deleted on 2026-09-25 (see
 [../README.md](../README.md)).
 
 ## What exists
 
-The Edit menu lists recent clipboard entries with their detected kind (URL,
+The Edit menu and the editor context menu (M1-18) list recent clipboard entries with their detected kind (URL,
 path, JSON, code, Markdown, text). Choosing one in the default view puts it
 back on the OS clipboard and invokes the widget's own paste; under
 `--editor-view` it is inserted at the caret directly.
@@ -43,10 +43,13 @@ code.
   constantly. The security profiles it would sit under exist now (phase 14,
   ADR-0020), so this is unbuilt rather than blocked. It is not in the release
   plan's RC1 scope.
-- **Timed clearing** under Private and stricter profiles: release-plan item
-  M2-08, with the Linux clipboard work.
+- ~~Timed clearing~~ **Done** (M2-08): `bp_clipboard::PendingClear` keeps a
+  fingerprint, not the text, and the shell clears after a minute.
 - **Windows native clipboard history** is not surfaced. It needs WinRT, which
-  the release plan defers to 1.x; the planned `bp-platform-windows` crate
-  (ADR-0033) holds Win32 shims only.
-- **Pinning has no UI.** `toggle_pin` exists and is tested, but no menu row
-  calls it. The editor context menu (M1-18) adds Pin and Clear.
+  the release plan defers to 1.x; `bp-platform-windows` (ADR-0033) holds
+  Win32 shims only.
+- ~~Pinning has no UI.~~ **Done** (M1-18): the editor context menu has Pin ▸
+  and Clear Clipboard History. Every menu that shows clipboard rows takes a
+  snapshot of the history when it opens (U5).
+- **The context menu ignores the theme.** It is Slint's own popup, light
+  under every theme (`project/WORK_QUEUE.md`, "Follow-ups from M3").

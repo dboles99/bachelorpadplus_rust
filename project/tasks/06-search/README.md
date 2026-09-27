@@ -1,10 +1,9 @@
 # 06-search
 
-Roadmap phase 7. **Done for RC1 except two items:** the line definition that
-Find in Files shares with the editor (D6, release-plan M1-09) and search
-inside the large-file viewer (M1-06). Fuzzy search and replace in files are
-deferred to 1.x (release plan §3). Status checked against the code on
-2026-09-25.
+Roadmap phase 7. **Done for RC1.** Find in Files and the editor now agree on
+what a line is (D6, release-plan M1-09), and search inside the large-file
+viewer is reachable (M1-06). Fuzzy search and replace in files are deferred
+to 1.x (release plan §3). Status checked against the code on 2026-09-27.
 
 | Task | Status |
 | --- | --- |
@@ -48,14 +47,15 @@ returns fifty thousand hits nobody scrolls through:
 
 - ~~Replace preview.~~ **Done.** Replace All shows what it would change and
   asks before doing it (`bp-ui/src/dispatch.rs`).
-- **Which characters end a line** (D6). `bp-search` counts only `\n`; the
-  editor's rope also breaks on a bare `\r` and other separators, so Find in
-  Files can scroll to the wrong line in a file carrying one. One test is
-  `#[ignore]`d on it. Release-plan item M1-09, waiting on the owner.
+- ~~Which characters end a line (D6).~~ **Done** (M1-09). A line ends at
+  LF, CRLF or a bare CR in the buffer, `bp-search` and the viewer alike, and
+  the test that was `#[ignore]`d on it is un-ignored. Line-ending
+  *conversion* still treats a bare CR as data: D11 in
+  `project/DECISIONS_NEEDED.md`.
 - **Fuzzy search**, **search within a selection** and **replace in files**.
   Not started; fuzzy search and replace in files are deferred to 1.x.
-- **Streaming search** for files too large to hold in memory:
-  `bp_buffer::WindowReader` exists; the viewer that would use it is M1-06.
+- ~~Streaming search~~ **Done** (M1-06): Find in the large-file viewer runs
+  on a background job over the file, not a copy of it in memory.
 - **Performance is unmeasured.** The recursive walk is single-threaded and
   correctness-first; specs.md section 5 asks for high-performance search, and
   nothing here has been benchmarked against that.

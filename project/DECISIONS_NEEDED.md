@@ -40,11 +40,12 @@ D1 (ADR-0034, nothing leaves the machine), the copyright holder (Daniel
 Boles), packaging formats (decision 18) and how release builds are made
 (decision 19, a local script). Also answered that day, as the plan
 recommended: D6 (a line ends at LF, CRLF or a bare CR, everywhere), D10
-(decision 15: ask above 4x the default Argon2 cost, refuse above 256 MiB or
-8 passes), U3 (a read-only viewer tab for files over the editable limit), U5
+(decision 15: ask above 4x the default Argon2 cost, refuse above 256 MiB,
+8 passes or 16 lanes), U3 (a read-only viewer tab for files over the editable limit), U5
 (clipboard menus snapshot the history when they open), decision 21 (the
-Windows 10 statement) and decision 3's route (Azure Trusted Signing, being
-applied for by the owner). The icon (M2-01) is approved.
+Windows 10 statement) and decision 3's route (Azure Trusted Signing, now
+called Artifact Signing; no identity yet, and 3a above asks whether the
+owner is eligible). The icon (M2-01) is approved.
 
 ## Answered, for context
 
@@ -57,9 +58,9 @@ ADRs.
 | `.bpadx` AEAD | Both XChaCha20-Poly1305 and AES-256-GCM, versioned in the envelope | ADR-0021 |
 | `.bpadx` envelope shape | Chunked from the start, chunk index bound into the AAD | ADR-0021 |
 | Argon2id cost | OWASP baseline (19 MiB, t=2, p=1), recorded per document | ADR-0021 |
-| Platform key protection (DPAPI/Hello/keyring) | Phase 16, not 15 | ADR-0021 |
+| Platform key protection (DPAPI/Hello/keyring) | Deferred to 1.x (first answered as "phase 16, not 15") | ADR-0030 S4; ADR-0021 |
 | Security profiles | All of them; profile model first | ADR-0020 |
-| YAML parser | `saphyr` | Phase 6, when it is taken |
+| YAML parser | `saphyr`; done and wired | ADR-0023 |
 | Parity vs retiring the custom editor view | Keep it opt-in, revisit on a Slint upgrade | ROADMAP, WORK_QUEUE |
 | RC1 scope (S1-S6), including U1: memory-map large files? | Defer notebook execution, semantic organisation, personality modes, highlighting; mmap declined for good (ADR-0027's decline stands, chunked reads) | ADR-0030 |
 | D5: where a signing key lives | A seed sealed in a passphrase `.bpadx` envelope | ADR-0030 |

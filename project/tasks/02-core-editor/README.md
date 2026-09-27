@@ -1,7 +1,8 @@
 # 02-core-editor
 
-Roadmap phase 2. **Done for RC1 except the editor context menu** (release-plan
-M1-18, waiting on U5). Status checked against the code on 2026-09-25.
+Roadmap phase 2. **Done for RC1, including the editor context menu**
+(release-plan M1-18: right-click, the Menu key or Shift+F10 in both views).
+Status checked against the code on 2026-09-27.
 
 | Task | Status |
 | --- | --- |
