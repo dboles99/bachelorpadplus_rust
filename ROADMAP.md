@@ -2,7 +2,7 @@
 
 This is not an MVP roadmap. Each phase contributes to the full v1 target.
 
-Status as of **2026-09-26**. Three words, meaning three different things:
+Status as of **2026-09-27**. Three words, meaning three different things:
 
 - **Done** — the phase's work is finished.
 - **Started** — a real, tested slice exists *and is reachable from the
@@ -30,9 +30,9 @@ Status as of **2026-09-26**. Three words, meaning three different things:
 | 15 | Encrypted `.bpadx` documents | **Started** | [11-security](project/tasks/11-security/) | `bp-crypto` |
 | 16 | Advanced security | **Started** | [11-security](project/tasks/11-security/) | `bp-secrets`, `bp-redaction`, `bp-audit`, `bp-integrity` |
 | 17 | Themes/personality/accessibility | **Started** | [12-themes-brand](project/tasks/12-themes-brand/) | `bp-theme` |
-| 18 | Windows/Linux platform integration | **Started** | [13-platform](project/tasks/13-platform/) | `bp-platform` |
+| 18 | Windows/Linux platform integration | **Started** | [13-platform](project/tasks/13-platform/) | `bp-platform`, `bp-platform-windows` |
 | 19 | Hardening, fuzzing and benchmarks | **Started** | [14-hardening](project/tasks/14-hardening/) | `fuzz/` (standalone, and now gated) |
-| 20 | Packaging, signing, release and upgrade testing | Not started | [14-hardening](project/tasks/14-hardening/) | — |
+| 20 | Packaging, signing, release and upgrade testing | **Started** (installer, packages, `Invoke-Release.ps1` with a Linux dry run, signing wired; nothing run on Windows) | [14-hardening](project/tasks/14-hardening/) | `packaging/`, `scripts/` |
 
 ## Two numbering schemes, reconciled
 
@@ -50,27 +50,29 @@ that points at them for no gain.
 
 ## Where the work actually is
 
-Phases 1 and 3 are complete. Phases 2, 5, 6, 7, 8, 11, 14, 15, 16, 17 and 18
-each have a tested slice reachable in the product — phase 18 joined them when
-File ▸ Set as Default Editor shipped. Phases 4, 9, 12 and 13 are built and
-have no way in, which an audit put a number on: `bp-research`, `bp-notebook`
-and `bp-storage` have zero reverse dependencies anywhere in the application,
-and with `bp-buffer`'s large-file engine that is over ten thousand lines,
-with their unit tests, behind code no user can reach.
+Phases 1 and 3 are complete. Phases 2, 4, 5, 6, 7, 8, 11, 14, 15, 16, 17
+and 18 each have a tested slice reachable in the product — phase 18 joined
+them when File ▸ Set as Default Editor shipped, and phase 4 when the
+read-only large-file viewer did (M1-06). Phase 20 has its packaging,
+release script and signing wired, with only a Linux dry run behind them.
+Phases 9, 12 and 13 are built and have no way in, which an audit put a
+number on: `bp-research`, `bp-notebook` and `bp-storage` have zero reverse
+dependencies anywhere in the application, and are kept out of RC1 by
+ADR-0030.
 
 **The wiring backlog is real, and it shrank rather than grew.** Phase 6's
 YAML, phase 16's redaction and metadata inspector all have menu rows now, the
 audit log's sealed destination has an implementor instead of refusing every
 append, and phases 16 and 18 gained Verify Signature and Set as Default
-Editor. What is still built and unreachable is `bp-buffer`'s large-file
-engine, `bp-notebook`, `bp-research` and `bp-storage` -- so a 2 GB file
-still cannot be viewed: the open path refuses anything past the 32 MiB
-editable limit before reading it (M0-04), and the read-only viewer that would
-take it over is release-plan item M1-06. `bp-audit` came off that list when
+Editor. `bp-buffer`'s large-file engine came off the list with the
+read-only viewer (M1-06): a file past the 32 MiB editable limit now opens in
+a viewer tab rather than being refused, though a 1 GB file has still to be
+tried on each operating system (M4-02). What is still built and unreachable
+is `bp-notebook`, `bp-research` and `bp-storage`. `bp-audit` came off that list when
 Security ▸ Security
 History shipped: five capabilities write into it and one row reads it back.
 
-**Cross-crate tests have found seven defects; six are fixed and one is a decision.** Until the
+**Cross-crate tests have found seven defects, and all seven are fixed.** Until the
 fourth session every test in the repository tested one crate. Eleven files of
 cross-crate tests found that `bp-search` and `bp-buffer` disagree about what a
 line is, that `bp-formats` identified a pretty-printed JSON array as JSON
@@ -95,7 +97,7 @@ its test runs again.
 input to `bp-crypto`, `bp-data`, `bp-files`, `bp-formats` and `bp-notebook`,
 formatted, linted and run by nobody, while this table called the phase
 *Started* on the strength of them. Two stages now run them, on both legs,
-and they are green -- 42 tests, one `#[ignore]`d for cost with the reason on
+and they are green, with one test `#[ignore]`d for cost and the reason on
 it. The gate is about two and a half minutes per leg longer, which is what
 that assurance costs.
 

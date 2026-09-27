@@ -12,10 +12,14 @@ Security problems are not reported here; see [SECURITY.md](SECURITY.md).
 No release has been published yet, so today you build from source. The
 packaging exists: `packaging/windows/` builds the per-user Inno Setup
 installer and the portable zip (not yet run on Windows), and
-`packaging/linux/` builds the `.deb`, `.rpm`, `.tar.gz` and AUR `PKGBUILD`
-inside a pinned Debian 12 container. `scripts/Invoke-Release.ps1` drives
-both and records each run under `artifacts/releases/` (ADR-0016
-amendment). Each directory's README says how.
+`packaging/linux/` builds the `.deb`, `.rpm`, `.tar.gz` and AUR `PKGBUILD`.
+The design is to build them inside a pinned Debian 12 container, but that
+image has never been built (the package mirrors are blocked in the
+environment the work was done in); the one recorded dry run was native, on
+glibc 2.39, and the packages have been tested on Ubuntu 22.04 and 24.04
+only. `scripts/Invoke-Release.ps1` drives both and records each run under
+`artifacts/releases/` (ADR-0016 amendment). Each directory's README says
+how.
 
 The toolchain is pinned in `rust-toolchain.toml` (Rust 1.94.1, with rustfmt
 and clippy); rustup picks it up by itself.
@@ -46,12 +50,15 @@ window; file pickers go through the XDG desktop portal.
 **Windows.** rustup's MSVC toolchain and the Visual Studio C++ build tools
 (`bp-storage` compiles its bundled SQLite from C). Nothing built since the
 sixth session has been run on Windows yet (release plan M0-12).
+[docs/release/WINDOWS_BRINGUP.md](docs/release/WINDOWS_BRINGUP.md) is the
+run-book for setting up a Windows machine and taking it through the gate,
+a release dry run and an install test.
 
 ## Development
 
 ```powershell
 ./scripts/Install-GitHooks.ps1   # once per clone
-./scripts/Invoke-LocalCI.ps1     # the gate: format, locked check, clippy, test, launch, log hygiene, fuzz
+./scripts/Invoke-LocalCI.ps1     # the gate: format, locked check, deny, clippy, test, launch, log hygiene, fuzz
 ```
 
 On Linux run the same gate under PowerShell 7, natively:
@@ -90,9 +97,9 @@ under rules that keep them out of each other's way.
 - [prompts/rosettas/](prompts/rosettas/) holds the reusable task prompts.
   Read `R011_WIRE_CAPABILITY_INTO_SHELL.md` before touching `crates/bp-ui/`.
 
-## Current state (2026-09-25)
+## Current state (2026-09-27)
 
-**24 crates, over 2,000 tests, green on Linux** (the sixth and seventh
+**25 crates, over 2,300 tests, green on Linux** (the sixth and seventh
 sessions' changes have not yet been through the Windows leg). The app opens, edits and
 saves atomically, and does rather more than that:
 
@@ -100,14 +107,15 @@ saves atomically, and does rather more than that:
 | --- | --- |
 | Editing | Tabs, four themes plus Follow System, zoom, indentation (tabs or soft tabs, 2/4/8), honest save state, atomic save, undo/cut/copy/paste (and Shift+Insert / Ctrl+Insert / Shift+Delete), Insert toggles overwrite (`OVR` in the status bar), Page Up/Down and a view that follows the caret, sort / deduplicate / reverse / trim lines, duplicate and move lines (Ctrl+D, Alt+Up/Down), go to line (Ctrl+G), line and column in the status bar -- all in the default view, not only `--editor-view` |
 | Storage | A rope buffer holds every document; whole-document operations are one undo step |
+| Large files | A file over the editable limit (32 MiB, configurable) opens in a read-only viewer tab with a banner, reading only the lines on screen; lines are indexed and Find runs on background jobs; `--readonly` and `--large-file` open any file there. No selection or copy, no UTF-16, 64 KiB per displayed line (release plan M1-06) |
 | Safety | Unsaved-changes questions asked inside the window (Save / Don't Save / Cancel; no dependency on zenity or `MessageBoxW`), external-change detection, crash recovery journal written only when a document has changed — encrypted and recovered at unlock for encrypted documents ([ADR-0022](docs/decisions/ADR-0022.md)) |
 | Files | Open (several at once)/Save/Save As/Save All/Save a Copy/Save as New Revision/Reload, a Save As suggestion that never names a file already there, recent files, tab context menu, Ctrl+Tab, command-line file opening. UTF-8, UTF-8 with BOM and **UTF-16 LE/BE** all load and save; a truncated or malformed UTF-16 file is refused by name rather than repaired with replacement characters. A file that is not UTF-8 and has no byte-order mark opens as **Windows-1252** and saves back byte for byte; a character Windows-1252 cannot hold stops the save and offers UTF-8 rather than writing a `?` |
 | Search | Find and replace with case-sensitive, whole-word and regex toggles, changes shown before they are applied, recursive cross-file search |
 | Data | JSON / JSONL / TOML / **YAML** validate, format, minify, convert; RFC 4180 CSV/TSV shape report, conversion to JSON and JSON Lines, column types. YAML refuses deep nesting, alias bombs and duplicate keys in words that say what to do ([ADR-0023](docs/decisions/ADR-0023.md)) |
 | Semantic | Title, keywords, summary and outline extracted from the document; document statistics; date and time insertion |
-| Clipboard | History with kind detection, paste from history, format-aware paste transformations |
+| Clipboard | History with kind detection, paste from history, format-aware paste transformations, Pin and Clear Clipboard History; an editor context menu (right-click, the Menu key, Shift+F10) in both views; rows act on a snapshot taken when a menu opens (U5); copies from Private or stricter documents are kept out of clipboard managers and cleared off the system clipboard after a minute |
 | Metadata | A SQLite store with migrations — built and tested, not yet wired in ([ADR-0019](docs/decisions/ADR-0019.md)) |
-| Encryption | `.bpadx` documents — Security ▸ Encrypt Document, unlock on open, and saves stay encrypted. Argon2id, XChaCha20-Poly1305 or AES-256-GCM, chunked with position authenticated ([ADR-0021](docs/decisions/ADR-0021.md)) |
+| Encryption | `.bpadx` documents — Security ▸ Encrypt Document, unlock on open, and saves stay encrypted. Argon2id, XChaCha20-Poly1305 or AES-256-GCM, chunked with position authenticated ([ADR-0021](docs/decisions/ADR-0021.md)). A file's stored Argon2id cost is capped before anything is authenticated: above four times the default it asks, and above 256 MiB, 8 passes or 16 lanes it refuses |
 | Security | Per-document profiles (Standard / Private / Confidential / Maximum) governing the recovery journal, clipboard history and metadata store ([ADR-0020](docs/decisions/ADR-0020.md)), remembered per file between sessions under a digest of its path. What each axis does and does not do: [SECURITY_MODEL.md](docs/architecture/SECURITY_MODEL.md) |
 | Settings | Tools ▸ Settings... (Ctrl+,) and the View and Format menus save into your own `config.toml`, keeping what you wrote there by hand; only what you changed is written |
 | Security (phase 16) | Privacy Mode, a session override that can only tighten; Scan for Secrets, which reports where a credential is and never what it is; Redact Found Secrets, as an undoable edit with a consent step; Inspect Metadata; Hash Document; Sign Document, with the key sealed in a passphrase envelope in the data directory (release plan M2-10); Verify Signature; Security History, which every row above it writes into (ADR-0024) |
@@ -166,8 +174,8 @@ the developer's version.
   the file, search against the buffer, journal recovery, the notebook through
   the file layer, the audit log, redaction, signing, and the filename grammar
   against the platform's own rules. Between them they have found seven
-  defects that no unit test did. **Six are fixed, and the seventh is a
-  decision rather than a defect.** The most serious was `bp-naming` asked whether a *whole* sanitised title was a Windows
+  defects that no unit test did. **All seven are fixed**; the last needed a
+  decision (D6) before it could be. The most serious was `bp-naming` asked whether a *whole* sanitised title was a Windows
   device name, while Win32 asks only about the stem before the first dot --
   so `con.txt`, `aux.log` and `NUL.dat` passed untouched, and on Windows
   saving to one of those writes **the device**, reports success, and the
@@ -200,26 +208,20 @@ the developer's version.
   bare carriage return, and nothing else, everywhere). `bp-buffer`'s rope is
   built with ropey's `cr_lines` and `bp-search` counts the same set, so Find
   in Files and the editor agree.
-- **Three crates and one module are built and unreachable, and this list is
-  now counted rather than remembered.** `bp-research`, `bp-notebook` and
+- **Three crates are built and unreachable, by decision, and this list is
+  counted rather than remembered.** `bp-research`, `bp-notebook` and
   `bp-storage` have zero reverse dependencies anywhere in the application:
   nothing in `bp-ui`, in `apps/bachelorpad`, or in any other `bp-*` crate
   names them. `bp-notebook` is reached only by the fuzz harness and the
-  cross-crate tests, `bp-storage` only by the latter. `bp-audit`
-  came off this list when Security ▸ Security History shipped. Add `bp-buffer`'s
-  large-file engine -- depended on, and its `SizeClass` now drives the open
-  path's size guard, but the `LargeFile` viewer appears nowhere outside its
-  own crate, so a file past the 32 MiB editable limit is refused with a
-  notice rather than opened (the viewer is release-plan item M1-06) --
-  and it is over ten thousand lines, with their unit tests, that no user
-  can reach. It is still the largest thing standing between this
-  repository and a product.
+  cross-crate tests, `bp-storage` only by the latter. ADR-0030 keeps all
+  three out of RC1. `bp-audit` came off this list when Security ▸ Security
+  History shipped, and `bp-buffer`'s large-file engine when the read-only
+  viewer did (release plan M1-06).
 
   | Crate | Reached by |
   | --- | --- |
   | `bp-research` | nothing (unwired for RC1, ADR-0030) |
   | `bp-notebook` | the fuzz harness and cross-crate tests only (1.1, ADR-0030) |
-  | `bp-buffer` ▸ `large.rs` | nothing yet (the viewer, M1-06) |
   | `bp-storage` | the cross-crate tests only, by decision (ADR-0019; kept unwired for RC1 by ADR-0030) |
 
   Line and test counts are left out because they drift.
@@ -227,6 +229,13 @@ the developer's version.
   `bp-integrity`, `bp-platform` and `bp-redaction` came off this list --
   Verify Signature, Set as Default Editor, redaction and the metadata
   inspector all have rows now.
+- **Only File ▸ Open asks for a `.bpadx` passphrase.** A `.bpadx` opened
+  from Recent Files, the command line (so also a double-click on a
+  registered file) or a Find in Files hit skips the passphrase flow. The fix
+  is planned before rc.1.
+- **Line-ending conversion leaves bare CRs alone** and a CR-only file is
+  labelled with the platform default, though D6 made a bare CR a line break
+  everywhere else. Whether to change that is open question D11.
 - **Still barely used by a person.** The tests cover the pieces and the
   seams, the window tests drive the real window, and `scripts/smoke-linux.sh`
   drives the real binary on Xvfb. A person driving the application is

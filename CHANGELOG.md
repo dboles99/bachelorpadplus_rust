@@ -132,8 +132,8 @@ describe behaviour that earlier development builds had.
   has not had an independent cryptographic review**; the Encrypt Document
   prompt and [SECURITY.md](SECURITY.md) say so.
 - Opening a `.bpadx` file whose stored key-derivation cost is above four
-  times the default now asks first, and one asking for more than 256 MiB or
-  8 passes is refused. A damaged or hostile file could previously make the
+  times the default now asks first, and one asking for more than 256 MiB,
+  8 passes or 16 lanes is refused. A damaged or hostile file could previously make the
   editor spend over a minute and a gigabyte of memory before reporting it.
 - The recovery journal for an encrypted document is sealed with its
   passphrase, and under Private and Confidential no unencrypted journal is

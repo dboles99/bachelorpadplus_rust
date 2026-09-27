@@ -55,8 +55,16 @@ settles D5, D8, D9 and U2. On 2026-09-26 the owner answered 17 (nothing
 leaves the machine, ADR-0034, settling D1), 18 (package formats), 19
 (releases built by a local script), 20 (RC1 ships saying the encryption
 envelope is unreviewed, settling D4 for RC1) and decision 2's copyright
-holder (Daniel Boles). Decision 3, the signing identity, is being applied
-for by the owner.
+holder (Daniel Boles). Later on 2026-09-26 the owner answered 3 (Azure
+Trusted Signing, since renamed Artifact Signing), 15 and D10 (ask above four
+times the default Argon2 cost, refuse above 256 MiB or 8 passes), 21 (the
+Windows 10 support statement), U3 (a read-only viewer tab for large files),
+U5 (clipboard rows snapshot on open), D6 (a line ends at LF, CRLF or a bare
+CR, everywhere) and approved the icon. What decision 3 still lacks is the
+signing identity itself, which the owner has yet to obtain. Two questions
+were added on 2026-09-27: D11 (whether line-ending conversion should rewrite
+bare CRs) and 3a (whether the owner can get Artifact Signing or needs an OV
+certificate).
 
 specs.md section 22's warm-start target (75 ms) is a measurement still owed,
 not a decision; it is under *Open items* below with the rest of ADR-0017's
@@ -89,8 +97,9 @@ unmeasured half.
   configuration directory together, and an old location is adopted rather
   than abandoned. The journal went to `Data`, not `State`, which is what
   `bp-platform`'s own docs said.
-- **Neither `bp-platform-windows` nor `bp-platform-linux` was created**, and
-  that is a decision rather than an omission. specs §20 and the crate map
+- **`bp-platform-windows` was created late, and `bp-platform-linux` not at
+  all.** At first neither was, and that was a decision rather than an
+  omission. specs §20 and the crate map
   name them. Everything they would hold is either already a parameterised
   function in `bp-platform` -- tested on both legs -- or blocked on D8 and
   the signing-key question. ADR-0001's own warning about `cfg`-gated code
@@ -99,7 +108,10 @@ unmeasured half.
   Since then D8 and the signing-key question are answered, and ADR-0033
   (2026-09-25) names `bp-platform-windows` as the one crate allowed
   `windows-sys` and confined `unsafe`, for when Win32 calls are needed. It
-  has not been created yet.
+  now exists and is wired into the application (release plan M2-03): the
+  parent console for `--help`, the crash message box, and the default-editor
+  report and Settings link. None of it has yet been run on Windows.
+  `bp-platform-linux` has still not been created.
 
 - **What a line is: answered (D6, 2026-09-26), and the pinned test runs.**
   `bp-search` used to count `'\n'` while `bp-buffer`'s rope, built with
@@ -116,7 +128,8 @@ unmeasured half.
   `TextInput` view draws breaks as Slint does (it may draw a form feed or
   U+2028 as a new line); `bp-files` converts line endings without touching
   a bare `\r`, because `LineEnding` cannot name a classic Mac file and a
-  conversion that rewrote one would rewrite a `\r` that was data; and the
+  conversion that rewrote one would rewrite a `\r` that was data (whether it
+  should is open question D11); and the
   JSON, YAML, TOML and CSV parsers report line numbers by their own rules.
 - **Time to first interaction is unmeasurable under the software renderer.**
   Slint exposes no rendering notifier there, so half of the ADR-0017 startup

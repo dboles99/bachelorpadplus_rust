@@ -91,9 +91,9 @@ encrypted in chunks with **XChaCha20-Poly1305** (files written with
 position authenticated. The cryptographic primitives come from established,
 widely used Rust libraries (RustCrypto); none is implemented here. Because a
 file's Argon2id cost is read before anything is authenticated, a file asking
-for more than 256 MiB or more than 8 passes is refused outright, and one
-asking for more than four times the default is opened only after you agree
-(ADR-0021, amended 2026-09-26).
+for more than 256 MiB, more than 8 passes or more than 16 lanes is refused
+outright, and one asking for more than four times the default is opened only
+after you agree (ADR-0021, amended 2026-09-26).
 
 **The way those primitives are combined has not had an independent
 cryptographic review.** Until it has, do not rely on `.bpadx` encryption to

@@ -69,6 +69,14 @@ Prepare these before starting, outside the evidence folder:
 - `ansi.txt` (Win): a file saved from Windows Notepad with the encoding set
   to ANSI, containing `café`, `€` and curly quotes.
 - `cjk.txt`: empty; the input-method step types into it.
+- `big.log`: about 1 GB of numbered lines. On Linux,
+  `seq -f 'line %.0f of the large-file test' 1 30000000 > big.log`; on
+  Windows, copy the one made on Linux. Note its SHA-256 (`sha256sum` on
+  Linux, `Get-FileHash` in PowerShell) before step 11.
+- `cr.txt`: three lines, `one`, `two` and `three`, separated by bare
+  carriage returns and nothing else (an old Mac file). On Linux,
+  `printf 'one\rtwo\rthree' > cr.txt`; in PowerShell,
+  ``[IO.File]::WriteAllText("$PWD\cr.txt", "one`rtwo`rthree")``.
 
 ## The steps
 
@@ -77,7 +85,7 @@ Prepare these before starting, outside the evidence folder:
 | Env | Do | Expected |
 | --- | --- | --- |
 | Win | Copy the installer to the VM and run it | No Smart App Control or SmartScreen block on `W11`; the publisher shown is the signing identity. No administrator (UAC) prompt: it is a per-user install. It finishes without error |
-| Win | Unzip the portable zip into a folder of your choice and run `bachelorpad.exe` from it | It starts. The folder also holds the `bpad.cmd` shim and the two `.reg` files |
+| Win | Unzip the portable zip into a folder of your choice and run `bachelorpad.exe` from it | It starts. The folder also holds the `bpad.cmd` shim, `LICENSE-MIT`, `LICENSE-APACHE`, `THIRD-PARTY-NOTICES.txt` and `README.txt`, and **no** `.reg` files: a registration has to name where the program is, so step 07 saves them with File ▸ Set as Default Editor... ▸ Save Files... |
 | Linux | Install the package for the system: `sudo apt install ./<file>.deb`, `sudo dnf install ./<file>.rpm`, `makepkg -si` from the `PKGBUILD`, or unpack the `.tar.gz` | The package manager resolves every dependency; nothing is reported missing. BachelorPad+ appears in the application menu with its icon |
 | All | In a terminal, run `bachelorpad --version`, then `bachelorpad --help` (on Windows, from `cmd` or PowerShell) | The version matches the tag; the help text lists the options. On Windows the text appears in the same console window, and no editor window opens |
 
@@ -130,7 +138,8 @@ Evidence: `04-recover.png` (the question), `04-restored.png`.
 | All | Enter a passphrase, then a different one to confirm | "those did not match" and the first question again; no file is written |
 | All | Enter the passphrase twice correctly | `secret.bpadx` is written; the status bar says so; the Security menu row reads "Encrypted (.bpadx)". `plain.txt` is still there, unencrypted |
 | All | Open `secret.bpadx` in another program | It is not readable text |
-| All | Close the tab, open `secret.bpadx`, give a wrong passphrase, then the right one | The wrong one keeps the bar open with an error; the right one opens the text |
+| All | Close the tab, open `secret.bpadx` with File ▸ Open, give a wrong passphrase, then the right one | The wrong one keeps the bar open with an error; the right one opens the text |
+| All | Close the tab and open `secret.bpadx` from the recent files listed in the File menu | Expected once the fix lands: the passphrase bar opens as with File ▸ Open. **Known issue until then:** this path skips the passphrase flow. Record it as fail with "known issue" in the notes |
 | All | Edit, press Ctrl+S, close and reopen | The change is there, and the file is still encrypted |
 | All | Edit without saving, wait ten seconds, kill the process, restart | No recovery question names the document; a status-bar notice says one encrypted document has recovered work. Opening and unlocking `secret.bpadx` restores the edit, marked unsaved |
 
@@ -162,7 +171,7 @@ Evidence: `06-confidential.png` (the Security menu readouts),
 | Linux | File ▸ Set as Default Editor... | The dialog lists the current defaults, the files and every command it will run. After **Set as Default**, each command's result is reported, and what the desktop now says |
 | Linux | Double-click a `.txt` file in Files (GNOME), Dolphin (KDE) or the X11 desktop's file manager | It opens in BachelorPad+ |
 | Linux | File ▸ Remove Registration... | Greyed with the reason when the package installed the entry (nothing of its own to remove); otherwise it removes only the files Set as Default wrote |
-| All | Double-click `secret.bpadx` (choose BachelorPad+ for `.bpadx` first if the system asks) | BachelorPad+ opens and asks for the passphrase |
+| All | Double-click `secret.bpadx` (choose BachelorPad+ for `.bpadx` first if the system asks) | Expected once the fix lands: BachelorPad+ opens and asks for the passphrase. **Known issue until then:** a file opened from the command line, which is what a double-click is, skips the passphrase flow. Record it as fail with "known issue" in the notes |
 
 Evidence: `07-dialog.png`, `07-explorer.png` or `07-files.png`.
 
@@ -210,7 +219,44 @@ a list item.
 Evidence: `10-reader.txt` (a short note of what was and was not read; NVDA's
 speech viewer or Orca's log can be pasted in).
 
-### 11 Uninstall
+### 11 Large files: the read-only viewer
+
+| Env | Do | Expected |
+| --- | --- | --- |
+| All | File ▸ Open `big.log` | A viewer tab opens within a few seconds, with a banner saying it is read-only and too large to edit, giving the file's size and the 32 MiB limit. The window stays responsive while the status bar reports indexing |
+| All | Scroll with the wheel and the scrollbar, then press Ctrl+End, then Ctrl+Home | Lines appear as you scroll. Ctrl+End reaches the last line once indexing allows (`line 30000000 of the large-file test`, and the status bar agrees); Ctrl+Home returns to the first |
+| All | Ctrl+G to line 15000000 | The caret is on `line 15000000 of the large-file test` |
+| All | Ctrl+Home, then Ctrl+F for `line 29999999 of` and Enter | The find bar reports progress without freezing the window, then the match is shown highlighted. Escape during a second search stops it |
+| All | Try typing and pasting, and open the File and Edit menus | Nothing changes; the first key says so in the status bar. Save, Save As and the editing rows are greyed with **read-only** |
+| All | Close the tab and take the file's SHA-256 again | It matches the one taken before the step: the file is unchanged |
+
+Evidence: `11-viewer.png` (the banner and the status bar after Ctrl+End),
+`11-hash.txt` (both hashes).
+
+### 12 Editor context menu
+
+| Env | Do | Expected |
+| --- | --- | --- |
+| All | Open `plain.txt`, copy two different lines, then right-click in the text | A menu opens at the pointer with Cut, Copy, Paste, Select All, Paste Special..., Clipboard History, Pin and Clear Clipboard History. The selection and caret do not move |
+| All | Escape, then press the Menu key (or Shift+F10 where the keyboard has none) | The same menu opens at the caret; the arrow keys move through it, Right opens a submenu, Escape closes it and returns to the text |
+| All | Pin ▸ the first line you copied; then Clear Clipboard History; then open Clipboard History | The pinned line is still listed (ticked under Pin); the other is gone |
+| All | Try each theme (View menu) with the context menu open | Note how the menu is drawn. **Known issue:** it is light under every theme; record what you see rather than failing the step for it |
+
+Evidence: `12-context-menu.png`.
+
+### 13 Old Mac line endings
+
+| Env | Do | Expected |
+| --- | --- | --- |
+| All | File ▸ Open `cr.txt` with line numbers on (View menu), then Ctrl+End | Three numbered lines, `one`, `two` and `three`; the status bar says line 3 |
+| All | Ctrl+G to line 2 | The caret is on `two` |
+| All | Find in Files for `three` over the folder holding `cr.txt`, then open the result | The result says line 3, and opening it puts the caret on `three` |
+| All | Note the line ending the status bar and Format menu show; choose Format ▸ LF, save, and look at the file's bytes | **Known gap (open decision D11):** the file is labelled with the system's default line ending, and the saved file still separates its lines with bare carriage returns. Record what you see; this is not a failure until D11 is decided |
+
+Evidence: `13-cr.png` (line numbers and status bar), `13-bytes.txt` (a hex
+dump of the saved file, such as `xxd` or `Format-Hex` output).
+
+### 14 Uninstall
 
 | Env | Do | Expected |
 | --- | --- | --- |
@@ -219,7 +265,7 @@ speech viewer or Orca's log can be pasted in).
 | Linux | Remove Registration first if Set as Default wrote files, then remove the package (`apt remove`, `dnf remove`, `pacman -R`, or delete the unpacked folder) | The application menu entry and icons are gone; double-clicking a `.txt` no longer opens BachelorPad+ |
 | All | Look in the settings, state and data folders | Settings and data are kept unless you chose to delete them; nothing was deleted without being asked |
 
-Evidence: `11-uninstall.png`, `11-registry.txt` on Windows.
+Evidence: `14-uninstall.png`, `14-registry.txt` on Windows.
 
 ## Results template
 
@@ -249,7 +295,10 @@ Copy this into `artifacts/test-evidence/<tag>/<env>/results.md`.
 | 08 HiDPI 125 / 150 / 200 % | | | |
 | 09 Input method | | | |
 | 10 Screen reader | | | |
-| 11 Uninstall | | | |
+| 11 Large-file viewer | | | |
+| 12 Editor context menu | | | |
+| 13 Old Mac line endings | | | |
+| 14 Uninstall | | | |
 
 Failures filed as:
 ```
