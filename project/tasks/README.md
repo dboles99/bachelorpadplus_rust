@@ -8,8 +8,8 @@ task to carry (see its 2026-09-25 amendment). New work is added there.
 
 What stays here:
 
-- one README per folder, giving the folder's status on 2026-09-25 and the
-  plan items or ADRs where its remaining work went;
+- one README per folder, giving the folder's status (last checked
+  2026-09-27) and the plan items or ADRs where its remaining work went;
 - the six task files from phases 1 and 2 that were written with real
   acceptance criteria, kept as the record of what those phases accepted:
   [workspace-scaffold](01-foundation/01-workspace-scaffold.md),
@@ -33,19 +33,19 @@ project/tasks` recovers them.
 Folder numbers are a coarser grouping of the roadmap's 20 phases (see
 ROADMAP.md, "Two numbering schemes, reconciled").
 
-| Folder | Roadmap phases | Status (2026-09-25) | Where the rest is |
+| Folder | Roadmap phases | Status (2026-09-27) | Where the rest is |
 | --- | --- | --- | --- |
 | [01-foundation](01-foundation/) | 1 | Done | Native Linux timing: M4-01 |
-| [02-core-editor](02-core-editor/) | 2 | Done for RC1 except the editor context menu | Context menu: M1-18 (waits on U5); multi-cursor, column selection, folding: 1.x (plan §3) |
+| [02-core-editor](02-core-editor/) | 2 | Done for RC1, including the editor context menu (M1-18) | Multi-cursor, column selection, folding: 1.x (plan §3) |
 | [03-file-safety](03-file-safety/) | 3 | Done | Revision history: deferred to 1.x (plan §3) |
-| [04-large-files](04-large-files/) | 4 | Partly: engine built, not reachable | Viewer: M1-06 (waits on U3); memory mapping declined for good (ADR-0027, ADR-0030) |
+| [04-large-files](04-large-files/) | 4 | Done for RC1: the read-only viewer is built and reachable (M1-06) | The 1 GB measurement: M4-02; memory mapping declined for good (ADR-0027, ADR-0030) |
 | [05-formats](05-formats/) | 5, 6 | Done for RC1 | Highlighting: 1.x (ADR-0030 S6); Markdown preview: U4 |
-| [06-search](06-search/) | 7 | Done for RC1 except two items | Line definition: M1-09 (D6); search inside the large-file viewer: M1-06; fuzzy search, replace in files: 1.x |
+| [06-search](06-search/) | 7 | Done for RC1 (D6 fixed by M1-09; streaming search in the viewer, M1-06) | Fuzzy search, replace in files: 1.x |
 | [07-semantic](07-semantic/) | 8, 9, 10 | Phase 8 done; 9 built and unwired; 10 not started | Phases 9 and 10: 1.2 (ADR-0030 S2, D3) |
-| [08-clipboard](08-clipboard/) | 11 | Partly | Context menu and pin: M1-18 (U5); timed clear: M2-08; Windows native history: 1.x |
+| [08-clipboard](08-clipboard/) | 11 | Done for RC1 (context menu with Pin, M1-18; timed clear, M2-08) | Windows native history: 1.x |
 | [09-notebook](09-notebook/) | 12 | Deferred to 1.1 | ADR-0030 S1 |
 | [10-research](10-research/) | 13 | Built and unwired; no target release | ADR-0030 |
-| [11-security](11-security/) | 14, 15, 16 | Mostly done | M1-19 header half, M2-09, M2-10, M2-11; OS keystores 1.x (ADR-0030 S4) |
-| [12-themes-brand](12-themes-brand/) | 17 | Partly | Icon: M2-01; accessibility: M2-14; personality: 1.x (ADR-0030 S5) |
-| [13-platform](13-platform/) | 18 | Partly | M2-02 to M2-08, M2-12, M2-16 |
-| [14-hardening](14-hardening/) | 19, 20 | Partly | M1-14, M3, M4 |
+| [11-security](11-security/) | 14, 15, 16 | Done for RC1 except one item (M2-09, M2-10, M2-11 done) | M1-19 `.bpadx` header half; OS keystores 1.x (ADR-0030 S4) |
+| [12-themes-brand](12-themes-brand/) | 17 | Done for RC1 (icon approved, M2-01; accessibility minimum, M2-14) | Screen-reader check: M4-04; personality: 1.x (ADR-0030 S5) |
+| [13-platform](13-platform/) | 18 | Built (M2-02 to M2-08, M2-12, M2-16); the Windows half has never run on Windows | Windows runs: M0-12, M4-04; Wayland `app_id` undecided (`WORK_QUEUE.md`, "Follow-ups from M2") |
+| [14-hardening](14-hardening/) | 19, 20 | Partly: licensing and `cargo deny` done (M1-14); packaging built and wired (M3-01 to M3-04), Linux dry run recorded | Windows runs and a signing identity (3a); the Debian 12 container build; M4 |

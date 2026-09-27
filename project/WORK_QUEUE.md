@@ -26,9 +26,10 @@ which is not the same list.
 
 `bp-ui/src/lib.rs` has been split, so `state.rs`, `editor_view.rs` and
 `dispatch.rs` can take different agents. `ui/app.slint` has now been split too
-— seven files, listed in `docs/architecture/ARCHITECTURE.md`. So the find
-bar, the editor surface, the status bar, the results panel and the tab are
-each somebody's own file.
+— into seven files at first (T1), fourteen as of 2026-09-27 (`ls
+crates/bp-ui/ui`). So the find bar, the editor surface, the status bar, the
+results panel, the tab, the dialog sheet, About, Settings, the viewer and the
+Go to Line and passphrase bars are each somebody's own file.
 
 **That is a smaller win than it looks, and the reason is worth knowing.**
 `AppWindow`'s properties and callbacks all still live in `app.slint`, because
@@ -103,7 +104,7 @@ so whoever finishes an item updates them as part of it.
 | — | Insert toggles overwrite; Shift+Insert, Ctrl+Insert, Shift+Delete | `bp_editor::{overwritten, Editor::type_text}`, both views |
 | M0-01/02 | Recovered work is never discarded unasked; a second window cannot touch the first's journal | `bp-history` instance folders, `state::recovery_choice` |
 | M0-03 | Bundled DejaVu Sans Mono (ADR-0032) | `bp-ui/fonts`, `app.slint` |
-| M0-04 | Files past 32 MiB are refused before being read | `bp_files::load_with_limit`, `LoadError::TooLarge` |
+| M0-04 | Files past 32 MiB are refused before being read (superseded by M1-06: they open in the read-only viewer) | `bp_files::load_with_limit`, `LoadError::TooLarge` |
 | M0-05 | JSON key order kept; Sort Keys sorts; TOML Format warns | `bp-data`, `serde_json/preserve_order` |
 | M0-06 | One command-line parser | `bp_config::cli` |
 | M0-08/09 | Stale readouts fixed; recent list honours the profile | `menus.rs`, `state.rs` |
@@ -126,38 +127,58 @@ so whoever finishes an item updates them as part of it.
 | M1-17 | Collision-free Save As name; Save as New Revision | `suggested_filename`, `next_revision_path` |
 | M1-19 (store) | A document's profile survives a restart | `bp_history::ProfileStore` |
 | M1-21 | Outline ignores fences; Follow System says when the desktop is silent | `bp-semantic`, `menus::view` |
+| M1-06 | Files over the editable limit open read-only in a viewer tab with a banner, as `--readonly` and `--large-file` do; lines are indexed and searched on background jobs. The 1 GB measurement is M4-02 | `ui/viewer.slint`, `src/viewer.rs`, `bp_buffer::LargeFile` |
+| M1-09 | D6: LF, CRLF and a bare CR end a line everywhere; the pinned integration test is un-ignored | ropey `cr_lines`, `bp-search`, `tests/integration` |
+| M1-14 | Licence files (holder Daniel Boles), generated third-party notices, `cargo deny` in the gate | `LICENSE-*`, `THIRD-PARTY-NOTICES.txt`, `deny.toml`, gate stage `deny` |
+| M1-18 | Editor context menu in both views (right-click, Menu key, Shift+F10) with Pin and Clear; clipboard rows snapshot on open (U5) | `menus.rs`, `app.slint`, `bp_clipboard::toggle_pin` |
+| M2-01 | Icon set, approved by the owner | `assets/icon/` |
+| M2-02/03/04 | Windows resources, `bp-platform-windows`, a `.reg` pair from Set as Default ▸ Save Files…, Settings deep link. **Built, never run on Windows** | `apps/bachelorpad/build.rs`, `crates/bp-platform-windows`, `bp-platform` |
+| M2-05/07 | Desktop entry, MIME package and AppStream metadata, generated and held by a drift test; app id `io.github.dboles99.BachelorPad` | `packaging/linux/`, `bp-platform` |
+| M2-06 | Linux Set as Default runs its commands with consent; Remove Registration | `default_editor.rs`, `bp-platform` |
+| M2-08 | One clipboard per process, Wayland data-control, a private copy cleared after a minute | `bp_clipboard::PendingClear` |
+| M2-09 | Argon2 ceiling: refuse more than 256 MiB, 8 passes or 16 lanes; ask above 4x the default | `bp-crypto` `header.rs`, ADR-0021 amendment |
+| M2-10 | Sign Document, with a passphrase-sealed key made on first use | `bp-integrity`, `signing-key.bpadx` |
+| M2-11 | Nothing leaves the machine | ADR-0034, the Security readout |
+| M2-12 | `PLATFORM_MATRIX.md` generated, with a drift test | `capabilities::matrix_markdown` |
+| M2-13 | Records sweep 2: template task files deleted, phase READMEs carry status | `project/tasks/` |
+| M2-14 | Accessibility minimum: F10 and Alt+letter open the menus; roles and labels | `menu.slint`, `app.slint` |
+| M2-15 | A startup notice counts encrypted documents with recovered work | `Journal::sealed_count` |
+| M2-16 | `bpad` alias | a symlink in the Linux packages, `bpad.cmd` in the installer and zip |
+| M3-01 | Per-user Inno Setup installer and portable zip (no `.reg` files; Save Files… writes them). **Built, never run on Windows** | `packaging/windows/` |
+| M3-02 | `.deb`, `.rpm` (rpmbuild, no maintainer scripts), `tar.gz`, `PKGBUILD`. Tested on Ubuntu 22.04 and 24.04 only; the pinned Debian 12 image has never been built | `packaging/linux/` |
+| M3-03 | Release script; a native Linux dry run is recorded (glibc 2.39, over the ceiling) | `scripts/Invoke-Release.ps1`, `artifacts/releases/v1.0.0-rc.0/linux/` |
+| M3-04 | Windows signing wired, through Artifact Signing or an OV certificate. **No identity; never run** | `packaging/windows/Signing.ps1`, `-Sign` / `-AllowUnsigned` |
+| M3-05 | User docs: README, guide, CHANGELOG, SECURITY.md, RC checklist | repo root, `docs/user/`, `docs/release/` |
+| M3-06 (in part) | Version 1.0.0-rc.0 for the dry runs; rc.1 is cut after M4 | workspace `Cargo.toml` |
+| M3-07 | The dormant hosted workflow runs the gate script itself | `.github/workflows/ci.yml` |
 
 Every library half now has its row.
 
-## Tier 0 — three crates and one module with no way in
+## Tier 0 — three crates with no way in
 
 `bp-notebook`, `bp-research` and `bp-storage` are named by no `Cargo.toml` in
 the application (only `tests/integration`, and for `bp-notebook` the fuzz
-harness), and `bp-buffer`'s large-file viewer (`LargeFile`) is used nowhere
-outside its own crate -- only its size classes are, for the open path's size
-guard. ADR-0030 keeps all three crates unwired for RC1, so of this tier only
-the large-file row is release work. Every item is the same shape: a tested
-library and a missing way in. Read
-`prompts/rosettas/R011_WIRE_CAPABILITY_INTO_SHELL.md` before taking any of
-them. **Only one agent may add to `AppWindow` in `app.slint` at a time**, so
-batch by menu.
+harness). ADR-0030 keeps all three unwired for RC1, so nothing in this tier
+is release work. (The large-file viewer that used to head it is done:
+M1-06.) Every item is the same shape: a tested library and a missing way
+in. Read `prompts/rosettas/R011_WIRE_CAPABILITY_INTO_SHELL.md` before taking
+any of them. **Only one agent may add to `AppWindow` in `app.slint` at a
+time**, so batch by menu.
 
 | Item | What exists |
 | --- | --- |
-| The open path uses the large-file engine | `bp_buffer::{LargeFile, SizeClass, Access}` (ADR-0027). Since M0-04 a file past the 32 MiB editable limit is refused before it is read, with a notice, rather than loaded whole; nothing can view it yet. Needs a read-only-because-huge state in the shell, which is a real UI decision (U3), so this is the biggest of the wiring items rather than the cheapest. Release-plan item M1-06 |
 | Notebook mode | `bp-notebook` (ADR-0025). A new view, not a menu row. Deferred to 1.1 by ADR-0030 |
 | Research mode | `bp-research`. Same: a mode, not a row. Not in RC1 (ADR-0030) |
 
 ## Tier 0.5 — what the cross-crate tests found
 
-Eleven files of cross-crate tests have found seven defects, and **six are
-fixed** -- the sixth session took the notebook fallback, the extended-length
-path and the roaming state. What is left is a decision and a latent trap
-that is now documented rather than set:
+Eleven files of cross-crate tests have found seven defects, and **all seven
+are fixed** -- the sixth session took the notebook fallback, the
+extended-length path and the roaming state, and M1-09 took the last:
 
 | Item | Shape |
 | --- | --- |
-| `bp-search` and `bp-buffer` disagree what a line is | **An ADR, not a patch — D6.** Either `bp-search` adopts ropey's break set or `bp-buffer` drops `unicode_lines`. One definition has to win. `bp-ui` now counts with the rope in both views, so the disagreement left is Find in Files against the editor. The one `#[ignore]`d test left in `tests/integration` pins it |
+| ~~`bp-search` and `bp-buffer` disagree what a line is~~ | **Fixed by M1-09.** D6 was answered: a line ends at LF, CRLF or a bare CR, everywhere (ropey `cr_lines`), and the pinned test in `search_over_buffer.rs` is un-ignored. What is left is line-ending *conversion*, which still treats a bare CR as data: D11, under "Follow-ups from M3" |
 
 ## Tier 0.75 — what the window tests found
 
@@ -233,8 +254,9 @@ All of it, in one pass. What is worth carrying forward:
   id. Setting it needs Slint's `unstable-winit-030` feature
   (`BackendSelector::with_winit_window_attributes_hook`), an API that pins
   the shell to Slint's winit version. The alternative is `StartupWMClass=bachelorpad`
-  in the generated entry, which GNOME and KDE both honour. Decide which
-  before M3-02 packages the entry.
+  in the generated entry, which GNOME and KDE both honour. This was to be
+  decided before M3-02 packaged the entry; M3-02 shipped with neither, so
+  it is still undecided and the dock may show a generic icon.
 - **Set as Default runs its commands on the UI thread.** They are short
   (`update-mime-database` on a per-user tree is the longest), but a hung
   `xdg-mime` would freeze the window. `worker::Background` is the pattern if

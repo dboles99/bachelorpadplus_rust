@@ -100,8 +100,8 @@ proptest! {
     /// **A match's reported line is the line the buffer puts it on**, for
     /// documents whose line breaks are LF and CRLF.
     ///
-    /// Restricted to those two deliberately: the unrestricted version of this
-    /// property fails, and is below under `#[ignore]` with the reason.
+    /// Restricted to those two; the version below also mixes in bare CRs,
+    /// which have ended a line everywhere since D6 was answered.
     #[test]
     fn a_matchs_line_number_agrees_with_the_buffer(
         parts in proptest::collection::vec(
