@@ -1,0 +1,40 @@
+[package]
+name = "bp-platform-windows"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# The one crate in the workspace allowed `unsafe` (ADR-0033). Everything here
+# is a safe function around one Win32 call; `bp-platform` keeps the rules and
+# stays dependency-free, and this crate supplies the few answers only the
+# operating system has.
+[lints]
+workspace = true
+
+[dependencies]
+# One-directional: this crate implements `bp_platform::editor::ProgIdQuery`,
+# so `bp-platform` can decide what a registry answer means without ever
+# reading the registry itself. The reverse edge must never exist.
+bp-platform = { path = "../bp-platform" }
+
+# Only on Windows, so a Linux build compiles this crate as a handful of
+# no-ops and never builds `windows-sys` at all. 0.61 is the current line and
+# asks for Rust 1.71, well inside the workspace's 1.94 floor. Only the
+# modules actually called are enabled -- each feature is a slice of the
+# Win32 surface this crate could reach, and the list is the review:
+#
+# * Win32_Foundation -- HANDLE, HWND, the WIN32_ERROR codes.
+# * Win32_System_Console -- AttachConsole, GetStdHandle.
+# * Win32_System_Registry -- RegGetValueW (reads only; ADR-0032).
+# * Win32_UI_Shell -- ShellExecuteW, SHChangeNotify.
+# * Win32_UI_WindowsAndMessaging -- MessageBoxW and its flags, SW_SHOWNORMAL.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+    "Win32_System_Registry",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }

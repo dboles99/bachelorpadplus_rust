@@ -93,6 +93,20 @@ impl Availability {
     }
 }
 
+impl Availability {
+    /// A word or two for a table cell. The reason says the rest.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Available => "Yes",
+            Self::Conditional { .. } => "Depends on the machine",
+            Self::NotImplemented { .. } => "Not built",
+            Self::AwaitingDecision { .. } => "Awaiting a decision",
+            Self::Unsupported { .. } => "No",
+        }
+    }
+}
+
 /// Something the product might do that depends on the operating system.
 ///
 /// The list is closed on purpose. A capability register that callers can
@@ -190,7 +204,7 @@ impl Capability {
     /// for every pair, and no pair can be silently absent.
     #[must_use]
     pub const fn availability(self, platform: Platform) -> Availability {
-        use Availability::{Available, AwaitingDecision, Conditional, NotImplemented, Unsupported};
+        use Availability::{Available, Conditional, NotImplemented, Unsupported};
         match (self, platform) {
             // --- registration artefacts ------------------------------------
             (Self::DesktopEntry, Platform::Linux) | (Self::MimeAssociation, Platform::Linux) => {
@@ -204,10 +218,10 @@ impl Capability {
                 reason: "Windows associates by file extension, not by MIME type.",
             },
             (Self::WindowsFileTypeRegistration, Platform::Windows) => NotImplemented {
-                reason: "The registry values are generated and can be written to a `.reg` file, \
-                         but nothing here applies them: writing to the registry needs either the \
-                         `winreg` dependency or a Win32 call, and this crate has neither a \
-                         third-party dependency nor `unsafe`.",
+                reason: "The per-user installer (packaging/windows, release plan M3-01) writes \
+                         these values and removes them; a portable copy saves them as a `.reg` \
+                         pair for you to run. The application itself never writes the registry \
+                         (ADR-0032). The installer has not yet been run on Windows.",
             },
             (Self::WindowsFileTypeRegistration, Platform::Linux) => Unsupported {
                 reason: "There is no registry on Linux.",
@@ -220,30 +234,31 @@ impl Capability {
 
             // --- reading and changing the association ----------------------
             (Self::AssociationQuery, Platform::Linux) => Available,
-            (Self::AssociationQuery, Platform::Windows) => NotImplemented {
-                reason: "The current handler lives in HKCU\\Software\\Classes\\<ext>\\UserChoice, \
-                         and reading the registry needs a dependency this crate does not take. \
-                         The report is produced from values a caller supplies instead.",
+            // Read from `Explorer\FileExts\<ext>\UserChoice`, then the class
+            // default, by `bp-platform-windows`; the shell asks it before
+            // offering Set as Default (release plan M2-04).
+            (Self::AssociationQuery, Platform::Windows) => Available,
+            (Self::AssociationInstall, Platform::Linux) => Conditional {
+                reason: "Available unless the product runs as a Flatpak, whose sandbox manages \
+                         file associations itself; `editor::set_as_default_availability` asks \
+                         the environment which.",
             },
-            (Self::AssociationInstall, Platform::Linux) => Available,
             (Self::AssociationInstall, Platform::Windows) => NotImplemented {
-                reason: "Same obstacle as the registration itself: the values are generated, \
-                         applying them is not.",
+                reason: "The application never writes the registry (ADR-0032): the per-user \
+                         installer applies the registration, and a portable copy saves it as a \
+                         `.reg` file for you to read and run.",
             },
 
-            // --- secrets: blocked on a human -------------------------------
-            (Self::CredentialStore, _) => AwaitingDecision {
-                reason: "DPAPI and Secret Service are both in specs.md, and both would decide \
-                         where the signing key of `bp-integrity` lives -- whether the platform \
-                         vault is the custodian of the key or merely a wrapper over a key file. \
-                         That question is open, and implementing a keyring would answer it by \
-                         accident.",
+            // --- secrets: deferred to 1.x ----------------------------------
+            (Self::CredentialStore, _) => NotImplemented {
+                reason: "Deferred to 1.x (release plan scope S4). The signing key is kept in a \
+                         passphrase `.bpadx` envelope in the data directory (decision 16), so \
+                         nothing in 1.0 needs a vault; DPAPI or Secret Service would later wrap \
+                         that key rather than replace it.",
             },
-            (Self::BiometricUnlock, Platform::Windows) => AwaitingDecision {
-                reason: "Windows Hello only protects something once there is somewhere for that \
-                         something to live; it waits on the same open question as the credential \
-                         store. It is additionally per-machine -- Windows 10 may have no \
-                         enrolled biometric at all.",
+            (Self::BiometricUnlock, Platform::Windows) => NotImplemented {
+                reason: "Deferred to 1.x with the credential store (release plan scope S4). It \
+                         is also per-machine: Windows 10 may have no enrolled biometric at all.",
             },
             (Self::BiometricUnlock, Platform::Linux) => Unsupported {
                 reason: "There is no desktop-wide biometric prompt on Linux to call.",
@@ -254,8 +269,9 @@ impl Capability {
             (Self::FilePermissionNarrowing, Platform::Windows) => Unsupported {
                 reason: "`std::fs::Permissions` on Windows exposes one bit, the read-only \
                          attribute, which controls writing rather than reading. Narrowing the \
-                         access control list properly is a Win32 call, and this crate forbids \
-                         `unsafe`. A file's permissions are whatever its directory passed down.",
+                         access control list properly is a Win32 call, which \
+                         `bp-platform-windows` does not make yet. A file's permissions are \
+                         whatever its directory passed down.",
             },
             (Self::ExtendedLengthPaths, Platform::Windows) => Conditional {
                 reason: "Beyond 259 characters a path needs either the `\\\\?\\` prefix -- which \
@@ -274,8 +290,8 @@ impl Capability {
             // --- clipboard --------------------------------------------------
             (Self::NativeClipboardHistory, Platform::Windows) => NotImplemented {
                 reason: "Windows keeps a clipboard history the product could read; doing so is a \
-                         Win32 call and no adapter exists yet. The product's own history in \
-                         `bp-clipboard` works on both platforms in the meantime.",
+                         Win32 call that `bp-platform-windows` does not make yet. The product's \
+                         own history in `bp-clipboard` works on both platforms in the meantime.",
             },
             (Self::NativeClipboardHistory, Platform::Linux) => Unsupported {
                 reason: "There is no clipboard history in X11 or Wayland to read; what a user \
@@ -320,3 +336,49 @@ pub fn available_on(platform: Platform) -> Vec<Capability> {
 
 #[cfg(test)]
 mod tests;
+
+/// The first line of the generated part of `docs/architecture/PLATFORM_MATRIX.md`.
+pub const MATRIX_BEGIN: &str =
+    "<!-- BEGIN GENERATED: cargo run -p bp-platform --example regenerate_platform_matrix -->";
+
+/// Its last line.
+pub const MATRIX_END: &str = "<!-- END GENERATED -->";
+
+/// The register as the Markdown `PLATFORM_MATRIX.md` carries between
+/// [`MATRIX_BEGIN`] and [`MATRIX_END`] (release plan M2-12).
+///
+/// Generated, not written, because the document and the code disagreed
+/// before: a matrix edited by hand says what somebody believed on the day
+/// they edited it. A drift test compares the two, and the fix is always to
+/// regenerate.
+#[must_use]
+pub fn matrix_markdown() -> String {
+    let mut out = format!("{MATRIX_BEGIN}\n\n| Capability | Windows | Linux |\n|---|---|---|\n");
+    for &capability in Capability::ALL {
+        out.push_str(&format!(
+            "| `{}` | {} | {} |\n",
+            capability.token(),
+            capability.availability(Platform::Windows).label(),
+            capability.availability(Platform::Linux).label(),
+        ));
+    }
+    out.push_str("\nWhy, wherever the answer is not a plain yes:\n\n");
+    for &capability in Capability::ALL {
+        for &platform in Platform::ALL {
+            if let Some(reason) = capability.availability(platform).reason() {
+                out.push_str(&format!(
+                    "- **`{}`, {}**: {reason}\n",
+                    capability.token(),
+                    match platform {
+                        Platform::Windows => "Windows",
+                        Platform::Linux => "Linux",
+                    }
+                ));
+            }
+        }
+    }
+    out.push('\n');
+    out.push_str(MATRIX_END);
+    out.push('\n');
+    out
+}

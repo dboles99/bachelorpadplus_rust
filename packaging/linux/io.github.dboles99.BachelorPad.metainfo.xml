@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.dboles99.BachelorPad</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+  <name>BachelorPad+</name>
+  <summary>Text editor for notes, data and logs</summary>
+  <description>
+    <p>BachelorPad+ is a plain-text editor that starts as fast as Notepad and stays out of the way: open a file, change it, save it.</p>
+    <p>It reads plain text, logs, Markdown, JSON, YAML, TOML, CSV and XML, keeps a recovery journal so unsaved work survives a crash, and can save a document encrypted with a passphrase in its own .bpadx format.</p>
+  </description>
+  <developer id="io.github.dboles99">
+    <name>Daniel Boles</name>
+  </developer>
+  <url type="homepage">https://github.com/dboles99/bachelorpadplus_rust</url>
+  <launchable type="desktop-id">io.github.dboles99.BachelorPad.desktop</launchable>
+  <icon type="stock">io.github.dboles99.BachelorPad</icon>
+  <categories>
+    <category>Utility</category>
+    <category>TextEditor</category>
+  </categories>
+  <content_rating type="oars-1.1"/>
+  <provides>
+    <mediatype>application/x-bachelorpad-encrypted</mediatype>
+    <mediatype>text/plain</mediatype>
+    <mediatype>text/x-log</mediatype>
+  </provides>
+  <releases>
+    <release version="1.0.0-rc.0" date="2026-09-26"/>
+  </releases>
+</component>

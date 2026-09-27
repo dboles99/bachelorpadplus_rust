@@ -1,0 +1,52 @@
+{
+  "tag": "v1.0.0-rc.0",
+  "version": "1.0.0-rc.0",
+  "os": "linux",
+  "commit": "f72d430488f5305b1bfeb328074082b5b3064732",
+  "clean_tree": true,
+  "dry_run": true,
+  "built_at": "2026-09-26T11:23:25Z",
+  "host": {
+    "os": "Ubuntu 24.04.4 LTS",
+    "machine": "vm"
+  },
+  "container": false,
+  "glibc_required": "GLIBC_2.39",
+  "rustc": "rustc 1.94.1 (e408947bf 2026-03-25)\nbinary: rustc\ncommit-hash: e408947bfd200af42db322daf0fadfe7e26d3bd1\ncommit-date: 2026-03-25\nhost: x86_64-unknown-linux-gnu\nrelease: 1.94.1\nLLVM version: 21.1.8",
+  "cargo": "cargo 1.94.1 (29ea6fb6a 2026-03-24)",
+  "cargo_lock_sha256": "a738ec7f5857bb3a018a012ff49337075f80b82c48c0812376cd1970d4b23e57",
+  "sums_signed": false,
+  "windows_signed": false,
+  "artefacts": [
+    {
+      "name": "bachelorpad_1.0.0~rc.0-1_amd64.deb",
+      "bytes": 8813300,
+      "sha256": "40d4fa1f3c2af6b8867b3a57802ec9598dcae96bcc899b76aeb78246fe53087d"
+    },
+    {
+      "name": "bachelorpad-1.0.0-rc.0-linux.cdx.json",
+      "bytes": 684873,
+      "sha256": "7428b77b3a859d061dee961ddd39533b0d205e8827898b6750f0cc3622da7a53"
+    },
+    {
+      "name": "bachelorpad-1.0.0-rc.0-x86_64-linux.debug",
+      "bytes": 24073712,
+      "sha256": "09815d49aaa8d359b04ee8c79922f75bc5d57075620aba182ca8ef01b99c5746"
+    },
+    {
+      "name": "bachelorpad-1.0.0-rc.0-x86_64-linux.tar.gz",
+      "bytes": 12264302,
+      "sha256": "52c8a7fc4f0ead68c20a485c19971f2a909e9eb5afe26d2d0fe034caa2827989"
+    },
+    {
+      "name": "bachelorpad-1.0.0~rc.0-1.x86_64.rpm",
+      "bytes": 8668297,
+      "sha256": "b5af148452582641dc59923e3c645df02ff08434e29dc1f4f82c65737203fbd0"
+    },
+    {
+      "name": "PKGBUILD",
+      "bytes": 2224,
+      "sha256": "b9e02d6d6831e43a624872a019847b5602562c375f40dd8843881175e8702e1d"
+    }
+  ]
+}

@@ -62,26 +62,23 @@ fn a_conditional_capability_is_not_a_usable_one() {
 }
 
 #[test]
-fn the_two_secret_capabilities_are_blocked_on_a_person_not_on_work() {
-    for &platform in Platform::ALL {
+fn the_secret_capabilities_are_deferred_now_that_the_signing_key_has_a_home() {
+    // Decision 16 put the signing key in a passphrase envelope, which is
+    // what the vault question was blocking. What is left is 1.x work, and
+    // the register says so rather than still naming a question nobody is
+    // asking.
+    for availability in [
+        Capability::CredentialStore.availability(Platform::Windows),
+        Capability::CredentialStore.availability(Platform::Linux),
+        Capability::BiometricUnlock.availability(Platform::Windows),
+    ] {
+        assert!(!availability.is_blocked_on_a_decision());
+        assert!(matches!(availability, Availability::NotImplemented { .. }));
         assert!(
-            Capability::CredentialStore
-                .availability(platform)
-                .is_blocked_on_a_decision(),
-            "{platform:?}"
+            availability.reason().is_some_and(|r| r.contains("1.x")),
+            "{availability:?}"
         );
     }
-    assert!(
-        Capability::BiometricUnlock
-            .availability(Platform::Windows)
-            .is_blocked_on_a_decision()
-    );
-    // ...and neither is merely unimplemented, which is the distinction that
-    // stops a blocked question turning into a backlog item somebody picks up.
-    assert!(!matches!(
-        Capability::CredentialStore.availability(Platform::Windows),
-        Availability::NotImplemented { .. }
-    ));
 }
 
 #[test]

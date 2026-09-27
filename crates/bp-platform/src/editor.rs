@@ -9,45 +9,54 @@
 //!
 //! ## The line between asking and doing
 //!
-//! Three things happen in this module and only one of them can change the
+//! Several things happen in this module and only two of them can change the
 //! user's machine.
 //!
 //! | | needs consent | available |
 //! |---|---|---|
-//! | [`state`] -- what opens `.txt` today | no | Linux; Windows reports "cannot tell" |
-//! | [`plan`] -- the artefacts and registry values registration would use | no | both |
-//! | [`install`] -- putting the artefacts where the desktop reads them | **yes** | Linux only |
+//! | [`state`], [`association_report_in`] -- what opens `.txt` today | no | Linux; Windows through a [`ProgIdQuery`] the shell supplies |
+//! | [`plan`], [`linux_plan`], [`unregistration_plan`] -- what a change would consist of | no | both / Linux |
+//! | [`install`] -- putting the artefacts where the desktop reads them | **yes** | Linux, outside Flatpak |
+//! | [`uninstall`] -- removing exactly what [`install`] wrote | **yes** | Linux, outside Flatpak |
 //!
-//! Reporting and generating are pure functions over their arguments. They
-//! read no environment, write no file, and are safe to call from a settings
-//! screen that is merely being drawn. [`install`] is the one function that
-//! writes, and it takes two things nothing else does: an explicit
-//! [`Consent`] value, and an explicit destination root. A caller cannot reach
-//! it by accident and a test cannot reach the user's real directories at all.
+//! Reporting and generating read at most the files the desktop itself reads
+//! (the `mimeapps.list` chain, the system `.desktop` entry), write nothing,
+//! and are safe to call from a settings screen that is merely being drawn.
+//! [`install`] and [`uninstall`] are the two functions that change anything,
+//! and each takes two things nothing else does: an explicit [`Consent`]
+//! value, and an explicit root. A caller cannot reach them by accident and a
+//! test cannot reach the user's real directories at all.
 //!
-//! Even [`install`] stops short of setting the default. It puts the `.desktop`
-//! entry and the MIME package where the desktop environment can see them --
-//! which is what "appear in Open With" means -- and hands back a [`Handoff`]
-//! naming the command that would make the product the default, for the user or
-//! the shell to run. That is the ADR's "guide the user through the OS's own
-//! default-app selection", one step short of doing it for them.
+//! Neither of them sets the default, and nothing in this crate runs a
+//! program. [`LinuxPlan::commands`] names the exact command lines that
+//! finish the job -- rebuilding the two databases, and `xdg-mime default` --
+//! as data. The shell runs them, and only after the user has seen those
+//! exact lines and agreed: the user choosing "Set as Default" in a dialog that
+//! shows the command is the user's own choice, which is what ADR-0012 asks
+//! for; a library that spawned it on its own would be deciding for them.
 //!
-//! ## Windows: generated, never applied
+//! ## Windows: generated here, applied by the installer or the user
 //!
 //! [`plan`] on Windows produces the complete `HKCU\Software\Classes` shape and
-//! renders it as a `.reg` script, and [`install`] refuses. Not out of caution
-//! -- writing a registry key needs either the `winreg` dependency or a Win32
-//! call, and this crate has neither a third-party dependency nor `unsafe`. The
-//! artefact is in the plan, so a shell can offer it through a Save dialog: a
-//! file the user chose where to put and can read before running is a
-//! defensible answer to a registration this crate cannot perform, and arguably
-//! a better one than an installer that writes the same keys invisibly.
+//! renders it as a pair of `.reg` scripts -- one to register, one to take
+//! exactly that away again -- and [`install`] refuses. By decision rather
+//! than by limitation (ADR-0032): the per-user installer writes these values
+//! and removes them, the application never writes the registry, and a
+//! portable build offers the pair through a Save dialog. A file the user
+//! chose where to put and can read before running is a defensible answer,
+//! and arguably a better one than an installer that writes the same keys
+//! invisibly. The installer's `[Registry]` section is rendered from the same
+//! values by [`inno`], so the two cannot disagree.
+//! [`windows::registration_route`] tells the shell which of
+//! "Open Windows Settings" and "Save registration file…" to lead with.
 //!
 //! Every generated key is checked against [`windows::key_objection`], which is
 //! ADR-0012 written as a predicate rather than as a paragraph.
 
 pub mod desktop;
 pub mod file_type;
+pub mod inno;
+pub mod linux;
 pub mod state;
 pub mod windows;
 
@@ -62,8 +71,12 @@ pub use file_type::{
     AssociationPreset, AssociationSelection, FILE_TYPES, FileType, TypeGroup, file_type,
     unknown_extensions,
 };
-pub use state::{AssociationEntry, AssociationReport, AssociationState};
-pub use windows::{KeyObjection, RegistryValue, ValueName};
+pub use linux::{
+    DesktopEnv, FLATPAK_REASON, LinuxPlan, Uninstalled, Unregistration, association_report_in,
+    linux_plan, set_as_default_availability, uninstall, unregistration_plan,
+};
+pub use state::{AssociationEntry, AssociationReport, AssociationState, ProgIdQuery};
+pub use windows::{KeyObjection, RegistrationRoute, RegistryValue, ValueName};
 
 /// What the product is, from the point of view of a registration.
 ///
@@ -95,14 +108,49 @@ impl AppInfo {
     ///
     /// Everything but the path is fixed, because everything but the path is a
     /// promise: the `app_id` in particular must not drift between releases.
+    /// The icon shares the id, because that is the name the hicolor theme
+    /// files are installed under and the name a desktop looks up.
     #[must_use]
     pub fn bachelorpad(executable: impl Into<String>) -> Self {
         Self {
             display_name: "BachelorPad+".to_owned(),
             description: "Text editor for notes, data and logs".to_owned(),
             executable: executable.into(),
-            app_id: crate::APP_DIR.to_owned(),
-            icon: crate::APP_DIR.to_owned(),
+            app_id: crate::APP_ID.to_owned(),
+            icon: crate::APP_ID.to_owned(),
+        }
+    }
+
+    /// This product as a distribution package installs it: `bachelorpad` on
+    /// `PATH`.
+    ///
+    /// The one place a bare program name is right. A package's `.desktop`
+    /// entry is written before the package knows where it will be installed
+    /// (`/usr/bin`, `/usr/local/bin`, a Nix store path), and `Exec=bachelorpad
+    /// %F` is what the specification and every packaged editor use: the
+    /// desktop resolves it through `PATH` exactly as a terminal would.
+    /// [`Self::problems`] still reports it as relative, on purpose -- a
+    /// *per-user* registration naming a bare program launches whatever
+    /// `PATH` finds first, which for a developer is not this build.
+    #[must_use]
+    pub fn packaged() -> Self {
+        Self::bachelorpad("bachelorpad")
+    }
+
+    /// This product, as the running process should register it.
+    ///
+    /// `current_exe` is what the process reports about itself, and inside an
+    /// AppImage that is a path under a temporary FUSE mount
+    /// (`/tmp/.mount_BachelXXXX/usr/bin/bachelorpad`) that disappears when
+    /// the program exits -- a `.desktop` entry naming it launches nothing
+    /// tomorrow. The AppImage runtime puts the path of the `.AppImage` file
+    /// itself in `$APPIMAGE`, and that is the file the user keeps, so it wins
+    /// when it is set and absolute.
+    #[must_use]
+    pub fn launched_from(current_exe: impl Into<String>, env: &DesktopEnv) -> Self {
+        match env.appimage_path() {
+            Some(appimage) => Self::bachelorpad(appimage),
+            None => Self::bachelorpad(current_exe),
         }
     }
 
@@ -138,6 +186,21 @@ impl AppInfo {
     }
 }
 
+/// The program that rebuilds `mimeinfo.cache` for an `applications`
+/// directory.
+const UPDATE_DESKTOP_DATABASE: &str = "update-desktop-database";
+
+/// The program that compiles `mime/packages/*.xml` into the MIME database.
+const UPDATE_MIME_DATABASE: &str = "update-mime-database";
+
+/// Why [`UPDATE_DESKTOP_DATABASE`] has to run after an install.
+const WHY_DESKTOP_DATABASE: &str =
+    "Until the desktop database is rebuilt, the new entry does not appear in Open With.";
+
+/// Why [`UPDATE_MIME_DATABASE`] has to run after an install.
+const WHY_MIME_DATABASE: &str = "Until the MIME database is rebuilt, the product's own file \
+                                 types have no MIME type and no association can match them.";
+
 /// What kind of artefact a generated file is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArtefactKind {
@@ -145,8 +208,12 @@ pub enum ArtefactKind {
     DesktopEntry,
     /// A `shared-mime-info` package defining the product's own types.
     MimePackage,
-    /// A `.reg` script. Generated, never applied -- see the module docs.
+    /// A `.reg` script that registers. Generated, never applied by the
+    /// application -- see the module docs. UTF-16LE on disk.
     RegistryScript,
+    /// The `.reg` script that removes exactly what [`Self::RegistryScript`]
+    /// adds, and nothing belonging to anybody else. UTF-16LE on disk.
+    UnregisterScript,
 }
 
 /// A file a registration would consist of.
@@ -159,10 +226,33 @@ pub enum ArtefactKind {
 pub struct Artefact {
     /// Where it goes, relative to the install root.
     pub relative_path: String,
-    /// The whole file.
+    /// The whole file, as text: what a dialog shows and a test reads. What
+    /// goes to disk is [`Self::bytes`], which is not always this text's UTF-8.
     pub contents: String,
     /// What it is.
     pub kind: ArtefactKind,
+}
+
+impl Artefact {
+    /// The file as it must be written to disk.
+    ///
+    /// UTF-8 for the Linux artefacts, whose formats are defined as UTF-8.
+    /// UTF-16LE with a byte-order mark for the `.reg` scripts, which is what
+    /// `regedit` exports and the only encoding it reads a non-ASCII path from
+    /// without going through the ANSI code page (see
+    /// [`windows::utf16le_with_bom`]). Anything that saves an artefact should
+    /// write these bytes, never [`Self::contents`] directly.
+    #[must_use]
+    pub fn bytes(&self) -> Vec<u8> {
+        match self.kind {
+            ArtefactKind::DesktopEntry | ArtefactKind::MimePackage => {
+                self.contents.as_bytes().to_vec()
+            }
+            ArtefactKind::RegistryScript | ArtefactKind::UnregisterScript => {
+                windows::utf16le_with_bom(&self.contents)
+            }
+        }
+    }
 }
 
 /// A command that must run before the registration takes effect, named rather
@@ -183,7 +273,64 @@ pub struct FollowUp {
     pub why: &'static str,
 }
 
+/// How one [`FollowUp`] ended when the shell ran it.
+///
+/// Filled in by the shell from `std::process::Command::output()`, and handed
+/// back to [`FollowUp::report`] so the sentence the user reads is written
+/// here, next to the reason the command exists, rather than improvised at the
+/// call site.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommandOutcome {
+    /// Exit status zero.
+    Succeeded,
+    /// It ran and failed. `exit_code` is `None` when a signal ended it;
+    /// `stderr` is whatever it printed, which the report trims to one line.
+    Failed {
+        exit_code: Option<i32>,
+        stderr: String,
+    },
+    /// The program is not installed (`io::ErrorKind::NotFound`). Worth its own
+    /// variant because it is the common case -- `update-desktop-database` is
+    /// in `desktop-file-utils`, which a minimal install may lack -- and
+    /// because the fix is a package, not a retry.
+    NotFound,
+    /// It could not be started for any other reason.
+    CouldNotStart { message: String },
+}
+
 impl FollowUp {
+    /// One line saying how this command ended, for the dialog that follows
+    /// the change.
+    ///
+    /// Failure is worded as a consequence, using [`Self::why`], because "exit
+    /// status 2" means nothing to the person who clicked "Set as Default"
+    /// and "the new entry does not appear in Open With" does.
+    #[must_use]
+    pub fn report(&self, outcome: &CommandOutcome) -> String {
+        let line = self.command_line();
+        match outcome {
+            CommandOutcome::Succeeded => format!("Ran {line}"),
+            CommandOutcome::Failed { exit_code, stderr } => {
+                let status = exit_code.map_or_else(
+                    || "was stopped by a signal".to_owned(),
+                    |code| format!("failed with exit status {code}"),
+                );
+                let first = stderr.lines().map(str::trim).find(|l| !l.is_empty());
+                match first {
+                    Some(detail) => format!("{line} {status} ({detail}). {}", self.why),
+                    None => format!("{line} {status}. {}", self.why),
+                }
+            }
+            CommandOutcome::NotFound => format!(
+                "{} is not installed, so this step was skipped. {}",
+                self.program, self.why
+            ),
+            CommandOutcome::CouldNotStart { message } => {
+                format!("Could not run {line} ({message}). {}", self.why)
+            }
+        }
+    }
+
     /// The command as a user would type it, for display and for a log.
     ///
     /// Not for execution: arguments are joined with spaces and a path
@@ -210,9 +357,10 @@ pub enum Handoff {
     /// redirects away from.
     WindowsDefaultApps { uri: &'static str },
     /// Run `xdg-mime default`, the standards-based way to set an association
-    /// on Linux. It is offered rather than run because it *is* the choice --
-    /// running it is deciding for the user, which is the thing ADR-0012 draws
-    /// its line around.
+    /// on Linux. It *is* the choice, so nothing in this crate runs it: the
+    /// shell runs it (as [`LinuxPlan::commands`] lists it) only once the user
+    /// has seen this exact command and said yes, and this variant is the
+    /// same command for a user to run by hand.
     LinuxSetDefault {
         program: &'static str,
         args: Vec<String>,
@@ -299,16 +447,15 @@ pub fn plan(
         Platform::Linux => {
             artefacts.push(Artefact {
                 relative_path: format!("applications/{}", desktop::desktop_file_name(app)),
-                contents: desktop::desktop_entry(app, selection),
+                contents: desktop::per_user_desktop_entry(app, selection),
                 kind: ArtefactKind::DesktopEntry,
             });
             follow_up.push(FollowUp {
-                program: "update-desktop-database",
+                program: UPDATE_DESKTOP_DATABASE,
                 args: vec!["applications".to_owned()],
-                why: "Until the desktop database is rebuilt, the new entry does not appear in \
-                      Open With.",
+                why: WHY_DESKTOP_DATABASE,
             });
-            if let Some(package) = desktop::mime_package(selection) {
+            if let Some(package) = desktop::per_user_mime_package(selection) {
                 artefacts.push(Artefact {
                     relative_path: format!(
                         "mime/packages/{}",
@@ -318,10 +465,9 @@ pub fn plan(
                     kind: ArtefactKind::MimePackage,
                 });
                 follow_up.push(FollowUp {
-                    program: "update-mime-database",
+                    program: UPDATE_MIME_DATABASE,
                     args: vec!["mime".to_owned()],
-                    why: "Until the MIME database is rebuilt, the product's own file types have \
-                          no MIME type and no association can match them.",
+                    why: WHY_MIME_DATABASE,
                 });
             }
             Handoff::LinuxSetDefault {
@@ -334,13 +480,24 @@ pub fn plan(
         }
         Platform::Windows => {
             registry_values = windows::registry_values(app, selection);
+            // Both named after the directory, not the application id: the id is a
+            // Linux identity (ADR-0032), and the file a Windows user saves
+            // should keep the name it has always had.
             artefacts.push(Artefact {
-                relative_path: format!("{}-file-types.reg", app.app_id),
+                relative_path: format!("{}-file-types.reg", crate::APP_DIR),
                 contents: windows::registry_script(&registry_values),
                 kind: ArtefactKind::RegistryScript,
             });
+            artefacts.push(Artefact {
+                relative_path: format!("{}-file-types-remove.reg", crate::APP_DIR),
+                contents: windows::unregister_script(&registry_values),
+                kind: ArtefactKind::UnregisterScript,
+            });
+            // The generic page, because `plan` is pure and the build number
+            // is a fact about the machine. The shell that knows the build
+            // asks `windows::default_apps_uri` for the Windows 11 deep link.
             Handoff::WindowsDefaultApps {
-                uri: "ms-settings:defaultapps",
+                uri: windows::DEFAULT_APPS_URI,
             }
         }
     };
@@ -405,6 +562,11 @@ pub enum InstallRefusal {
     /// checked anyway, because a plan is a value and values arrive from
     /// elsewhere.
     UnsafeArtefactPath { relative_path: String },
+    /// The environment does not say where the user's data directory is
+    /// (`$XDG_DATA_HOME` and `$HOME` are both unusable), so there is nowhere
+    /// a per-user registration could go. Refused rather than guessed, like
+    /// every other directory in this crate.
+    NoDataDirectory,
     /// The filesystem said no.
     Failed { path: PathBuf, message: String },
 }
@@ -424,6 +586,9 @@ impl InstallRefusal {
                     platform.token()
                 )
             }
+            Self::NoDataDirectory => "Nothing was changed: this environment does not say where \
+                                      the user's data directory is ($XDG_DATA_HOME or $HOME)."
+                .to_owned(),
             Self::UnsafeArtefactPath { relative_path } => format!(
                 "Nothing was changed: \"{relative_path}\" is not a path this application will \
                  write to."
@@ -437,11 +602,14 @@ impl InstallRefusal {
 
 /// Write a plan's artefacts under `root`.
 ///
-/// **The only function in this crate that changes anything.** It writes the
-/// `.desktop` entry and the MIME package into the places the desktop
-/// environment reads, which is what makes the product appear in Open With.
-/// It does not set any default, does not run any command, and does not touch
-/// the registry.
+/// **One of the two functions in this crate that change anything** -- the
+/// other is [`uninstall`], its inverse. It writes the `.desktop` entry and
+/// the MIME package into the places the desktop environment reads, which is
+/// what makes the product appear in Open With. It does not set any default,
+/// does not run any command, and does not touch the registry.
+///
+/// A plan whose artefacts are all provided by the system (see [`linux_plan`])
+/// writes nothing and succeeds: the registration is already there.
 ///
 /// `root` is a parameter with no default, and that is the mechanism by which
 /// no test can reach a real user directory: a test passes a `tempfile`
@@ -468,38 +636,24 @@ pub fn install(
     if plan.selection.is_empty() {
         return Err(InstallRefusal::NothingSelected);
     }
-    if let Availability::NotImplemented { reason } | Availability::Unsupported { reason } =
-        Capability::AssociationInstall.availability(plan.platform)
-    {
-        return Err(InstallRefusal::NotSupported {
-            platform: plan.platform,
-            reason,
-        });
-    }
+    refuse_unsupported(plan.platform)?;
 
     // Every path is checked before anything is written, so a plan with one bad
     // artefact writes none of them rather than half of them.
     for artefact in &plan.artefacts {
-        if !is_safe_relative_path(&artefact.relative_path) {
-            return Err(InstallRefusal::UnsafeArtefactPath {
-                relative_path: artefact.relative_path.clone(),
-            });
-        }
+        check_relative_path(&artefact.relative_path)?;
     }
 
     let mut written = Vec::new();
     for artefact in &plan.artefacts {
-        let target = artefact
-            .relative_path
-            .split('/')
-            .fold(root.to_path_buf(), |acc, part| acc.join(part));
+        let target = under_root(root, &artefact.relative_path);
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent).map_err(|error| InstallRefusal::Failed {
                 path: parent.to_path_buf(),
                 message: error.to_string(),
             })?;
         }
-        fs::write(&target, &artefact.contents).map_err(|error| InstallRefusal::Failed {
+        fs::write(&target, artefact.bytes()).map_err(|error| InstallRefusal::Failed {
             path: target.clone(),
             message: error.to_string(),
         })?;
@@ -531,6 +685,13 @@ pub fn install_root(platform: Platform, env: &EnvSnapshot) -> Option<PathBuf> {
 
 /// What currently opens the selected file types, read from `config_dir`.
 ///
+/// The narrow form: it reads one `mimeapps.list`, which is where `xdg-mime
+/// default` writes and so answers "did our change land". What a double-click
+/// actually opens is decided by the whole XDG chain -- desktop-specific
+/// lists, `/etc/xdg`, the system data directories and `mimeinfo.cache` --
+/// and [`association_report_in`] follows it. Prefer that one for anything a
+/// user reads.
+///
 /// The read half of registration, and the one that needs no permission. On
 /// Linux `config_dir` is `$XDG_CONFIG_HOME` -- the directory holding
 /// `mimeapps.list` -- and a missing file is not an error: a user who has never
@@ -538,10 +699,11 @@ pub fn install_root(platform: Platform, env: &EnvSnapshot) -> Option<PathBuf> {
 /// [`AssociationState::Unclaimed`], not a failure.
 ///
 /// On Windows it returns [`AssociationState::Unknown`] for everything, with
-/// the capability register's own reason attached. This crate cannot read
-/// `HKCU\...\UserChoice` without a dependency, and reporting "unclaimed"
-/// instead would tell the user their machine is unconfigured when it is
-/// merely unreadable from here.
+/// the capability register's own reason attached. This crate reads no
+/// registry; the Windows answer comes from [`state::report_from_query`] given
+/// the [`ProgIdQuery`] `bp-platform-windows` implements, which only the shell
+/// can hand over. Reporting "unclaimed" here instead would tell the user their
+/// machine is unconfigured when it is merely unreadable from here.
 #[must_use]
 pub fn association_report(
     platform: Platform,
@@ -561,10 +723,48 @@ pub fn association_report(
             Capability::AssociationQuery
                 .availability(platform)
                 .reason()
-                .unwrap_or("This platform cannot be queried."),
+                .unwrap_or(
+                    "The current handler is read from the registry, and no registry reader was \
+                     supplied here.",
+                ),
             selection,
         ),
     }
+}
+
+/// The refusal the capability register implies for changing registration on
+/// `platform`, if any.
+///
+/// [`Availability::Conditional`] passes: on Linux the condition is "not in a
+/// Flatpak sandbox", which only the environment can answer, and
+/// [`linux_plan`] -- the function that has the environment -- refuses there
+/// with [`FLATPAK_REASON`] before a plan exists to be installed.
+fn refuse_unsupported(platform: Platform) -> Result<(), InstallRefusal> {
+    match Capability::AssociationInstall.availability(platform) {
+        Availability::NotImplemented { reason } | Availability::Unsupported { reason } => {
+            Err(InstallRefusal::NotSupported { platform, reason })
+        }
+        _ => Ok(()),
+    }
+}
+
+/// [`InstallRefusal::UnsafeArtefactPath`] unless [`is_safe_relative_path`].
+fn check_relative_path(relative_path: &str) -> Result<(), InstallRefusal> {
+    if is_safe_relative_path(relative_path) {
+        Ok(())
+    } else {
+        Err(InstallRefusal::UnsafeArtefactPath {
+            relative_path: relative_path.to_owned(),
+        })
+    }
+}
+
+/// `relative_path` (always `/`-separated) under `root`, one component at a
+/// time so the host's own separator is used.
+fn under_root(root: &Path, relative_path: &str) -> PathBuf {
+    relative_path
+        .split('/')
+        .fold(root.to_path_buf(), |acc, part| acc.join(part))
 }
 
 /// Whether this crate will write to `relative_path` under a given root.

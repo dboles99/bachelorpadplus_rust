@@ -1,0 +1,210 @@
+// The in-app dialog (release plan M1-01).
+//
+// Every question the shell asked used to be an `rfd::MessageDialog`. On Linux
+// that is zenity, which many desktops do not install -- and without it rfd
+// answers Cancel without showing anything, so a machine without zenity could
+// not be asked about unsaved work at all. On Windows without comctl32 v6 it
+// is `MessageBoxW`, which cannot label its own buttons, so the recovery
+// prompt had to explain what "Yes" and "No" meant in its body. This sheet is
+// drawn by Slint like the rest of the window: the same font, the same theme,
+// and buttons that say what they do.
+//
+// A sheet over the window rather than a window of its own, because Slint has
+// no modal secondary window on every backend. Sitting outside the shortcut
+// `FocusScope` in `app.slint` also blocks the window's shortcuts for free:
+// key bindings match on the path from the window to the focused element, and
+// while the focus is in here that path never crosses them.
+//
+// Rust owns what it says and what happens after (`src/dialog.rs`). This only
+// draws it and reports which button was chosen, by index.
+
+import { ScrollView } from "std-widgets.slint";
+import { Palette } from "types.slint";
+
+export component SheetButton inherits Rectangle {
+    in property <string> label;
+    /// Where Enter and Space land. Drawn in the accent, so a keyboard user
+    /// can see which answer they are about to give before giving it.
+    in property <bool> highlighted;
+    callback clicked();
+
+    height: 30px;
+    width: max(88px, txt.preferred-width + 28px);
+    border-radius: 3px;
+    border-width: root.highlighted ? 2px : 1px;
+    border-color: root.highlighted ? Palette.accent : Palette.edge;
+    background: ta.has-hover ? Palette.edge : Palette.shell;
+
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    txt := Text {
+        text: root.label;
+        color: Palette.ink;
+        font-size: 13px;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+
+    ta := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component DialogSheet inherits Rectangle {
+    in property <bool> open;
+    in property <string> title;
+    in property <string> body;
+    /// Left to right. Rust puts the safe answer where the user's eye lands
+    /// last, which is the convention on both desktops this ships to.
+    in property <[string]> buttons;
+    /// The button Enter chooses before anything has been moved.
+    in property <int> default-button;
+    /// The button Escape chooses. Always the one that changes nothing, so a
+    /// reflexive Escape is never the destructive answer.
+    in property <int> cancel-button;
+    /// Which button Enter and Space will choose. Out so the window tests can
+    /// see the arrows moving it.
+    out property <int> highlighted;
+    /// How far the body is scrolled, zero or negative. For the window tests.
+    out property <length> scrolled: scroller.viewport-y;
+
+    callback answered(int);
+
+    /// Show the question with the default answer highlighted and the keyboard
+    /// focus in the sheet, where the document cannot receive a keystroke.
+    public function take-focus() {
+        root.highlighted = root.default-button;
+        scroller.viewport-y = 0;
+        keys.focus();
+    }
+
+    function scroll-by(delta: length) {
+        scroller.viewport-y = clamp(
+            scroller.viewport-y + delta,
+            min(0px, scroller.visible-height - scroller.viewport-height),
+            0px);
+    }
+
+    visible: root.open;
+    // The document stays visible but dimmed: what is being asked about is
+    // usually on screen, and hiding it would make the question harder to
+    // answer.
+    background: Palette.shell.with-alpha(0.7);
+
+    // Swallows every click that misses the panel, so nothing behind the sheet
+    // can be reached while a question is open.
+    TouchArea { }
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                root.answered(root.cancel-button);
+                return accept;
+            }
+            if (event.text == Key.Return || event.text == " ") {
+                root.answered(root.highlighted);
+                return accept;
+            }
+            if (event.text == Key.Tab || event.text == Key.RightArrow) {
+                root.highlighted = Math.mod(root.highlighted + 1, max(1, root.buttons.length));
+                return accept;
+            }
+            if (event.text == Key.Backtab || event.text == Key.LeftArrow) {
+                root.highlighted = Math.mod(root.highlighted + root.buttons.length - 1, max(1, root.buttons.length));
+                return accept;
+            }
+            // The body scrolls from the keyboard too: the focus is in here,
+            // so nothing else would move it, and a list of findings nobody
+            // can page through is a consent nobody read.
+            if (event.text == Key.DownArrow) {
+                root.scroll-by(-36px);
+                return accept;
+            }
+            if (event.text == Key.UpArrow) {
+                root.scroll-by(36px);
+                return accept;
+            }
+            if (event.text == Key.PageDown) {
+                root.scroll-by(-scroller.visible-height * 0.9);
+                return accept;
+            }
+            if (event.text == Key.PageUp) {
+                root.scroll-by(scroller.visible-height * 0.9);
+                return accept;
+            }
+            // Everything else is swallowed. A key that got past a question
+            // would be typing into the document being asked about.
+            accept
+        }
+    }
+
+    panel := Rectangle {
+        width: min(560px, root.width - 32px);
+        height: layout.preferred-height;
+        x: (root.width - self.width) / 2;
+        y: max(16px, (root.height - self.height) / 3);
+        background: Palette.panel;
+        border-color: Palette.edge;
+        border-width: 1px;
+        border-radius: 4px;
+
+        accessible-role: groupbox;
+        accessible-label: root.title;
+
+        // A click on the panel's own background is not a click on the
+        // document either.
+        TouchArea { }
+
+        layout := VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+
+            Text {
+                text: root.title;
+                color: Palette.ink;
+                font-size: 15px;
+                font-weight: 700;
+                wrap: word-wrap;
+            }
+
+            // Scrolls rather than grows: the redaction list is deliberately
+            // unbounded, and a sheet taller than the window has no buttons.
+            scroller := ScrollView {
+                height: min(body-text.preferred-height, root.height * 0.6);
+                viewport-width: self.visible-width;
+                viewport-height: body-text.preferred-height;
+
+                body-text := Text {
+                    width: scroller.visible-width;
+                    text: root.body;
+                    color: Palette.ink;
+                    // Monospace, because the bodies include tables -- the
+                    // keyboard shortcuts, a hash report, a metadata listing --
+                    // that line up only when every character is one width.
+                    font-family: "DejaVu Sans Mono";
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
+            }
+
+            HorizontalLayout {
+                alignment: end;
+                spacing: 8px;
+
+                for label[i] in root.buttons: SheetButton {
+                    label: label;
+                    highlighted: i == root.highlighted;
+                    clicked => {
+                        root.answered(i);
+                    }
+                }
+            }
+        }
+    }
+}

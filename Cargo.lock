@@ -283,16 +283,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0348a1c054491f4bfe6ab86a7b6ab1e44e45d899005de92f58b3df180b36ddaf"
 dependencies = [
  "clipboard-win",
- "image",
  "log",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
- "objc2-core-foundation",
- "objc2-core-graphics",
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
  "windows-sys 0.59.0",
+ "wl-clipboard-rs",
  "x11rb",
 ]
 
@@ -557,7 +555,7 @@ dependencies = [
  "log",
  "num-rational",
  "num-traits",
- "pastey 0.1.1",
+ "pastey",
  "rayon",
  "thiserror 2.0.20",
  "v_frame",
@@ -589,14 +587,17 @@ dependencies = [
 
 [[package]]
 name = "bachelorpad"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "anyhow",
  "bp-config",
+ "bp-platform-windows",
  "bp-theme",
  "bp-ui",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
+ "winresource",
 ]
 
 [[package]]
@@ -747,7 +748,7 @@ dependencies = [
 
 [[package]]
 name = "bp-audit"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "bp-crypto",
  "bp-security",
@@ -762,7 +763,7 @@ dependencies = [
 
 [[package]]
 name = "bp-buffer"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "ropey",
  "tempfile",
@@ -771,14 +772,14 @@ dependencies = [
 
 [[package]]
 name = "bp-clipboard"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "bp-security",
 ]
 
 [[package]]
 name = "bp-config"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "bp-platform",
  "serde",
@@ -788,7 +789,7 @@ dependencies = [
 
 [[package]]
 name = "bp-core"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "bp-security",
  "time",
@@ -796,7 +797,7 @@ dependencies = [
 
 [[package]]
 name = "bp-crypto"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -812,7 +813,7 @@ dependencies = [
 
 [[package]]
 name = "bp-data"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "csv",
  "proptest",
@@ -826,15 +827,16 @@ dependencies = [
 
 [[package]]
 name = "bp-editor"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "bp-buffer",
 ]
 
 [[package]]
 name = "bp-files"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
+ "bp-buffer",
  "bp-core",
  "bp-naming",
  "bp-platform",
@@ -846,14 +848,15 @@ dependencies = [
 
 [[package]]
 name = "bp-formats"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 
 [[package]]
 name = "bp-history"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "bp-crypto",
  "bp-security",
+ "proptest",
  "serde",
  "serde_json",
  "tempfile",
@@ -861,7 +864,7 @@ dependencies = [
 
 [[package]]
 name = "bp-integration-tests"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "bp-audit",
  "bp-buffer",
@@ -893,7 +896,7 @@ dependencies = [
 
 [[package]]
 name = "bp-integrity"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "bp-crypto",
  "proptest",
@@ -904,7 +907,7 @@ dependencies = [
 
 [[package]]
 name = "bp-naming"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "proptest",
  "time",
@@ -912,7 +915,7 @@ dependencies = [
 
 [[package]]
 name = "bp-notebook"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "proptest",
  "serde",
@@ -923,7 +926,7 @@ dependencies = [
 
 [[package]]
 name = "bp-platform"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "bp-formats",
  "proptest",
@@ -931,8 +934,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "bp-platform-windows"
+version = "1.0.0-rc.0"
+dependencies = [
+ "bp-platform",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "bp-redaction"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "proptest",
  "tempfile",
@@ -941,7 +952,7 @@ dependencies = [
 
 [[package]]
 name = "bp-research"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "proptest",
  "serde",
@@ -952,7 +963,7 @@ dependencies = [
 
 [[package]]
 name = "bp-search"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "regex",
  "tempfile",
@@ -961,14 +972,14 @@ dependencies = [
 
 [[package]]
 name = "bp-secrets"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "bp-security"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -976,11 +987,11 @@ dependencies = [
 
 [[package]]
 name = "bp-semantic"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 
 [[package]]
 name = "bp-storage"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "bp-security",
  "rusqlite",
@@ -990,7 +1001,7 @@ dependencies = [
 
 [[package]]
 name = "bp-theme"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -998,7 +1009,7 @@ dependencies = [
 
 [[package]]
 name = "bp-ui"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "arboard",
  "bp-audit",
@@ -1015,6 +1026,7 @@ dependencies = [
  "bp-integrity",
  "bp-naming",
  "bp-platform",
+ "bp-platform-windows",
  "bp-redaction",
  "bp-search",
  "bp-secrets",
@@ -1934,6 +1946,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fixedbitset"
+version = "0.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
+
+[[package]]
 name = "flate2"
 version = "1.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2624,7 +2642,6 @@ version = "1.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e407dc2bd5385dcbdd9c1cf927213d2e4bacda667545abf8839c60f8290f754"
 dependencies = [
- "async-channel",
  "auto_enums",
  "bitflags 2.13.1",
  "cfg-if",
@@ -2637,7 +2654,6 @@ dependencies = [
  "i-slint-core-macros",
  "icu_normalizer",
  "image",
- "ksni",
  "lyon_algorithms",
  "lyon_extra",
  "lyon_geom",
@@ -3210,24 +3226,6 @@ name = "khronos_api"
 version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
-
-[[package]]
-name = "ksni"
-version = "0.3.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "814b44c24cd2cb236c3b8a41c7f08237b452a8e76ecaa81f1cec40b5b678215b"
-dependencies = [
- "async-executor",
- "async-io",
- "async-lock",
- "futures-channel",
- "futures-lite",
- "futures-util",
- "pastey 0.2.3",
- "serde",
- "task-local",
- "zbus",
-]
 
 [[package]]
 name = "kurbo"
@@ -4132,6 +4130,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "os_pipe"
+version = "1.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "owned_ttf_parser"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4226,16 +4234,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "35fb2e5f958ec131621fdd531e9fc186ed768cbe395337403ae56c17a74c68ec"
 
 [[package]]
-name = "pastey"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ee67f1008b1ba2321834326597b8e186293b049a023cdef258527550b9935b4"
-
-[[package]]
 name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
+
+[[package]]
+name = "petgraph"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8701b58ea97060d5e5b155d383a69952a60943f0e6dfe30b04c287beb0b27455"
+dependencies = [
+ "fixedbitset",
+ "hashbrown 0.15.5",
+ "indexmap",
+]
 
 [[package]]
 name = "phf"
@@ -5150,6 +5163,7 @@ version = "1.0.151"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
 dependencies = [
+ "indexmap",
  "itoa",
  "memchr",
  "serde",
@@ -5686,15 +5700,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "task-local"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2972044a9e5e448a506a7ff6f0d03b566d8ef4cd6918a58fc59835a0f8666626"
-dependencies = [
- "pin-project-lite",
-]
-
-[[package]]
 name = "tempfile"
 version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6010,6 +6015,17 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-log",
+]
+
+[[package]]
+name = "tree_magic_mini"
+version = "3.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8765b90061cba6c22b5831f675da109ae5561588290f9fa2317adab2714d5a6"
+dependencies = [
+ "memchr",
+ "nom 8.0.0",
+ "petgraph",
 ]
 
 [[package]]
@@ -6867,10 +6883,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "winresource"
+version = "0.1.31"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0986a8b1d586b7d3e4fe3d9ea39fb451ae22869dcea4aa109d287a374d866087"
+dependencies = [
+ "toml",
+ "version_check",
+]
+
+[[package]]
 name = "wit-bindgen"
 version = "0.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
+
+[[package]]
+name = "wl-clipboard-rs"
+version = "0.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9651471a32e87d96ef3a127715382b2d11cc7c8bb9822ded8a7cc94072eb0a3"
+dependencies = [
+ "libc",
+ "log",
+ "os_pipe",
+ "rustix 1.1.4",
+ "thiserror 2.0.20",
+ "tree_magic_mini",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-protocols-wlr",
+]
 
 [[package]]
 name = "write-fonts"

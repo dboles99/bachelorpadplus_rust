@@ -50,9 +50,34 @@ pub(crate) fn translate_key(text: &str) -> Option<bp_editor::Key> {
         Editor::Tab
     } else if is(Slint::Escape) {
         Editor::Escape
+    } else if is(Slint::Insert) {
+        Editor::Insert
     } else {
         Editor::Char(ch)
     })
+}
+
+/// `AppWindow`'s `overwrite-end` callback: [`bp_editor::overwrite_end`] with
+/// Slint's integer offsets.
+///
+/// A named function rather than a closure in `run_with`, so the window tests
+/// wire exactly what the application wires.
+pub(crate) fn overwrite_end(text: slint::SharedString, at: i32, typed: slint::SharedString) -> i32 {
+    let at = usize::try_from(at).unwrap_or(0);
+    clamp_i32(bp_editor::overwrite_end(&text, at, &typed))
+}
+
+/// The selection a `TextInput` reports, as the text it covers.
+///
+/// Slint gives the selection as two UTF-8 byte offsets in either order.
+/// `None` for an empty selection or offsets that do not fall on character
+/// boundaries of `text` -- they come from the toolkit, and a copy is not
+/// worth a panic.
+pub(crate) fn selected_text(text: &str, anchor: i32, cursor: i32) -> Option<&str> {
+    let a = usize::try_from(anchor).ok()?;
+    let c = usize::try_from(cursor).ok()?;
+    let (start, end) = (a.min(c), a.max(c));
+    text.get(start..end).filter(|s| !s.is_empty())
 }
 
 /// What a double- or triple-click selects.
@@ -206,13 +231,19 @@ pub(crate) fn apply_editor_command(state: &mut AppState, command: &bp_editor::Co
     match command {
         bp_editor::Command::Ignore => false,
 
+        bp_editor::Command::ToggleOverwrite => {
+            state.toggle_overwrite();
+            true
+        }
+
         bp_editor::Command::Copy => {
             let selected = state
                 .active_editor()
                 .and_then(|editor| Some(editor.buffer().slice(editor.selection()?)));
             // Copying nothing must not wipe what the user copied earlier.
             if let Some(text) = selected.filter(|text| !text.is_empty()) {
-                crate::set_os_clipboard(&text);
+                crate::set_os_clipboard(&text, state.keep_clipboard_private());
+                state.record_copy(&text);
             }
             true
         }
@@ -222,7 +253,11 @@ pub(crate) fn apply_editor_command(state: &mut AppState, command: &bp_editor::Co
                 .active_editor()
                 .and_then(|editor| Some(editor.buffer().slice(editor.selection()?)));
             if let Some(text) = selected.filter(|text| !text.is_empty()) {
-                crate::set_os_clipboard(&text);
+                crate::set_os_clipboard(&text, state.keep_clipboard_private());
+                // Recorded here rather than left to the poll: once it is cut
+                // the text is no longer in the document, so the poll would
+                // take it for another program's copy.
+                state.record_copy(&text);
                 if let Some(editor) = state.active_editor_mut() {
                     editor.delete_selection();
                 }
@@ -279,6 +314,80 @@ mod tests {
         assert_eq!(named(Slint::Return), Some(bp_editor::Key::Enter));
         assert_eq!(named(Slint::Tab), Some(bp_editor::Key::Tab));
         assert_eq!(named(Slint::Escape), Some(bp_editor::Key::Escape));
+        assert_eq!(named(Slint::Insert), Some(bp_editor::Key::Insert));
+    }
+
+    #[test]
+    fn a_key_the_shell_does_not_name_types_nothing() {
+        // F1 has no meaning here. Before Insert had one, pressing it typed
+        // U+F727 into the document, invisibly.
+        use slint::platform::Key as Slint;
+        let f1 = translate_key(&char::from(Slint::F1).to_string()).expect("a key");
+        assert_eq!(
+            bp_editor::keys::command_for(f1, bp_editor::Modifiers::default(), 20),
+            bp_editor::Command::Ignore
+        );
+    }
+
+    #[test]
+    fn insert_switches_every_document_to_overwriting_and_back() {
+        let mut state = AppState::new();
+        state.editor_view = true;
+        state.edit("abc".to_owned());
+        state.active_editor_mut().unwrap().set_cursor(0);
+
+        assert!(apply_editor_command(
+            &mut state,
+            &bp_editor::Command::ToggleOverwrite
+        ));
+        assert!(state.overwrite);
+        apply_editor_command(&mut state, &bp_editor::Command::Insert("X".to_owned()));
+        assert_eq!(
+            state.active_text(),
+            "Xbc",
+            "the first character was overwritten"
+        );
+
+        apply_editor_command(&mut state, &bp_editor::Command::ToggleOverwrite);
+        apply_editor_command(&mut state, &bp_editor::Command::Insert("Y".to_owned()));
+        assert_eq!(state.active_text(), "XYbc", "back to inserting");
+    }
+
+    #[test]
+    fn the_status_bar_says_ovr_while_overwriting_and_nothing_otherwise() {
+        let mut state = AppState::new();
+        state.edit("one".to_owned());
+        state.sync_gutter();
+        assert!(!state.cursor_label().contains("OVR"));
+
+        state.toggle_overwrite();
+        assert!(
+            state.cursor_label().ends_with(" · OVR"),
+            "{}",
+            state.cursor_label()
+        );
+    }
+
+    #[test]
+    fn a_selection_is_read_in_either_direction_and_never_panics() {
+        assert_eq!(selected_text("hello world", 0, 5), Some("hello"));
+        assert_eq!(
+            selected_text("hello world", 5, 0),
+            Some("hello"),
+            "anchor after cursor"
+        );
+        assert_eq!(
+            selected_text("hello", 2, 2),
+            None,
+            "an empty selection copies nothing"
+        );
+        assert_eq!(
+            selected_text("é", 0, 1),
+            None,
+            "not on a character boundary"
+        );
+        assert_eq!(selected_text("abc", 1, 99), None);
+        assert_eq!(selected_text("abc", -1, 2), None);
     }
 
     #[test]
@@ -313,16 +422,18 @@ mod tests {
     }
 
     #[test]
-    fn the_status_bar_shows_line_and_column_only_when_we_own_the_caret() {
+    fn the_status_bar_shows_line_and_column_in_either_view() {
+        // The default view's caret is the widget's, reported in bytes; it
+        // used to show only a line count, since the caret was unreadable.
         let mut state = AppState::new();
-        state.edit("one\ntwo".to_owned());
-        state.sync_gutter();
-
-        assert_eq!(state.cursor_label(), "2 lines", "TextInput hides its caret");
+        state.edit("éa\nbü".to_owned());
+        // Byte 5 is after "b" on line 2 ("éa\n" is four bytes).
+        state.follow_widget_caret(5, 5);
+        assert_eq!(state.cursor_label(), "Ln 2, Col 2");
 
         state.editor_view = true;
-        state.active_editor_mut().unwrap().set_cursor(5);
-        assert_eq!(state.cursor_label(), "Ln 2, Col 2");
+        state.active_editor_mut().unwrap().set_cursor(1);
+        assert_eq!(state.cursor_label(), "Ln 1, Col 2");
     }
 
     #[test]

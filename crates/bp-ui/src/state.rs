@@ -10,7 +10,10 @@ use std::path::{Path, PathBuf};
 
 use bp_config::Recent;
 use bp_core::{Document, DocumentId, Encoding, LineEnding, UNTITLED, Workspace};
-use bp_files::{DiskState, FileStamp, LineEndingPolicy, SaveOptions, atomic_write, encode, load};
+use bp_files::{
+    DiskState, EncodeError, FileStamp, LineEndingPolicy, SaveOptions, atomic_write,
+    load_with_limit, try_encode,
+};
 use bp_formats::Format;
 use bp_naming::SemanticName;
 use bp_theme::ThemeId;
@@ -26,6 +29,11 @@ use crate::menus::action;
 /// exists to remove.
 pub(crate) const PREFIX_CHARS: usize = 4096;
 
+/// What a clipboard row says when the entry it names has gone -- cleared,
+/// trimmed or refused by a profile since its menu opened. It does nothing
+/// rather than act on whichever entry took its place (U5).
+const CLIP_GONE: &str = "that clipboard entry is no longer in the history, so nothing was done";
+
 /// How a save attempt ended.
 ///
 /// Three cases, not two: a close-on-quit flow must not treat "needs a path"
@@ -37,6 +45,24 @@ pub(crate) enum SaveResult {
     NeedsPath,
     /// Attempted and refused; `AppState::error` explains why.
     Failed,
+    /// Nothing written: the document's encoding has no bytes for one of its
+    /// characters. The caller offers UTF-8 instead (release plan M1-10);
+    /// writing a `?` in its place is how a character is lost unannounced.
+    Unrepresentable(bp_core::Unrepresentable),
+}
+
+/// What asking to open a file led to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Opening {
+    /// Opened, or refused with the reason in `AppState::error`. Nothing is
+    /// waiting on the user.
+    Done,
+    /// Encrypted: the passphrase bar is asking.
+    Passphrase,
+    /// Encrypted, and its header asks for an unusually expensive unlock
+    /// (decision 15). Ask `question` first, and hand the answer to
+    /// [`AppState::answer_unlock_cost`].
+    Expensive { path: PathBuf, question: String },
 }
 
 /// What a Note-menu action decided to do.
@@ -122,10 +148,57 @@ pub struct AppState {
     /// that lived in the view would put the caret arithmetic somewhere Rust
     /// cannot see. Config supplies the starting value; zoom moves it.
     pub(crate) font_size: u8,
+    /// Whether the clipboard history records copies made in other programs
+    /// (`clipboard_record_other_programs`). Off unless the user opted in:
+    /// recording everything put whatever a password manager copied into the
+    /// Edit menu's previews.
+    pub(crate) record_other_programs: bool,
+    /// Whether File ▸ Set as Default Editor and Remove Registration can act
+    /// on this machine. Read by the shell at startup and after either is
+    /// used; the default is what a machine nobody has asked looks like.
+    pub(crate) integration: crate::default_editor::Rows,
+    /// Past this many bytes a file opens nowhere editable
+    /// (`editable_limit_mib`, 32 MiB unless configured).
+    pub(crate) editable_limit: u64,
+    /// The profile a document gets when nothing else says otherwise
+    /// (`default_profile`).
+    pub(crate) default_profile: bp_security::Profile,
+    /// Where settings chosen in the window are saved, and what the file last
+    /// said. `None` when there is nowhere to save them -- a test, or an
+    /// environment naming no configuration directory -- and then a change
+    /// lasts for the session, as every change did before.
+    pub(crate) settings: Option<SavedSettings>,
+    /// The Settings sheet, while it is open.
+    pub(crate) settings_sheet: Option<crate::settings_sheet::Sheet>,
+    /// Whether the menus of promises are on the bar (`show_planned_menus`).
+    pub(crate) show_planned_menus: bool,
+    /// Where the log and crash reports go, for Tools ▸ Open Log Folder.
+    pub(crate) log_dir: Option<PathBuf>,
+    /// Each document's edit count (`Document::edits`) when its checkpoint
+    /// was last written (release plan M1-08). A dirty document whose count
+    /// has not moved already has a current checkpoint, and writing it again
+    /// every interval cost a key derivation each time for an encrypted one.
+    checkpointed: HashMap<DocumentId, u64>,
+    /// What is drawing the window, in words, for Help ▸ About.
+    pub(crate) renderer: String,
+    /// Whether typing overwrites (the Insert key).
+    ///
+    /// The window's, not a document's: one key switches it and every tab
+    /// follows, which is what the status bar's `OVR` promises. Each editor is
+    /// told on the way to a command, like the indent and the wrap.
+    pub(crate) overwrite: bool,
     /// What each document's file looked like when we last read or wrote it,
     /// so an edit made by another program can be noticed.
     stamps: HashMap<DocumentId, FileStamp>,
     pub(crate) recent: Recent,
+    /// What `bp-config` could not move out of the old locations, held apart
+    /// from `error` until startup has finished opening files -- `open` and
+    /// `close` both clear `error`, and this is the only notice of a recovery
+    /// journal the product no longer reads. See [`AppState::start_up`].
+    left_behind: Option<String>,
+    /// Where `recent` is kept. `None` keeps the list in memory only, which
+    /// is what an environment naming no state directory gets.
+    recent_file: Option<PathBuf>,
     /// Standing warning about the file on disk. Distinct from `error`, which
     /// reports something that just failed; this persists until resolved.
     pub(crate) disk_warning: Option<String>,
@@ -141,10 +214,18 @@ pub struct AppState {
     pub(crate) journal: bp_history::Journal,
     /// Where the security history is appended and read back.
     ///
-    /// A field rather than a call to `audit::audit_path()` at each use, so a
-    /// test gets its own file. It is not configurable from outside: the
-    /// production value is set once, here, and nothing changes it.
+    /// A field rather than a lookup at each use, so a test gets its own
+    /// file. It is not configurable from outside: the production value is
+    /// set once, from [`locations`], and nothing changes it.
     pub(crate) audit_path: PathBuf,
+    /// Each document's security profile, kept between sessions (release plan
+    /// M1-19), and where that is saved. `None` for the path when this system
+    /// names no state directory: profiles then last for the session.
+    pub(crate) profiles: bp_history::ProfileStore,
+    pub(crate) profiles_path: Option<PathBuf>,
+    /// Where the sealed signing key is kept (`bp_config::locations`), or
+    /// `None` when the environment names no data directory.
+    pub(crate) signing_key: Option<PathBuf>,
     /// The tab the context menu was opened on.
     ///
     /// Held rather than passed with the click, because opening the menu and
@@ -176,10 +257,202 @@ pub struct AppState {
     /// Cross-file search results, indexed by the row the user clicks.
     pub(crate) file_hits: Vec<bp_search::FileHit>,
     pub(crate) clips: bp_clipboard::History,
+    /// Which entry each clipboard row in the menus names, frozen when the
+    /// last menu showing them opened (U5, release plan M1-18). Every
+    /// clipboard row is built from this and every click resolves against it,
+    /// so the 1.2 s poll adding an entry under an open menu cannot make a
+    /// row act on anything but the entry it shows.
+    ///
+    /// Replaced on the next open rather than dropped on close: Slint tells
+    /// nobody when a context menu closes. Hashes only, so a stale one keeps
+    /// nothing the history has forgotten.
+    pub(crate) clip_menu: bp_clipboard::Snapshot,
+    /// Documents open in the read-only viewer (release plan M1-06), by the
+    /// same id as their tab. A document here has no entry in `editors`: it
+    /// was never loaded, which is the point of it.
+    pub(crate) viewers: HashMap<DocumentId, crate::viewer::Viewer>,
+    /// Rows and columns the viewer's surface has room for. Its own, not
+    /// `visible_rows`: the banner above it takes a row's height.
+    pub(crate) viewer_rows: usize,
+    pub(crate) viewer_columns: usize,
 }
 
 impl AppState {
     pub(crate) fn new() -> Self {
+        let locations = locations();
+        let mut state = Self::at(&locations);
+        state.left_behind = describe_left_behind(&locations.left_behind);
+        state
+    }
+
+    /// Add a notice beside whatever the status bar already says, never over
+    /// it. Startup is the case that needs it: several things may each have
+    /// something to report, and the last to speak used to erase the rest.
+    pub(crate) fn add_notice(&mut self, notice: String) {
+        self.error = Some(match self.error.take() {
+            Some(earlier) => format!("{earlier}; {notice}"),
+            None => notice,
+        });
+    }
+
+    /// Open the files named on the command line, then say everything startup
+    /// has to say.
+    ///
+    /// The first file replaces the empty document opened at startup, so
+    /// `bachelorpad note.txt` shows one tab rather than an untouched Untitled
+    /// beside it.
+    ///
+    /// The notices are composed *after* the files are open, and that order
+    /// is the point. `open` and `close` both clear `error`, so a notice set
+    /// before them vanished on the most common launch there is -- a file
+    /// double-clicked, or opened through a file association. Every notice is
+    /// kept: the configuration's, then anything left behind by a move, then
+    /// whatever opening the files reported.
+    ///
+    /// `how` is `--readonly` or `--large-file`, which open every file named
+    /// in the viewer.
+    pub(crate) fn start_up(
+        &mut self,
+        config_notice: Option<String>,
+        files: &[PathBuf],
+        how: crate::viewer::OpenAs,
+    ) {
+        if !files.is_empty() {
+            let blank = self.workspace.active_id();
+            for path in files {
+                self.open_as(path.clone(), how);
+            }
+            if let Some(blank) = blank
+                && self.workspace.len() > 1
+            {
+                self.close(blank);
+            }
+        }
+
+        let notices: Vec<String> = [config_notice, self.left_behind.take(), self.error.take()]
+            .into_iter()
+            .flatten()
+            .collect();
+        self.error = (!notices.is_empty()).then(|| notices.join("; "));
+    }
+
+    /// Say so when encrypted documents have recovered work waiting (release
+    /// plan M2-15).
+    ///
+    /// A sealed checkpoint can be read only with its document's passphrase,
+    /// so it is restored when that document is unlocked, never offered at
+    /// startup (ADR-0022). Without this, a user whose encrypted document had
+    /// unsaved work when the power went had no way to know that opening it
+    /// would bring the work back -- or that anything was there at all. The
+    /// count and nothing more: the names are inside the seal, on purpose.
+    pub(crate) fn note_sealed_recovery(&mut self) {
+        let waiting = self.journal.sealed_count();
+        if waiting > 0 {
+            self.add_notice(format!(
+                "{waiting} encrypted document(s) have recovered work; open them to restore it"
+            ));
+        }
+    }
+
+    /// Take the user's configuration: the settings it holds, and where to
+    /// save changes to them (release plan M1-03).
+    ///
+    /// Called before `start_up` opens anything, so every document opened at
+    /// startup gets the configured default profile. The untitled document
+    /// `new` made is given it here.
+    pub(crate) fn configure(&mut self, config: &bp_config::Config, save_to: Option<PathBuf>) {
+        self.show_gutter = config.line_numbers;
+        self.wrap_text = config.word_wrap;
+        self.indent = bp_editor::Indent {
+            spaces: config.indent_spaces,
+            width: usize::from(config.tab_width),
+        };
+        self.font_size = bp_config::zoom(config.font_size, 0);
+        self.record_other_programs = config.clipboard_record_other_programs;
+        self.editable_limit = config.editable_limit_bytes();
+        self.default_profile = profile_named(config.default_profile);
+        self.show_planned_menus = config.show_planned_menus;
+        let ids: Vec<DocumentId> = self.workspace.iter().map(Document::id).collect();
+        for id in ids {
+            self.give_default_profile(id);
+        }
+        self.settings = save_to.map(|path| SavedSettings {
+            path,
+            baseline: config.clone(),
+        });
+    }
+
+    /// Give a document that has just appeared the configured default
+    /// profile. Straight onto the document rather than through
+    /// `set_security`: a default is not a change the user made, and the
+    /// security history records changes.
+    pub(crate) fn give_default_profile(&mut self, id: DocumentId) {
+        if self.default_profile == bp_security::Profile::Standard {
+            return;
+        }
+        if let Some(doc) = self.workspace.get_mut(id) {
+            doc.set_security(bp_security::Security::Named(self.default_profile));
+        }
+    }
+
+    /// Give a document the profile the user last set on the file at `path`,
+    /// if there is one. After `give_default_profile`, so a profile set on
+    /// this very file beats the default for new ones.
+    pub(crate) fn recall_profile(&mut self, id: DocumentId, path: &Path) {
+        if let Some(security) = self.profiles.get(path)
+            && let Some(doc) = self.workspace.get_mut(id)
+        {
+            doc.set_security(security);
+        }
+    }
+
+    /// Keep `security` as the profile of the file at `path` for next time.
+    ///
+    /// The document's own setting, never the one Privacy Mode clamps it to:
+    /// Privacy Mode is a session's override, and saving what it forced would
+    /// leave a document stricter than the user ever set it once the mode is
+    /// off. A failure to save is a status line; the profile still applies.
+    fn keep_profile(&mut self, path: &Path, security: bp_security::Security) {
+        self.profiles.set(path, security);
+        if let Some(store) = &self.profiles_path
+            && let Err(e) = self.profiles.save(store)
+        {
+            self.error = Some(format!(
+                "this document's profile will not be remembered next time: {e}"
+            ));
+        }
+    }
+
+    /// Save a setting the user just chose, so it is there next time.
+    ///
+    /// `change` applies it to a copy of what the file last said, and only
+    /// the difference is written (`bp_config::Settings::between`). Never a
+    /// snapshot of everything in force: that would write a one-off
+    /// `--font-size` from the command line into the file for good. A failure
+    /// is a status-bar line, never fatal -- the setting still applies for
+    /// this session.
+    pub(crate) fn remember(&mut self, change: impl FnOnce(&mut bp_config::Config)) {
+        let Some(saved) = &mut self.settings else {
+            return;
+        };
+        let mut after = saved.baseline.clone();
+        change(&mut after);
+        let difference = bp_config::Settings::between(&saved.baseline, &after);
+        match bp_config::save(&saved.path, &difference) {
+            Ok(()) => saved.baseline = after,
+            Err(e) => self.error = Some(e.to_string()),
+        }
+    }
+
+    /// A fresh state whose files live at `locations`.
+    fn at(locations: &bp_config::Locations) -> Self {
+        // A store that cannot be read is empty, and says so: documents then
+        // open with the default profile, which the notice tells the user,
+        // rather than the editor refusing to start over a lost preference.
+        let (profiles, profiles_notice) = locations.profiles.as_deref().map_or(
+            (bp_history::ProfileStore::new(), None),
+            bp_history::ProfileStore::load,
+        );
         let mut workspace = Workspace::new();
         let id = workspace.open_new(now());
         let mut editors = HashMap::new();
@@ -198,22 +471,52 @@ impl AppState {
             theme: ThemeId::default(),
             follow_system_theme: false,
             system_dark: None,
-            error: None,
+            error: profiles_notice,
             gutter: String::new(),
             gutter_lines: usize::MAX,
             show_gutter: true,
             wrap_text: false,
             indent: bp_editor::Indent::default(),
             font_size: bp_config::DEFAULT_FONT_SIZE,
+            record_other_programs: false,
+            integration: crate::default_editor::Rows::default(),
+            editable_limit: bp_files::EDITABLE_LIMIT_BYTES,
+            default_profile: bp_security::Profile::Standard,
+            settings: None,
+            settings_sheet: None,
+            show_planned_menus: false,
+            log_dir: None,
+            checkpointed: HashMap::new(),
+            renderer: String::new(),
+            overwrite: false,
             stamps: HashMap::new(),
-            recent: bp_config::load_recent(),
+            recent: locations
+                .recent
+                .as_deref()
+                .map(bp_config::load_recent)
+                .unwrap_or_default(),
+            recent_file: locations.recent.clone(),
+            left_behind: None,
             disk_warning: None,
             matches: Vec::new(),
             match_index: 0,
             find_status: String::new(),
             goto_status: String::new(),
-            journal: bp_history::Journal::new(recovery_dir()),
-            audit_path: crate::audit::audit_path(),
+            // Relative fallbacks for an environment naming no directory at
+            // all, which is what these were before they had a home.
+            journal: bp_history::Journal::new(
+                locations
+                    .recovery
+                    .clone()
+                    .unwrap_or_else(|| PathBuf::from(bp_config::locations::RECOVERY_DIR)),
+            ),
+            audit_path: locations
+                .security_history
+                .clone()
+                .unwrap_or_else(|| PathBuf::from(bp_config::locations::SECURITY_HISTORY_FILE)),
+            profiles,
+            profiles_path: locations.profiles.clone(),
+            signing_key: locations.signing_key.clone(),
             passphrases: HashMap::new(),
             privacy: bp_security::Privacy::default(),
             ask: None,
@@ -221,20 +524,52 @@ impl AppState {
             tab_context: None,
             file_hits: Vec::new(),
             clips: bp_clipboard::History::new(),
+            clip_menu: bp_clipboard::Snapshot::default(),
+            viewers: HashMap::new(),
+            // Replaced by the viewer surface's own measurement, as
+            // `visible_rows` is by the editor's.
+            viewer_rows: 30,
+            viewer_columns: 80,
         }
     }
 
-    /// Write a recovery checkpoint for every unsaved document, and clear the
-    /// journal for those that are now clean.
+    /// Write a recovery checkpoint for every unsaved document that changed
+    /// since its last one, and clear the journal for those that are now
+    /// clean -- all on this thread.
     ///
     /// specs.md section 3 is emphatic that a checkpoint is not a save, and
     /// `bp-core` enforces that: `record_checkpoint` deliberately leaves the
     /// document dirty.
+    ///
+    /// The three steps below, run in a row. The autosave timer runs the
+    /// middle one on a background thread instead (release plan M1-07), so a
+    /// sealed checkpoint's key derivation never stalls the keyboard.
     pub(crate) fn checkpoint_all(&mut self) {
+        let jobs = self.prepare_checkpoints();
+        let journal = self.journal.clone();
+        let written = write_checkpoints(&journal, jobs);
+        self.apply_checkpoints(written);
+    }
+
+    /// The UI-thread half of a checkpoint pass: discard the journal of every
+    /// clean document, and snapshot every dirty one whose checkpoint is not
+    /// already current, each with a journal ticket.
+    ///
+    /// The ticket is what makes writing later, elsewhere, safe: a save or a
+    /// close between now and the write discards the document's journal, and
+    /// that discard cancels the ticket, so a snapshot taken before it can
+    /// never land after it and be offered as "recovered" work the user
+    /// already saved or threw away.
+    pub(crate) fn prepare_checkpoints(&mut self) -> Vec<CheckpointJob> {
         let ids: Vec<DocumentId> = self.workspace.iter().map(Document::id).collect();
-        let at = now();
+        let mut jobs = Vec::new();
 
         for id in ids {
+            // A viewer tab holds no text and never changes, so it has
+            // nothing to recover and no journal to clear.
+            if self.is_viewer(id) {
+                continue;
+            }
             let Some(doc) = self.workspace.get(id) else {
                 continue;
             };
@@ -242,10 +577,15 @@ impl AppState {
                 // Clean means the file holds the work; the journal must not
                 // linger and offer to "recover" a stale copy.
                 let _ = self.journal.discard(id.get());
+                self.checkpointed.remove(&id);
+                continue;
+            }
+            let edits = doc.edits();
+            if self.checkpointed.get(&id) == Some(&edits) {
                 continue;
             }
 
-            let entry = bp_history::Checkpoint {
+            let checkpoint = bp_history::Checkpoint {
                 path: doc.path().map(Path::to_path_buf),
                 name: doc.display_name().to_owned(),
                 text: self.text_of(id).to_owned(),
@@ -258,15 +598,35 @@ impl AppState {
             // Its own passphrase, if it has one. A sealed journal is
             // encrypted with the document's key so that it can be recovered
             // at unlock time and never needs a prompt of its own (ADR-0022).
-            let passphrase = self.passphrases.get(&id).map(|p| p.to_string());
-            match self
-                .journal
-                .checkpoint(id.get(), &entry, recovery, passphrase.as_deref())
-            {
+            let passphrase = self
+                .passphrases
+                .get(&id)
+                .map(|p| zeroize::Zeroizing::new(p.to_string()));
+            jobs.push(CheckpointJob {
+                id,
+                edits,
+                ticket: self.journal.ticket(id.get()),
+                checkpoint,
+                recovery,
+                passphrase,
+            });
+        }
+        jobs
+    }
+
+    /// The UI-thread half after the write: record what reached the journal,
+    /// and say so when a profile could not be honoured.
+    pub(crate) fn apply_checkpoints(&mut self, written: Vec<CheckpointWritten>) {
+        let at = now();
+        for done in written {
+            match done.result {
                 Ok(bp_history::Written::Yes) => {
-                    if let Some(doc) = self.workspace.get_mut(id) {
+                    if let Some(doc) = self.workspace.get_mut(done.id) {
                         doc.record_checkpoint(at);
                     }
+                    // The count the snapshot was taken at: typing since then
+                    // leaves the record behind, and the next pass writes again.
+                    self.checkpointed.insert(done.id, done.edits);
                 }
                 // A profile doing what it was set to do is not news; one that
                 // cannot be honoured is. `notice` decides which this was.
@@ -275,7 +635,8 @@ impl AppState {
                         self.error = Some(message.to_owned());
                     }
                 }
-                Err(_) => {}
+                // A save or a close got there first; its discard stands.
+                Ok(bp_history::Written::Superseded) | Err(_) => {}
             }
         }
     }
@@ -284,9 +645,16 @@ impl AppState {
     pub(crate) fn restore(&mut self, entries: Vec<(u64, bp_history::Checkpoint)>) {
         for (_, entry) in entries {
             let id = match entry.path {
-                Some(path) => self.workspace.open_path(path, now()),
+                Some(path) => {
+                    let created = created_at(&path);
+                    self.workspace.open_path(path, created)
+                }
                 None => self.workspace.open_new(now()),
             };
+            self.give_default_profile(id);
+            if let Some(path) = doc_path(&self.workspace, id) {
+                self.recall_profile(id, &path);
+            }
             self.editors.insert(id, bp_editor::Editor::new(&entry.text));
             // Recovered work is by definition not on disk yet.
             if let Some(doc) = self.workspace.get_mut(id) {
@@ -300,6 +668,12 @@ impl AppState {
     /// Returns the range to select, if there is one.
     pub(crate) fn find(&mut self, query: &bp_search::Query) -> Option<std::ops::Range<usize>> {
         self.match_index = 0;
+        // The viewer searches on a thread, from where it is; what it finds
+        // arrives later, through `poll_viewers`.
+        if self.viewer_find(query, true, true) {
+            self.matches.clear();
+            return None;
+        }
         if query.is_empty() {
             self.matches.clear();
             self.find_status.clear();
@@ -343,13 +717,27 @@ impl AppState {
 
     /// Note that this document and its file are in step, and remember the
     /// file as recently used.
-    fn mark_in_step(&mut self, id: DocumentId, path: &Path) {
+    pub(crate) fn mark_in_step(&mut self, id: DocumentId, path: &Path) {
         if let Some(stamp) = FileStamp::of(path) {
             self.stamps.insert(id, stamp);
         }
         self.disk_warning = None;
+        // The recent list is a record *about* the document -- its path, on
+        // disk, outliving the session -- which is exactly what
+        // `Metadata::Disabled` forbids. Confidential and Maximum set it, and
+        // Privacy Mode clamps every document to it, so one check covers all
+        // three. It used to be written regardless, the one record in the
+        // product that ignored the profile.
+        let recordable = self.workspace.get(id).is_none_or(|doc| {
+            doc.security().policy_under(self.privacy).metadata != bp_security::Metadata::Disabled
+        });
+        if !recordable {
+            return;
+        }
         self.recent.push(path);
-        bp_config::save_recent(&self.recent);
+        if let Some(file) = &self.recent_file {
+            bp_config::save_recent(file, &self.recent);
+        }
     }
 
     /// How the active document's file compares with what we last saw.
@@ -543,15 +931,11 @@ impl AppState {
     ///
     /// Unlike `run_line_action`, these move and duplicate the line the
     /// caret is on rather than rewriting the whole document, so they call
-    /// `Editor` directly. That caret is `bp-editor`'s and `TextInput` never
-    /// exposes it, so this is a no-op outside the custom editor view -- the
-    /// menu already disables these rows there, and a shortcut key that
-    /// reaches here anyway is safer treated as doing nothing than acted on
-    /// against a caret position this crate cannot trust.
+    /// `Editor` directly. Under `TextInput` the caret is the widget's, and
+    /// the caller copies it in first (`follow_widget_caret`) and back out
+    /// after -- release plan M1-04, which retired the "needs --editor-view"
+    /// gate this used to have.
     pub(crate) fn run_line_edit(&mut self, id: i32) {
-        if !self.editor_view {
-            return;
-        }
         // Compared rather than assumed: Duplicate Line always changes the
         // document, but Move Line Up/Down is a deliberate no-op at the
         // first or last line, and `bp-editor` reports that only through its
@@ -570,6 +954,57 @@ impl AppState {
         if self.active_text() != before {
             self.mark_edited();
         }
+    }
+
+    /// Copy the `TextInput` view's caret, given as UTF-8 byte offsets, into
+    /// the active editor, which counts characters.
+    ///
+    /// Everything that needs the caret -- the line operations, Insert
+    /// Date/Time, the status bar's Ln/Col -- reads the editor's, so under the
+    /// default view the widget's is copied in first. A no-op under the custom
+    /// surface, where the editor's caret is the only one.
+    pub(crate) fn follow_widget_caret(&mut self, anchor: i32, cursor: i32) {
+        if self.editor_view {
+            return;
+        }
+        let Some(editor) = self.active_editor_mut() else {
+            return;
+        };
+        let to_char = |byte: i32| {
+            editor
+                .buffer()
+                .byte_to_char(usize::try_from(byte).unwrap_or(0))
+        };
+        let (anchor, cursor) = (to_char(anchor), to_char(cursor));
+        editor.select(anchor, cursor);
+    }
+
+    /// The active editor's selection as a character range, anchor first --
+    /// the caret alone when nothing is selected. What the default view's
+    /// caret is put back to after an operation replaced its text.
+    pub(crate) fn caret_range(&self) -> Option<std::ops::Range<usize>> {
+        let editor = self.active_editor()?;
+        let cursor = editor.cursor();
+        Some(match editor.selection() {
+            Some(selected) if selected.end == cursor => selected,
+            // Selected backwards: the anchor is the far end.
+            Some(selected) => selected.end..selected.start,
+            None => cursor..cursor,
+        })
+    }
+
+    /// Character offset `char_idx` of the active document as a UTF-8 byte
+    /// offset, for `TextInput`, which counts bytes.
+    pub(crate) fn char_to_byte(&self, char_idx: usize) -> usize {
+        self.active_editor()
+            .map_or(char_idx, |editor| editor.buffer().char_to_byte(char_idx))
+    }
+
+    /// UTF-8 byte offset `byte` of the active document as a character
+    /// offset.
+    pub(crate) fn byte_to_char(&self, byte: usize) -> usize {
+        self.active_editor()
+            .map_or(byte, |editor| editor.buffer().byte_to_char(byte))
     }
 
     /// Run a data operation, reporting the outcome in the status bar.
@@ -609,9 +1044,21 @@ impl AppState {
             (action::DATA_FORMAT, Format::Json) => {
                 self.apply_to_active(bp_data::json_format(&text));
             }
-            (action::DATA_FORMAT, Format::Toml) => {
-                self.apply_to_active(bp_data::toml_format(&text));
+            (action::DATA_SORT_KEYS, Format::Json) => {
+                self.apply_to_active(bp_data::json_sort_keys(&text));
             }
+            (action::DATA_FORMAT, Format::Toml) => match bp_data::toml_format(&text) {
+                // Said after the fact as well as on the row, like YAML: the
+                // document has changed in a way a person would not guess.
+                Ok(formatted) => {
+                    self.edit(formatted);
+                    self.error = Some(
+                        "✓ formatted — comments were not kept and keys were sorted; Ctrl+Z undoes it"
+                            .to_owned(),
+                    );
+                }
+                Err(e) => self.error = Some(format!("this TOML was left unchanged — {e}")),
+            },
             (action::DATA_MINIFY, Format::Json) => {
                 self.apply_to_active(bp_data::json_minify(&text));
             }
@@ -672,6 +1119,10 @@ impl AppState {
         let Some(id) = self.workspace.active_id() else {
             return;
         };
+        if self.is_viewer(id) {
+            self.reload_viewer(id);
+            return;
+        }
         let Some(path) = self
             .workspace
             .get(id)
@@ -680,7 +1131,7 @@ impl AppState {
         else {
             return;
         };
-        match load(&path) {
+        match load_with_limit(&path, self.editable_limit) {
             Ok(file) => {
                 if let Some(doc) = self.workspace.get_mut(id) {
                     doc.set_encoding(file.encoding);
@@ -700,6 +1151,11 @@ impl AppState {
     /// The bytes on disk no longer match the intent, which is exactly what
     /// "unsaved" means -- leaving it clean would hide a pending change.
     pub(crate) fn set_line_ending(&mut self, line_ending: LineEnding) {
+        if let Some(id) = self.workspace.active_id()
+            && self.refuse_read_only(id)
+        {
+            return;
+        }
         if let Some(doc) = self.workspace.active_mut()
             && doc.line_ending() != line_ending
         {
@@ -709,7 +1165,40 @@ impl AppState {
     }
 
     pub(crate) fn set_encoding(&mut self, encoding: Encoding) {
-        if let Some(doc) = self.workspace.active_mut()
+        if let Some(id) = self.workspace.active_id() {
+            self.set_encoding_of(id, encoding);
+        }
+    }
+
+    /// Change a document's encoding, refusing one that cannot hold its text.
+    ///
+    /// Refused here, when the user chooses it, rather than discovered at the
+    /// next save: Unicode holds everything, but Windows-1252 has 256
+    /// characters, and the status bar says which one stands in the way and
+    /// where, so the user can decide what to do about it.
+    pub(crate) fn set_encoding_of(&mut self, id: DocumentId, encoding: Encoding) {
+        if self.refuse_read_only(id) {
+            return;
+        }
+        if !encoding.is_unicode() {
+            let text = self.text_of(id);
+            if let Err(EncodeError::Unrepresentable(what)) =
+                try_encode(&text, encoding, LineEndingPolicy::Preserve)
+            {
+                let line = bp_buffer::breaks::line_of(text.as_bytes(), what.byte_offset);
+                let current = self
+                    .workspace
+                    .get(id)
+                    .map_or("unchanged", |d| d.encoding().label());
+                self.error = Some(format!(
+                    "still {current}: \"{}\" on line {line} has no {} form",
+                    what.character,
+                    encoding.label()
+                ));
+                return;
+            }
+        }
+        if let Some(doc) = self.workspace.get_mut(id)
             && doc.encoding() != encoding
         {
             doc.set_encoding(encoding);
@@ -807,24 +1296,70 @@ impl AppState {
         self.error = None;
         let id = self.workspace.open_new(now());
         self.editors.insert(id, bp_editor::Editor::default());
+        self.give_default_profile(id);
     }
 
     pub(crate) fn open(&mut self, path: PathBuf) {
         self.error = None;
         let path2 = path.clone();
-        match load(&path) {
+        match load_with_limit(&path, self.editable_limit) {
             Ok(file) => {
-                let id = self.workspace.open_path(path, now());
+                let id = self.workspace.open_path(path, created_at(&path2));
+                self.give_default_profile(id);
+                self.recall_profile(id, &path2);
                 if let Some(doc) = self.workspace.get_mut(id) {
                     doc.set_encoding(file.encoding);
                     doc.set_line_ending(file.line_ending);
                 }
                 self.editors.insert(id, bp_editor::Editor::new(&file.text));
                 self.mark_in_step(id, &path2);
+                // Loaded, but big enough that whole-document tools -- Find,
+                // the data operations, statistics -- will be noticeably slow.
+                // Said once, at open, rather than left for the user to
+                // discover as a hang. A file past the editable limit never
+                // gets here: `load` refuses it, and the arm below sends it
+                // to the viewer.
+                if file.size_class() == bp_buffer::SizeClass::Large {
+                    self.error = Some(format!(
+                        "Large file ({} MiB): whole-document tools may be slow",
+                        file.bytes_on_disk / (1024 * 1024)
+                    ));
+                }
+            }
+            // Too large to edit is not too large to read: it opens in the
+            // viewer, read-only, with a banner saying why (owner decision
+            // U3). Measured here rather than stat'd first, so a log that
+            // grew past the limit while it was being read goes there too.
+            Err(bp_files::LoadError::TooLarge { bytes, limit, .. }) => {
+                self.open_in_viewer(path2, crate::viewer::Reason::TooLarge { bytes, limit });
             }
             // The error types already render a message naming the file and
             // what to do about it, which is exactly what the status bar wants.
             Err(e) => self.error = Some(e.to_string()),
+        }
+    }
+
+    /// Open `path` as the command line asked: [`Self::open`], or straight
+    /// into the viewer for `--readonly` and `--large-file`.
+    ///
+    /// `--readonly` uses the viewer rather than an editor with its keys
+    /// turned off. The viewer never loads the file, so there is no buffer
+    /// for any of the editor's forty-odd write paths to reach -- save,
+    /// Save As, the journal, a data conversion, Replace All -- and nothing
+    /// to remember to guard in two editor views. A read-only editor would be
+    /// one missed guard away from writing to the file it promised not to.
+    pub(crate) fn open_as(&mut self, path: PathBuf, how: crate::viewer::OpenAs) {
+        use crate::viewer::{OpenAs, Reason};
+        match how {
+            OpenAs::Normal => self.open(path),
+            OpenAs::ReadOnly => {
+                self.error = None;
+                self.open_in_viewer(path, Reason::ReadOnly);
+            }
+            OpenAs::Viewer => {
+                self.error = None;
+                self.open_in_viewer(path, Reason::Asked);
+            }
         }
     }
 
@@ -834,6 +1369,9 @@ impl AppState {
     /// refused" as success and then discard the buffer.
     pub(crate) fn save_document(&mut self, id: DocumentId, path: Option<PathBuf>) -> SaveResult {
         self.error = None;
+        if self.refuse_read_only(id) {
+            return SaveResult::Failed;
+        }
         let Some(doc) = self.workspace.get(id) else {
             return SaveResult::Saved;
         };
@@ -847,11 +1385,20 @@ impl AppState {
         // every save quietly rewrite the minority convention in a mixed
         // document, with nothing on screen to say it had happened. Format ▸
         // LF / CRLF is where a conversion is asked for, and it asks first.
-        let bytes = encode(
-            &self.text_of(id),
-            doc.encoding(),
-            LineEndingPolicy::Preserve,
-        );
+        //
+        // Both copies -- the text and its encoded bytes -- are wiped when
+        // dropped (release plan M1-20). For an encrypted document they are
+        // the plaintext the seal exists to protect, and they are the two
+        // copies this code owns outright; see SECURITY_MODEL.md for the
+        // copies it cannot reach.
+        let text = zeroize::Zeroizing::new(self.text_of(id));
+        let bytes = match try_encode(&text, doc.encoding(), LineEndingPolicy::Preserve) {
+            Ok(bytes) => zeroize::Zeroizing::new(bytes),
+            Err(EncodeError::Unrepresentable(what)) => {
+                self.error = Some(format!("not saved: {what}"));
+                return SaveResult::Unrepresentable(what);
+            }
+        };
 
         // An encrypted document stays encrypted. The passphrase is held for
         // the session precisely so this does not ask again on every save --
@@ -861,7 +1408,7 @@ impl AppState {
             None => bytes,
             Some(passphrase) => {
                 match bp_crypto::seal(&bytes, passphrase, bp_crypto::SealOptions::default()) {
-                    Ok(sealed) => sealed,
+                    Ok(sealed) => zeroize::Zeroizing::new(sealed),
                     Err(e) => {
                         // Refused rather than falling back to plaintext. A
                         // save that silently wrote the document in clear
@@ -875,16 +1422,27 @@ impl AppState {
 
         match atomic_write(&target, &bytes, SaveOptions::default()) {
             Ok(_) => {
+                let mut moved_to = None;
                 if let Some(doc) = self.workspace.get_mut(id) {
+                    if doc.path() != Some(target.as_path()) {
+                        moved_to = Some(doc.security());
+                    }
                     doc.set_path(target.clone());
                     // Only now, after a verified write, is the document clean.
                     doc.record_disk_save(now());
+                }
+                // A first save or a Save As: the profile goes with the
+                // document to its new file. The old file keeps its own entry
+                // -- it still exists, with the same text in it.
+                if let Some(security) = moved_to {
+                    self.keep_profile(&target, security);
                 }
                 // Both forms of journal go once the work is on disk. The
                 // sealed one is keyed by path rather than by session id, so
                 // it has to be discarded by path.
                 let _ = self.journal.discard(id.get());
                 let _ = self.journal.discard_sealed_for(&target);
+                self.checkpointed.remove(&id);
                 // Re-stamp from what we just wrote, or our own save would
                 // look like somebody else's change on the next poll.
                 self.mark_in_step(id, &target);
@@ -912,6 +1470,9 @@ impl AppState {
     /// real save would make the copy a different file from the original.
     pub(crate) fn save_copy(&mut self, id: DocumentId, target: &Path) -> SaveResult {
         self.error = None;
+        if self.refuse_read_only(id) {
+            return SaveResult::Failed;
+        }
         let Some(doc) = self.workspace.get(id) else {
             return SaveResult::Saved;
         };
@@ -919,11 +1480,32 @@ impl AppState {
         // The same policy as a real save, for the same reason the encoding is
         // shared: bytes written differently from the original would make the
         // copy a different file.
-        let bytes = encode(
-            &self.text_of(id),
-            doc.encoding(),
-            LineEndingPolicy::Preserve,
-        );
+        let text = zeroize::Zeroizing::new(self.text_of(id));
+        let bytes = match try_encode(&text, doc.encoding(), LineEndingPolicy::Preserve) {
+            Ok(bytes) => zeroize::Zeroizing::new(bytes),
+            Err(e) => {
+                self.error = Some(format!("copy not saved: {e}"));
+                return SaveResult::Failed;
+            }
+        };
+
+        // A copy of an encrypted document is encrypted too, with the same
+        // passphrase. It used to be written in clear, silently: the one
+        // route by which the text of a `.bpadx` reached the disk without the
+        // user choosing Decrypt. Refused rather than falling back, as Save
+        // is.
+        let bytes = match self.passphrases.get(&id) {
+            None => bytes,
+            Some(passphrase) => {
+                match bp_crypto::seal(&bytes, passphrase, bp_crypto::SealOptions::default()) {
+                    Ok(sealed) => zeroize::Zeroizing::new(sealed),
+                    Err(e) => {
+                        self.error = Some(format!("copy not saved -- {e}"));
+                        return SaveResult::Failed;
+                    }
+                }
+            }
+        };
 
         match atomic_write(target, &bytes, SaveOptions::default()) {
             Ok(_) => {
@@ -978,11 +1560,15 @@ impl AppState {
         let Some(doc) = self.workspace.active() else {
             return Err("there is no document to read".to_owned());
         };
-        Ok(encode(
+        // A document that cannot be encoded has no file form to hash, and a
+        // digest of some other encoding's bytes would describe a file that
+        // does not exist.
+        try_encode(
             &self.active_text(),
             doc.encoding(),
             LineEndingPolicy::Preserve,
-        ))
+        )
+        .map_err(|e| e.to_string())
     }
 
     /// Whether the active document differs from whatever is on disk.
@@ -1063,8 +1649,9 @@ impl AppState {
     /// Returns whether the document changed, so the caller knows whether to
     /// re-push the text into the widget.
     pub(crate) fn apply_redaction(&mut self, plan: &RedactionPlan) -> bool {
-        // The offsets were measured when the dialog opened, and `rfd` pumps
-        // events while it is up. ADR-0028 is built on the rule that stale
+        // The offsets were measured when the question opened, and it is
+        // answered later, from an event, with timers free to run in between.
+        // ADR-0028 is built on the rule that stale
         // offsets destroy the wrong text and report success, and its own
         // `PastEnd` catches only the half of that which runs off the end --
         // an edit that left the length alone would slip straight through. So
@@ -1388,6 +1975,68 @@ impl AppState {
     /// never have to choose a policy for themselves -- picking one at a call
     /// site is how a permissive default gets applied to a document that asked
     /// for something stricter.
+    /// Record text the user copied or cut in this window, if the active
+    /// document's profile allows a history at all.
+    pub(crate) fn record_copy(&mut self, text: &str) -> bool {
+        let policy = self.policy().clipboard;
+        self.clips
+            .observe(text, policy, bp_clipboard::Origin::OpenDocument, false)
+    }
+
+    /// A menu showing clipboard rows is opening: freeze which entry each of
+    /// its rows will name (U5).
+    pub(crate) fn open_clip_menu(&mut self) {
+        self.clip_menu = self.clips.snapshot();
+    }
+
+    /// The clipboard entries the menus show, each with its slot -- the
+    /// entries of the last snapshot that are still in the history.
+    pub(crate) fn shown_clips(&self) -> Vec<(usize, &bp_clipboard::Entry)> {
+        self.clip_menu.shown(&self.clips).collect()
+    }
+
+    /// The entry a clipboard row at `slot` names, or `None` -- saying so in
+    /// the status bar -- if it has left the history since the menu opened.
+    ///
+    /// A clone, so the caller can go on to borrow the state mutably to paste
+    /// it.
+    pub(crate) fn clip_named(&mut self, slot: usize) -> Option<bp_clipboard::Entry> {
+        let entry = self.clip_menu.resolve(&self.clips, slot).cloned();
+        if entry.is_none() {
+            self.error = Some(CLIP_GONE.to_owned());
+        }
+        entry
+    }
+
+    /// Pin or unpin the entry the Pin row at `slot` names.
+    pub(crate) fn toggle_clip_pin(&mut self, slot: usize) {
+        self.error = Some(
+            match self.clips.toggle_pin_shown(&self.clip_menu, slot) {
+                Some(true) => "clipboard entry pinned: Clear keeps it",
+                Some(false) => "clipboard entry unpinned",
+                None => CLIP_GONE,
+            }
+            .to_owned(),
+        );
+    }
+
+    /// Forget the unpinned entries the menu showed -- not ones copied since,
+    /// which nobody has seen.
+    pub(crate) fn clear_shown_clips(&mut self) {
+        let gone = self.clips.clear_shown(&self.clip_menu);
+        self.error = Some(match gone {
+            0 => "nothing to clear: every entry shown is pinned or already gone".to_owned(),
+            1 => "1 clipboard entry cleared; pinned ones kept".to_owned(),
+            n => format!("{n} clipboard entries cleared; pinned ones kept"),
+        });
+    }
+
+    /// Whether a copy out of the active document should be kept out of the
+    /// OS clipboard history and cloud sync.
+    pub(crate) fn keep_clipboard_private(&self) -> bool {
+        bp_clipboard::keep_out_of_os_history(&self.policy())
+    }
+
     pub(crate) fn policy(&self) -> bp_security::Policy {
         // Through `policy_under`, always. Reading a document's own policy
         // directly is how a caller ends up outside Privacy Mode's reach.
@@ -1417,6 +2066,15 @@ impl AppState {
         let previous = doc.set_security(security);
         if previous == security {
             return;
+        }
+        // The journal's form follows the profile, so the recorded one is no
+        // longer current whatever happens below.
+        self.checkpointed.remove(&id);
+        // Remembered for the file, so reopening a Confidential document is
+        // Confidential. An untitled document has no file to remember it
+        // for yet; its first save does it.
+        if let Some(path) = doc.path().map(Path::to_path_buf) {
+            self.keep_profile(&path, security);
         }
 
         let policy = security.policy_under(self.privacy);
@@ -1461,26 +2119,120 @@ impl AppState {
 
     /// Begin opening `path`, asking for a passphrase if it is encrypted.
     ///
-    /// Read as bytes rather than through `bp_files::load`, which decodes text
-    /// and would mangle ciphertext on the way in.
+    /// Only the head is read, for the magic number and the header: this used
+    /// to read the whole file to look at six bytes, which for a file bound
+    /// for the large-file viewer was the very read the viewer exists to
+    /// avoid.
     ///
     /// An encrypted file does **not** become a tab until it is unlocked. A tab
     /// nobody can read is worse than no tab: it looks like an empty document,
     /// and saving it would write emptiness over the real one.
-    pub(crate) fn open_maybe_encrypted(&mut self, path: PathBuf) -> bool {
-        match std::fs::read(&path) {
-            Ok(bytes) if bp_crypto::is_bpadx(&bytes) => {
-                self.ask = Some(crate::passphrase::Ask::Unlock(path));
-                self.passphrase_status.clear();
-                true
-            }
+    ///
+    /// Its header is read before anything is asked (decision 15). A damaged
+    /// or unknown header, or a cost past the ceiling, is reported now rather
+    /// than after the user has typed a passphrase for a file that was never
+    /// going to open; a cost above four times the default is a question for
+    /// the caller to ask first.
+    pub(crate) fn open_maybe_encrypted(&mut self, path: PathBuf) -> Opening {
+        match read_prefix(&path, BPADX_HEADER_READ) {
+            Ok(bytes) if bp_crypto::is_bpadx(&bytes) => match bp_crypto::unlock_cost(&bytes) {
+                Ok(bp_crypto::UnlockCost::Normal) => {
+                    self.ask = Some(crate::passphrase::Ask::Unlock {
+                        path,
+                        agreed_cost: false,
+                    });
+                    self.passphrase_status.clear();
+                    Opening::Passphrase
+                }
+                Ok(bp_crypto::UnlockCost::NeedsConfirmation {
+                    memory_kib,
+                    iterations,
+                    estimate,
+                }) => Opening::Expensive {
+                    path,
+                    question: unlock_cost_question(memory_kib, iterations, estimate),
+                },
+                Ok(bp_crypto::UnlockCost::Refused(refused)) | Err(refused) => {
+                    self.error = Some(format!("{}: {refused}", file_label(&path)));
+                    Opening::Done
+                }
+            },
             // Not encrypted, or unreadable -- either way `open` handles it and
             // reports properly.
             _ => {
                 self.open(path);
-                false
+                Opening::Done
             }
         }
+    }
+
+    /// The user answered the expensive-unlock question for `path`.
+    ///
+    /// Yes puts the passphrase bar up with the agreement recorded in the
+    /// question itself, so it cannot outlive it; no says in the status bar
+    /// that nothing was opened, so the silence is not mistaken for a failure.
+    pub(crate) fn answer_unlock_cost(&mut self, path: PathBuf, agreed: bool) {
+        if agreed {
+            self.ask = Some(crate::passphrase::Ask::Unlock {
+                path,
+                agreed_cost: true,
+            });
+            self.passphrase_status.clear();
+        } else {
+            self.error = Some(format!("{} was not opened", file_label(&path)));
+        }
+    }
+
+    /// Open every file in `paths`, as File ▸ Open with several chosen does.
+    ///
+    /// Returns what the first encrypted file needs asked. Only one question
+    /// can be put at a time, so any further encrypted ones are named in the
+    /// status bar to open one by one -- better than guessing that one
+    /// passphrase fits them all. What each open reports is kept, rather than
+    /// each wiping the last.
+    pub(crate) fn open_many(&mut self, paths: Vec<PathBuf>) -> Opening {
+        let mut notices = Vec::new();
+        let mut asking = Opening::Done;
+        let mut locked_later = Vec::new();
+        for path in paths {
+            let encrypted = read_head(&path).is_ok_and(|bytes| bp_crypto::is_bpadx(&bytes));
+            if encrypted && asking != Opening::Done {
+                locked_later.push(file_label(&path));
+                continue;
+            }
+            let opened = self.open_maybe_encrypted(path);
+            if opened != Opening::Done {
+                asking = opened;
+            }
+            notices.extend(self.error.take());
+        }
+        if !locked_later.is_empty() {
+            notices.push(format!(
+                "also encrypted, open separately: {}",
+                locked_later.join(", ")
+            ));
+        }
+        self.error = (!notices.is_empty()).then(|| notices.join("; "));
+        asking
+    }
+
+    /// Make the next tab active, or the previous one, wrapping at either
+    /// end (Ctrl+Tab and Ctrl+Shift+Tab).
+    pub(crate) fn cycle_tab(&mut self, forward: bool) {
+        let ids: Vec<DocumentId> = self.workspace.iter().map(Document::id).collect();
+        let Some(at) = self
+            .workspace
+            .active_id()
+            .and_then(|active| ids.iter().position(|&id| id == active))
+        else {
+            return;
+        };
+        let next = if forward {
+            (at + 1) % ids.len()
+        } else {
+            (at + ids.len() - 1) % ids.len()
+        };
+        self.workspace.set_active(ids[next]);
     }
 
     /// Answer whatever the passphrase bar was asking.
@@ -1495,7 +2247,7 @@ impl AppState {
         };
 
         match ask {
-            Ask::Unlock(path) => self.unlock(path, entered),
+            Ask::Unlock { path, agreed_cost } => self.unlock(path, entered, agreed_cost),
             Ask::Set { id, target } => {
                 if entered.is_empty() {
                     // `bp_crypto::seal` refuses this too, but saying so here
@@ -1512,6 +2264,28 @@ impl AppState {
                 });
                 true
             }
+            Ask::Sign { document } => self.sign_with_kept_key(document, entered),
+            Ask::NewKey { document } => {
+                if entered.is_empty() {
+                    self.passphrase_status = "a passphrase is required".to_owned();
+                    self.ask = Some(Ask::NewKey { document });
+                    return true;
+                }
+                self.passphrase_status.clear();
+                self.ask = Some(Ask::ConfirmKey {
+                    document,
+                    first: zeroize::Zeroizing::new(entered.to_owned()),
+                });
+                true
+            }
+            Ask::ConfirmKey { document, first } => {
+                if first.as_str() != entered {
+                    self.passphrase_status = "those did not match -- start again".to_owned();
+                    self.ask = Some(Ask::NewKey { document });
+                    return true;
+                }
+                self.create_key_and_sign(document, &first)
+            }
             Ask::Confirm { id, target, first } => {
                 if first.as_str() != entered {
                     // Back to the first question, not the second. Asking to
@@ -1527,7 +2301,11 @@ impl AppState {
     }
 
     /// Decrypt `path` and open it as a tab.
-    fn unlock(&mut self, path: PathBuf, passphrase: &str) -> bool {
+    ///
+    /// `agreed_cost` is whether the user agreed to an expensive unlock
+    /// (decision 15). Without it `bp_crypto::open` refuses one, which also
+    /// covers a file replaced by a costlier one since it was asked about.
+    fn unlock(&mut self, path: PathBuf, passphrase: &str, agreed_cost: bool) -> bool {
         let bytes = match std::fs::read(&path) {
             Ok(bytes) => bytes,
             Err(e) => {
@@ -1536,14 +2314,21 @@ impl AppState {
             }
         };
 
-        match bp_crypto::open(&bytes, passphrase) {
+        let opened = if agreed_cost {
+            bp_crypto::open_confirmed(&bytes, passphrase)
+        } else {
+            bp_crypto::open(&bytes, passphrase)
+        };
+        match opened {
             Ok(plain) => {
                 // Lossy rather than refusing: a document that decrypted and
                 // authenticated is the user's own text, and refusing to show
                 // it because one byte is not UTF-8 would strand it inside a
                 // file only this program can open.
                 let text = String::from_utf8_lossy(&plain).into_owned();
-                let id = self.workspace.open_path(path.clone(), now());
+                let id = self.workspace.open_path(path.clone(), created_at(&path));
+                self.give_default_profile(id);
+                self.recall_profile(id, &path);
 
                 // Unsaved work from a crashed session, if there is any. This
                 // is the only moment it can be read: the journal is sealed
@@ -1577,12 +2362,22 @@ impl AppState {
                 }
                 false
             }
+            Err(
+                e @ (bp_crypto::CryptoError::UnconfirmedCost { .. }
+                | bp_crypto::CryptoError::UnreasonableCost { .. }),
+            ) => {
+                // The file changed under the question. Another passphrase
+                // would not help, so the bar closes and says why.
+                self.error = Some(format!("{}: {e}", file_label(&path)));
+                self.passphrase_status.clear();
+                false
+            }
             Err(e) => {
                 // The bar stays up. A wrong passphrase is the expected
                 // failure, and it is indistinguishable from a damaged file --
                 // see `bp_crypto`'s docs for why nothing can do better.
                 self.passphrase_status = e.to_string();
-                self.ask = Some(crate::passphrase::Ask::Unlock(path));
+                self.ask = Some(crate::passphrase::Ask::Unlock { path, agreed_cost });
                 true
             }
         }
@@ -1610,9 +2405,14 @@ impl AppState {
                 // concerned -- there is no second flag.
                 self.passphrases
                     .insert(id, zeroize::Zeroizing::new(passphrase.to_owned()));
+                let mut security = None;
                 if let Some(doc) = self.workspace.get_mut(id) {
                     doc.set_path(target.to_path_buf());
                     doc.record_disk_save(now());
+                    security = Some(doc.security());
+                }
+                if let Some(security) = security {
+                    self.keep_profile(target, security);
                 }
                 self.mark_in_step(id, target);
                 self.passphrase_status.clear();
@@ -1623,6 +2423,150 @@ impl AppState {
                 self.passphrase_status = e.to_string();
                 true
             }
+        }
+    }
+
+    /// Begin Encrypt Document: the passphrase bar asks for a new passphrase
+    /// for `target`, and its first question says the format has not had an
+    /// independent review (release plan decision 20). Only the first: an
+    /// empty entry or a mismatch replaces the sentence with the reason.
+    pub(crate) fn begin_encrypting(&mut self, id: DocumentId, target: PathBuf) {
+        self.ask = Some(crate::passphrase::Ask::Set { id, target });
+        crate::passphrase::UNREVIEWED_FORMAT.clone_into(&mut self.passphrase_status);
+    }
+
+    /// Begin Sign Document (release plan M2-10, D5 option c): ask for the
+    /// kept key's passphrase, or, with no key yet, for a new one.
+    ///
+    /// Returns whether the passphrase bar should open. A signature covers
+    /// the file on disk -- `bp_integrity::sign_file` reads it -- so a
+    /// document that was never saved, or whose tab differs from its file,
+    /// is refused with the reason rather than signed as something other
+    /// than what the user is looking at.
+    pub(crate) fn begin_signing(&mut self) -> bool {
+        use crate::passphrase::Ask;
+        let Some(document) = self
+            .workspace
+            .active()
+            .and_then(Document::path)
+            .map(Path::to_path_buf)
+        else {
+            self.error = Some(
+                "cannot sign — this document has never been saved, and a signature covers a \
+                 file"
+                    .to_owned(),
+            );
+            return false;
+        };
+        if self.active_differs_from_disk() {
+            self.error = Some(
+                "cannot sign — this document has unsaved changes, and a signature covers the \
+                 file as saved; save it first"
+                    .to_owned(),
+            );
+            return false;
+        }
+        let Some(key) = self.signing_key.as_deref() else {
+            self.error = Some(
+                "cannot sign — this environment names no data directory, so there is nowhere \
+                 to keep a signing key"
+                    .to_owned(),
+            );
+            return false;
+        };
+        self.ask = Some(if key.exists() {
+            self.passphrase_status.clear();
+            Ask::Sign { document }
+        } else {
+            // Said on the bar, because it is the moment the user learns a
+            // key is about to exist and that this passphrase is the only
+            // way back to it.
+            self.passphrase_status = format!(
+                "no signing key yet — this creates one at {}, sealed with the passphrase you \
+                 choose; forgetting it means a new key",
+                key.display()
+            );
+            Ask::NewKey { document }
+        });
+        true
+    }
+
+    /// Unseal the kept key and sign. Returns whether the bar stays open: a
+    /// wrong passphrase keeps it, as unlocking a document does.
+    fn sign_with_kept_key(&mut self, document: PathBuf, passphrase: &str) -> bool {
+        let Some(path) = self.signing_key.clone() else {
+            return false;
+        };
+        match bp_integrity::read_sealed_signing_key(&path, passphrase) {
+            Ok(key) => {
+                self.sign(&document, &key);
+                false
+            }
+            Err(bp_integrity::IntegrityError::Sealed {
+                source: bp_crypto::CryptoError::CannotOpen,
+                ..
+            }) => {
+                self.passphrase_status =
+                    "that passphrase does not open the signing key (or the key file is damaged)"
+                        .to_owned();
+                self.ask = Some(crate::passphrase::Ask::Sign { document });
+                true
+            }
+            Err(e) => {
+                self.passphrase_status.clear();
+                self.error = Some(format!("cannot sign — {e}"));
+                false
+            }
+        }
+    }
+
+    /// Make a key, keep it sealed with `passphrase` and its public half
+    /// beside it, then sign. Nothing is signed unless both files were
+    /// written: a signature made with a key that was not kept verifies
+    /// against nothing the user can ever hand anybody.
+    fn create_key_and_sign(&mut self, document: PathBuf, passphrase: &str) -> bool {
+        let Some(path) = self.signing_key.clone() else {
+            return false;
+        };
+        let public = path.with_file_name(bp_config::locations::VERIFYING_KEY_FILE);
+        let made = bp_crypto::SigningKey::generate()
+            .map_err(|e| e.to_string())
+            .and_then(|key| {
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                }
+                bp_integrity::write_sealed_signing_key(&path, &key, passphrase)
+                    .map_err(|e| e.to_string())?;
+                bp_integrity::write_verifying_key(&public, &key.verifying_key())
+                    .map_err(|e| e.to_string())?;
+                Ok(key)
+            });
+        self.passphrase_status.clear();
+        match made {
+            Ok(key) => self.sign(&document, &key),
+            Err(e) => self.error = Some(format!("cannot sign — no signing key was made: {e}")),
+        }
+        false
+    }
+
+    fn sign(&mut self, document: &Path, key: &bp_crypto::SigningKey) {
+        match bp_integrity::sign_file(document, key) {
+            Ok(sidecar) => {
+                self.record_security_event(bp_audit::Event::SignatureMade);
+                let public = self
+                    .signing_key
+                    .as_deref()
+                    .map(|path| path.with_file_name(bp_config::locations::VERIFYING_KEY_FILE));
+                self.error = Some(match public {
+                    Some(public) => format!(
+                        "signed — {} written beside it; the public key to give a recipient is {}",
+                        sidecar.display(),
+                        public.display()
+                    ),
+                    None => format!("signed — {} written beside it", sidecar.display()),
+                });
+            }
+            Err(e) => self.error = Some(format!("cannot sign — {e}")),
         }
     }
 
@@ -1637,6 +2581,11 @@ impl AppState {
             return;
         }
         self.privacy = privacy;
+        // Every document's journal changes form (or goes) without an edit,
+        // so none of the recorded checkpoints is current any more: turning
+        // the mode off must journal unchanged work again at the next
+        // interval, not wait for the next keystroke.
+        self.checkpointed.clear();
         if !privacy.is_on() {
             // Turning it off restores each document's own profile. Nothing to
             // clean up -- the clamp only ever removed permissions.
@@ -1689,13 +2638,9 @@ impl AppState {
     /// the line existed, so a number past the end lands at the last line and
     /// says why rather than doing nothing and looking broken.
     ///
-    /// Caret work, so `--editor-view` only: `TextInput`'s caret cannot be
-    /// moved from here (ADR-0018).
+    /// Returns where the caret went, in characters, for `dispatch::select`
+    /// to put either view's caret there.
     pub(crate) fn go_to_line(&mut self, text: &str) -> Option<std::ops::Range<usize>> {
-        if !self.editor_view {
-            self.goto_status = "Go to Line needs --editor-view".to_owned();
-            return None;
-        }
         let trimmed = text.trim();
         if trimmed.is_empty() {
             self.goto_status.clear();
@@ -1707,6 +2652,11 @@ impl AppState {
             self.goto_status = "not a line number".to_owned();
             return None;
         };
+        // The viewer moves itself; there is no widget caret to select into.
+        if self.viewer_active() {
+            self.viewer_go_to(line);
+            return None;
+        }
         let editor = self.active_editor_mut()?;
         let existed = editor.go_to_line(line);
         let cursor = editor.cursor();
@@ -1753,13 +2703,58 @@ impl AppState {
     /// Prefers a title extracted from the document's own content — that is
     /// the "Semantic Filing Apparatus" doing its job — and falls back to the
     /// document's title when there is nothing to extract.
+    ///
+    /// Free in the folder the dialog opens in (release plan M1-17): a name
+    /// that is taken gets the grammar's collision suffix, so accepting the
+    /// suggestion never offers to overwrite some other file. The document's
+    /// own file does not count as taken -- saving over it is what saving is.
     pub(crate) fn suggested_filename(&self, id: DocumentId) -> String {
-        self.semantic_filename(id).unwrap_or_else(|| {
+        let suggested = self.semantic_filename(id).unwrap_or_else(|| {
             self.workspace.get(id).map_or_else(
                 || "Untitled.txt".to_owned(),
                 |doc| SemanticName::new(doc.title(), doc.created_at().date(), "txt").to_filename(),
             )
+        });
+        let Some(name) = SemanticName::parse(&suggested) else {
+            return suggested;
+        };
+        let dir = self.dialog_directory();
+        let own = self.workspace.get(id).and_then(Document::path);
+        name.resolve_collision(|candidate| {
+            let path = dir.join(candidate);
+            path.exists() && Some(path.as_path()) != own
         })
+        .map_or(suggested, |free| free.to_filename())
+    }
+
+    /// Where Save as New Revision would write `id`: the same name with the
+    /// next revision suffix, in the same folder, and free.
+    ///
+    /// A name already in the grammar keeps its title and date and gains or
+    /// bumps its `_vN`. Any other name is brought into the grammar first --
+    /// `notes.txt` becomes `notes_v2_<date>.txt` -- because a revision
+    /// suffix has nowhere defined to go on a name without the grammar's
+    /// date anchor. `None` for a document with no file: there is nothing to
+    /// be a revision of.
+    pub(crate) fn next_revision_path(&self, id: DocumentId) -> Option<PathBuf> {
+        let doc = self.workspace.get(id)?;
+        let path = doc.path()?;
+        let dir = path.parent()?;
+        let file_name = path.file_name()?.to_string_lossy();
+        let current = SemanticName::parse(&file_name).unwrap_or_else(|| {
+            let stem = path
+                .file_stem()
+                .map_or_else(String::new, |s| s.to_string_lossy().into_owned());
+            let extension = path
+                .extension()
+                .map_or_else(|| "txt".to_owned(), |e| e.to_string_lossy().into_owned());
+            SemanticName::new(&stem, doc.created_at().date(), &extension)
+        });
+        let revision = current
+            .revision()
+            .map_or(bp_naming::FIRST_REVISION, |n| n.saturating_add(1));
+        let next = current.with_revision(Some(revision)).with_collision(None);
+        bp_files::resolve_in_dir(dir, &next)
     }
 
     /// Forget an encrypted document's passphrase.
@@ -1772,8 +2767,27 @@ impl AppState {
 
     pub(crate) fn close(&mut self, id: DocumentId) {
         self.error = None;
+        // Its checkpoints go with it. A clean document has none worth
+        // keeping, and a dirty one reaches here only after the user chose
+        // Don't Save -- leaving its journal behind offered that same work
+        // for "recovery" at the next launch, and kept a plaintext copy of it
+        // on disk in the meantime. Sealed checkpoints are keyed by path, as
+        // in `save_document`.
+        //
+        // Not for a viewer tab, which never had a journal: discarding by its
+        // path would delete sealed work another session left for the same
+        // file.
+        if !self.is_viewer(id) {
+            let _ = self.journal.discard(id.get());
+            self.checkpointed.remove(&id);
+            if let Some(path) = self.workspace.get(id).and_then(Document::path) {
+                let _ = self.journal.discard_sealed_for(path);
+            }
+        }
         if self.workspace.close(id).is_some() {
             self.editors.remove(&id);
+            // Dropping it stops its indexing and any search it had running.
+            self.viewers.remove(&id);
             // Holding a passphrase for the session is a deliberate trade;
             // holding it past the document's life is just a leak.
             self.forget_passphrase(id);
@@ -1794,6 +2808,9 @@ impl AppState {
         let Some(id) = self.workspace.active_id() else {
             return;
         };
+        if self.is_viewer(id) {
+            return;
+        }
         let changed = self
             .editors
             .get_mut(&id)
@@ -1810,10 +2827,24 @@ impl AppState {
     /// caret is reachable only through a property marked internal and
     /// undocumented, so the honest answer there is the thing we do know.
     pub(crate) fn cursor_label(&self) -> String {
-        let lines = self.gutter_lines;
-        if !self.editor_view {
-            return format!("{lines} lines");
+        let position = self.position_label();
+        if self.overwrite {
+            // Shown only when on, as every editor with the mode does: the
+            // exception is what needs pointing out, and `INS` on every
+            // screen would be noise about the default.
+            format!("{position} · OVR")
+        } else {
+            position
         }
+    }
+
+    fn position_label(&self) -> String {
+        if let Some(viewer) = self.active_viewer() {
+            return viewer.position_label();
+        }
+        let lines = self.gutter_lines;
+        // Both views: under `TextInput` the editor's caret follows the
+        // widget's (`follow_widget_caret`), so it is as good an answer there.
         self.active_editor().map_or_else(
             || format!("{lines} lines"),
             |editor| {
@@ -1865,20 +2896,50 @@ impl AppState {
             bp_editor::wrap::Wrap::OFF
         };
         let indent = self.indent;
+        let overwrite = self.overwrite;
         if let Some(editor) = self.active_editor_mut() {
             editor.set_indent(indent);
             editor.set_wrap(wrap);
+            editor.set_overwrite(overwrite);
         }
+    }
+
+    /// The Insert key.
+    pub(crate) fn toggle_overwrite(&mut self) {
+        self.overwrite = !self.overwrite;
+        self.sync_wrap();
     }
 
     /// Note that the active document was edited in place, through the caret.
     pub(crate) fn mark_edited(&mut self) {
         if let Some(id) = self.workspace.active_id()
+            && !self.is_viewer(id)
             && let Some(doc) = self.workspace.get_mut(id)
         {
             doc.mark_modified();
         }
     }
+}
+
+/// The first few bytes of a file: enough to tell an encrypted one by its
+/// magic number without reading a 2 GB log whole to find out it is not one.
+pub(crate) fn read_head(path: &Path) -> std::io::Result<Vec<u8>> {
+    read_prefix(path, 16)
+}
+
+/// Enough of a `.bpadx` file for its whole header, whose longest form is
+/// under 300 bytes: the unlock-cost question (decision 15) is answered from
+/// the header alone, without reading a file that may be large.
+const BPADX_HEADER_READ: u64 = 512;
+
+/// At most the first `len` bytes of `path`.
+fn read_prefix(path: &Path, len: u64) -> std::io::Result<Vec<u8>> {
+    use std::io::Read as _;
+    let mut head = Vec::new();
+    std::fs::File::open(path)?
+        .take(len)
+        .read_to_end(&mut head)?;
+    Ok(head)
 }
 
 /// Status-bar save state, per specs.md section 3.
@@ -1911,6 +2972,68 @@ pub(crate) fn save_state_label(doc: &Document) -> String {
 /// be a large one.
 pub(crate) fn now() -> OffsetDateTime {
     OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc())
+}
+
+/// A file's name for the status bar, or its whole path if it has none.
+fn file_label(path: &Path) -> String {
+    path.file_name().map_or_else(
+        || path.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    )
+}
+
+/// The question decision 15 asks before an unlock above four times the
+/// default cost. One line, with the numbers the user is being asked to
+/// accept: memory, passes and a pessimistic time.
+pub(crate) fn unlock_cost_question(
+    memory_kib: u32,
+    iterations: u32,
+    estimate: std::time::Duration,
+) -> String {
+    let memory = if memory_kib.is_multiple_of(1024) {
+        format!("{} MiB", memory_kib / 1024)
+    } else {
+        format!("{:.1} MiB", f64::from(memory_kib) / 1024.0)
+    };
+    let passes = if iterations == 1 { "pass" } else { "passes" };
+    let seconds = estimate.as_secs_f64();
+    // Tenths only while they mean something: "about 0.4 s" is useful, "about
+    // 12.3 s" is false precision about an estimate.
+    let time = if seconds < 10.0 {
+        format!("{seconds:.1} s")
+    } else {
+        format!("{seconds:.0} s")
+    };
+    format!(
+        "This file asks for an unusually expensive unlock ({memory}, {iterations} {passes}, \
+         about {time}). Open it anyway?"
+    )
+}
+
+/// When the document at `path` was created, for naming (release plan M1-15).
+///
+/// The date an opened file was *opened* is not its creation date, and a
+/// semantic rename used to stamp every file with the day somebody happened
+/// to open it. `bp_naming::creation_date_for` weighs the evidence: a date
+/// already in a semantic name, then the file's birth time, then its last
+/// write. Only the date is ever read from `created_at`, so the time of day
+/// stays now's; with no evidence at all, the date does too.
+pub(crate) fn created_at(path: &Path) -> OffsetDateTime {
+    let now = now();
+    let local = |at: std::time::SystemTime| OffsetDateTime::from(at).to_offset(now.offset()).date();
+    let meta = std::fs::metadata(path).ok();
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    // `created()` is an error on filesystems that keep no birth time, and
+    // that is the evidence missing rather than a failure.
+    bp_naming::creation_date_for(
+        name,
+        meta.as_ref().and_then(|m| m.created().ok()).map(local),
+        meta.as_ref().and_then(|m| m.modified().ok()).map(local),
+    )
+    .map_or(now, |date| now.replace_date(date))
 }
 
 /// `8:05 PM`, as specs.md section 3 shows it.
@@ -2181,26 +3304,15 @@ impl RedactionPlan {
     }
 }
 
-/// Byte offset and text of every line, split exactly as `str::lines` splits.
+/// Byte offset and text of every line, split as `bp_secrets` splits them.
 ///
-/// `bp_secrets` numbers its findings by enumerating `text.lines()`, so this
-/// has to agree with it line for line -- including that `lines` drops the
-/// carriage return of a CRLF ending, which shifts every byte offset after it
-/// if it is not put back.
+/// `bp_secrets` numbers its findings by enumerating its lines on the
+/// editor's rule (decision D6: LF, CRLF or a bare CR), so this has to agree
+/// with it line for line -- including that each break is dropped from the
+/// line, which shifts every byte offset after it if it is not put back.
+/// `bp_buffer::breaks::spans` is that split, with the offsets kept.
 fn line_spans(text: &str) -> Vec<(usize, &str)> {
-    let mut spans = Vec::new();
-    let mut offset = 0usize;
-    for line in text.lines() {
-        spans.push((offset, line));
-        offset += line.len();
-        if text[offset..].starts_with('\r') {
-            offset += 1;
-        }
-        if text[offset..].starts_with('\n') {
-            offset += 1;
-        }
-    }
-    spans
+    bp_buffer::breaks::spans(text).collect()
 }
 
 /// The byte offset of character `index`, or the end of the line past it.
@@ -2214,13 +3326,9 @@ fn byte_of_char(line: &str, index: usize) -> usize {
         .map_or(line.len(), |(offset, _)| offset)
 }
 
-/// The 1-based line a byte offset falls on.
+/// The 1-based line a byte offset falls on, as the gutter numbers it.
 fn line_at(text: &str, offset: usize) -> usize {
-    text[..offset.min(text.len())]
-        .bytes()
-        .filter(|byte| *byte == b'\n')
-        .count()
-        + 1
+    bp_buffer::breaks::line_of(text.as_bytes(), offset)
 }
 
 /// Which shape a document arrived in, from its extension.
@@ -2554,15 +3662,175 @@ pub(crate) fn documents_dir() -> Option<PathBuf> {
     }
 }
 
-/// Where recovery checkpoints live: beside the config file, in `recovery/`.
+/// Where this process keeps its recent list, recovery journal and security
+/// history.
 ///
-/// The `.gitignore` already excludes `/recovery`, and this is deliberately a
-/// path the user can be told — it holds copies of their unsaved work.
-pub(crate) fn recovery_dir() -> PathBuf {
-    bp_config::config_path().map_or_else(
-        || PathBuf::from("recovery"),
-        |p| p.with_file_name("recovery"),
-    )
+/// `bp-config` owns where each belongs and moving it there from where older
+/// builds put it; this only chooses, once, between the machine's answer and
+/// a test's.
+#[cfg(not(test))]
+fn locations() -> bp_config::Locations {
+    bp_config::Locations::for_host()
+}
+
+/// The same, redirected and made unique under test.
+///
+/// The one `cfg(test)` in this crate, and every part of it was learned the
+/// hard way. `AppState::new()` is how nearly every test starts, and each of
+/// these three is written by ordinary operations -- opening a file pushes the
+/// recent list, a dirty document checkpoints, and changing a security profile
+/// appends to the history -- so **every** test writes to whatever this
+/// returns:
+///
+/// * pointed at the real directories, `cargo test` wrote a live security
+///   history into the user's `%APPDATA%`, created an empty recovery
+///   directory there on every run, and replaced the developer's own recent
+///   list with the paths of test fixtures;
+/// * pointed at one shared temp location, parallel tests each read the
+///   history, each computed the same next sequence number, and the log then
+///   refused to open as out of order -- so every one of them failed, on a
+///   file none of them was really testing.
+///
+/// A counter rather than a random name, so a failing run names a directory
+/// that can be looked at, and the process id so two runs at once cannot
+/// collide. Nothing is created here; the directory appears only if a test
+/// writes into it. [`bp_config::Locations::for_host`] is never called under
+/// test, because it may rename things.
+#[cfg(test)]
+fn locations() -> bp_config::Locations {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let root = std::env::temp_dir().join(format!("bpad-test-{}-{n}", std::process::id()));
+    bp_config::Locations {
+        recent: Some(root.join("recent.toml")),
+        recovery: Some(root.join(bp_config::locations::RECOVERY_DIR)),
+        security_history: Some(root.join(bp_config::locations::SECURITY_HISTORY_FILE)),
+        profiles: Some(root.join(bp_config::locations::PROFILES_FILE)),
+        signing_key: Some(root.join(bp_config::locations::SIGNING_KEY_FILE)),
+        left_behind: Vec::new(),
+    }
+}
+
+/// One document's checkpoint, snapshotted on the UI thread and ready to be
+/// sealed and written anywhere (`write_checkpoints`).
+pub(crate) struct CheckpointJob {
+    id: DocumentId,
+    edits: u64,
+    ticket: bp_history::Ticket,
+    checkpoint: bp_history::Checkpoint,
+    recovery: bp_security::Recovery,
+    passphrase: Option<zeroize::Zeroizing<String>>,
+}
+
+/// What became of one [`CheckpointJob`].
+pub(crate) struct CheckpointWritten {
+    id: DocumentId,
+    edits: u64,
+    result: std::io::Result<bp_history::Written>,
+}
+
+/// Seal and write `jobs` -- the slow half of a checkpoint pass, safe on any
+/// thread: it touches nothing but the journal, which is shared and locked,
+/// and each write is dropped if its ticket was cancelled meanwhile.
+pub(crate) fn write_checkpoints(
+    journal: &bp_history::Journal,
+    jobs: Vec<CheckpointJob>,
+) -> Vec<CheckpointWritten> {
+    jobs.into_iter()
+        .map(|job| {
+            let prepared = journal.prepare(
+                job.ticket,
+                &job.checkpoint,
+                job.recovery,
+                job.passphrase.as_ref().map(|p| p.as_str()),
+            );
+            CheckpointWritten {
+                id: job.id,
+                edits: job.edits,
+                result: journal.commit(prepared),
+            }
+        })
+        .collect()
+}
+
+/// Where settings chosen in the window are saved, and what the file last
+/// said about them.
+#[derive(Debug, Clone)]
+pub(crate) struct SavedSettings {
+    pub(crate) path: PathBuf,
+    /// The configuration as last read or written. Changes are measured from
+    /// this, so a command-line override that was never changed in the
+    /// window is never saved.
+    pub(crate) baseline: bp_config::Config,
+}
+
+/// The security profile `bp-config` names. By name, because `bp-config`
+/// does not depend on `bp-security`; a name one knows and the other does
+/// not is Standard, the profile that changes nothing.
+pub(crate) fn profile_named(profile: bp_config::SecurityProfile) -> bp_security::Profile {
+    bp_security::Profile::all()
+        .iter()
+        .copied()
+        .find(|p| p.name().eq_ignore_ascii_case(profile.name()))
+        .unwrap_or_default()
+}
+
+/// What an answer to the startup "Unsaved work recovered" prompt means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RecoveryChoice {
+    /// Open the recovered documents now.
+    Restore,
+    /// Delete them. Only ever an explicit "No".
+    Discard,
+    /// Leave them in the journal and ask again at the next launch.
+    Keep,
+}
+
+/// The recovery prompt's buttons, left to right. Their order is the mapping
+/// [`recovery_choice`] reads back.
+pub(crate) const RECOVERY_BUTTONS: [&str; 3] = ["Restore", "Discard", "Not Now"];
+
+/// The one place the prompt's answer becomes an action.
+///
+/// **Only an explicit Discard discards.** This was a data-loss bug on Linux
+/// while the prompt was an `rfd` dialog: rfd shows message dialogs by running
+/// `zenity`, and when zenity is absent -- most KDE installations -- the
+/// dialog could not appear and rfd reported `Cancel`. The prompt used to
+/// treat every answer but Yes as a decision to discard, so recovered work was
+/// deleted without the user ever seeing the question. The prompt is drawn in
+/// the window now (release plan M1-01), but the rule stays: Escape, and any
+/// index that is not a button, keep the work.
+pub(crate) fn recovery_choice(chosen: usize) -> RecoveryChoice {
+    match chosen {
+        0 => RecoveryChoice::Restore,
+        1 => RecoveryChoice::Discard,
+        _ => RecoveryChoice::Keep,
+    }
+}
+
+/// A status-bar line for anything `bp-config` could not move, or `None`.
+///
+/// Worth saying because both cases leave something where the product will
+/// not look for it by itself -- and the recovery journal is the thing most
+/// worth finding. The path is the useful half; the reason is shown for the
+/// case where the user can act on it.
+pub(crate) fn describe_left_behind(left: &[bp_config::Adoption]) -> Option<String> {
+    let lines: Vec<String> = left
+        .iter()
+        .filter_map(|adoption| match adoption {
+            bp_config::Adoption::KeptLegacy { legacy, error } => Some(format!(
+                "⚠ could not move {} to its new place ({error}) — still using it there, nothing lost",
+                legacy.display()
+            )),
+            bp_config::Adoption::BothOccupied { legacy } => Some(format!(
+                "⚠ {} is from an older version and is no longer read — it was kept, not deleted",
+                legacy.display()
+            )),
+            bp_config::Adoption::NothingToMove | bp_config::Adoption::Moved => None,
+        })
+        .collect();
+    (!lines.is_empty()).then(|| lines.join("; "))
 }
 
 /// A document's path, if it has one.
@@ -2615,6 +3883,7 @@ pub(crate) fn find_query(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::viewer::OpenAs;
     use time::macros::datetime;
 
     #[test]
@@ -2880,6 +4149,346 @@ mod tests {
     }
 
     #[test]
+    fn a_semantic_name_keeps_the_date_already_in_it_when_opened_later() {
+        // Opening a file is not creating it. The rename used to stamp the
+        // day it was opened over the date its name already carried.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Budget_02MAR2026.txt");
+        std::fs::write(&path, "# Budget\n").unwrap();
+        let mut state = AppState::new();
+        state.open(path);
+        let id = state.workspace.active_id().unwrap();
+
+        let doc = state.workspace.get(id).unwrap();
+        assert_eq!(doc.created_at().date(), time::macros::date!(2026 - 03 - 02));
+        let name = state.semantic_filename(id).expect("a name");
+        assert!(name.contains("02MAR2026"), "got {name}");
+    }
+
+    #[test]
+    fn a_plain_name_takes_its_date_from_the_file_not_from_today() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.txt");
+        std::fs::write(&path, "notes\n").unwrap();
+        // Noon, so no time zone can move it to another day.
+        let written = time::macros::datetime!(2020 - 01 - 15 12:00 UTC);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(written.into())
+            .unwrap();
+        let mut state = AppState::new();
+        state.open(path);
+        let id = state.workspace.active_id().unwrap();
+
+        assert_eq!(
+            state.workspace.get(id).unwrap().created_at().date(),
+            time::macros::date!(2020 - 01 - 15),
+            "a file last written in 2020 cannot have been created today"
+        );
+    }
+
+    #[test]
+    fn every_profile_the_config_can_name_is_a_profile_the_shell_has() {
+        // By name across two crates that do not depend on each other. A
+        // name that fell through would quietly give Standard to somebody who
+        // asked for Maximum.
+        for &profile in bp_config::SecurityProfile::ALL {
+            assert_eq!(
+                profile_named(profile).name().to_ascii_lowercase(),
+                profile.name().to_ascii_lowercase(),
+                "{profile:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn configure_seeds_the_view_and_the_default_profile_reaches_every_new_document() {
+        let config = bp_config::Config {
+            word_wrap: true,
+            line_numbers: false,
+            tab_width: 2,
+            indent_spaces: true,
+            clipboard_record_other_programs: true,
+            default_profile: bp_config::SecurityProfile::Confidential,
+            editable_limit_mib: 1,
+            ..bp_config::Config::default()
+        };
+        let mut state = AppState::new();
+        state.configure(&config, None);
+
+        assert!(state.wrap_text && !state.show_gutter);
+        assert_eq!((state.indent.spaces, state.indent.width), (true, 2));
+        assert!(state.record_other_programs);
+        assert_eq!(state.editable_limit, 1024 * 1024);
+
+        let confidential = bp_security::Security::Named(bp_security::Profile::Confidential);
+        let untitled = state.workspace.active_id().unwrap();
+        assert_eq!(
+            state.workspace.get(untitled).unwrap().security(),
+            confidential
+        );
+        state.new_document();
+        let fresh = state.workspace.active_id().unwrap();
+        assert_eq!(state.workspace.get(fresh).unwrap().security(), confidential);
+    }
+
+    #[test]
+    fn a_file_past_the_configured_limit_opens_in_the_viewer_not_the_editor() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.log");
+        std::fs::write(&path, vec![b'x'; 2 * 1024 * 1024]).unwrap();
+        let config = bp_config::Config {
+            editable_limit_mib: 1,
+            ..bp_config::Config::default()
+        };
+        let mut state = AppState::new();
+        state.configure(&config, None);
+        let before = state.workspace.len();
+
+        state.open(path);
+
+        assert_eq!(state.workspace.len(), before + 1, "it opens, in a tab");
+        assert!(state.viewer_active(), "and the tab is the viewer");
+        assert!(
+            state.active_editor().is_none(),
+            "nothing was loaded to edit"
+        );
+    }
+
+    /// A session, and the state directory a restart of it would use.
+    fn two_sessions() -> (AppState, bp_config::Locations) {
+        let places = locations();
+        (AppState::at(&places), places)
+    }
+
+    #[test]
+    fn reopening_a_confidential_document_is_confidential() {
+        // Release plan M1-19. The profile used to last only as long as the
+        // tab: the next session opened the same file as Standard, with a
+        // plaintext journal and clipboard history back on and nothing on
+        // screen to say so.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("salaries.txt");
+        std::fs::write(&path, "private\n").unwrap();
+        let confidential = bp_security::Security::Named(bp_security::Profile::Confidential);
+        let (mut first, places) = two_sessions();
+        first.open(path.clone());
+        first.set_security(confidential);
+        drop(first);
+
+        let mut second = AppState::at(&places);
+        second.open(path);
+        assert_eq!(second.security(), confidential);
+    }
+
+    #[test]
+    fn save_as_takes_the_profile_to_the_new_file_and_leaves_the_old_one_its_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("draft.txt");
+        let new = dir.path().join("final.txt");
+        std::fs::write(&old, "text\n").unwrap();
+        let private = bp_security::Security::Named(bp_security::Profile::Private);
+        let (mut first, places) = two_sessions();
+        first.open(old.clone());
+        first.set_security(private);
+        let id = first.workspace.active_id().unwrap();
+        assert_eq!(
+            first.save_document(id, Some(new.clone())),
+            SaveResult::Saved
+        );
+        drop(first);
+
+        let mut second = AppState::at(&places);
+        second.open(new);
+        assert_eq!(second.security(), private, "the new file lost it");
+        second.open(old);
+        assert_eq!(second.security(), private, "the old file lost its own");
+    }
+
+    #[test]
+    fn an_untitled_documents_profile_is_kept_from_its_first_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.txt");
+        let maximum = bp_security::Security::Named(bp_security::Profile::Maximum);
+        let (mut first, places) = two_sessions();
+        first.set_security(maximum);
+        first.edit("secret\n".to_owned());
+        let id = first.workspace.active_id().unwrap();
+        assert_eq!(
+            first.save_document(id, Some(path.clone())),
+            SaveResult::Saved
+        );
+        drop(first);
+
+        let mut second = AppState::at(&places);
+        second.open(path);
+        assert_eq!(second.security(), maximum);
+    }
+
+    #[test]
+    fn privacy_mode_is_not_mistaken_for_the_documents_own_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plain.txt");
+        std::fs::write(&path, "text\n").unwrap();
+        let (mut first, places) = two_sessions();
+        first.open(path.clone());
+        first.set_privacy(bp_security::Privacy::On);
+        let id = first.workspace.active_id().unwrap();
+        first.edit("changed\n".to_owned());
+        assert_eq!(
+            first.save_document(id, Some(path.clone())),
+            SaveResult::Saved
+        );
+        drop(first);
+
+        let mut second = AppState::at(&places);
+        second.open(path);
+        assert_eq!(second.security(), bp_security::Security::default());
+    }
+
+    #[test]
+    fn a_default_profile_is_given_but_never_remembered_as_the_files_own() {
+        // Only a choice the user makes is kept. Were the default written
+        // down, changing the default later would not reach files opened
+        // under the old one.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plain.txt");
+        std::fs::write(&path, "text\n").unwrap();
+        let config = bp_config::Config {
+            default_profile: bp_config::SecurityProfile::Private,
+            ..bp_config::Config::default()
+        };
+        let (mut first, places) = two_sessions();
+        first.configure(&config, None);
+        first.open(path.clone());
+        assert_eq!(
+            first.security(),
+            bp_security::Security::Named(bp_security::Profile::Private)
+        );
+        drop(first);
+
+        let mut second = AppState::at(&places);
+        second.open(path);
+        assert_eq!(second.security(), bp_security::Security::default());
+    }
+
+    #[test]
+    fn opening_several_files_keeps_every_notice_and_asks_one_passphrase() {
+        let dir = tempfile::tempdir().unwrap();
+        let plain = dir.path().join("plain.txt");
+        std::fs::write(&plain, "text\n").unwrap();
+        let missing = dir.path().join("missing.txt");
+        let sealed = |name: &str| {
+            let path = dir.path().join(name);
+            let bytes =
+                bp_crypto::seal(b"secret", "pass", bp_crypto::SealOptions::default()).unwrap();
+            std::fs::write(&path, bytes).unwrap();
+            path
+        };
+        let (one, two) = (sealed("one.bpadx"), sealed("two.bpadx"));
+        let mut state = AppState::new();
+
+        let asking = state.open_many(vec![plain.clone(), missing, one, two]);
+
+        assert_eq!(
+            asking,
+            Opening::Passphrase,
+            "the first encrypted file should ask"
+        );
+        assert!(
+            state
+                .workspace
+                .iter()
+                .any(|d| d.path() == Some(plain.as_path()))
+        );
+        let notice = state.error.clone().unwrap_or_default();
+        assert!(
+            notice.contains("missing.txt"),
+            "the failed open was lost: {notice}"
+        );
+        assert!(
+            notice.contains("two.bpadx"),
+            "the second locked file vanished: {notice}"
+        );
+    }
+
+    #[test]
+    fn the_suggested_name_steps_round_a_file_that_already_has_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = AppState::new();
+        let path = dir.path().join("here.txt");
+        std::fs::write(&path, "# Budget\n").unwrap();
+        state.open(path);
+        let id = state.workspace.active_id().unwrap();
+        let first = state.suggested_filename(id);
+        std::fs::write(dir.path().join(&first), "somebody else's").unwrap();
+
+        let second = state.suggested_filename(id);
+
+        assert_ne!(first, second, "a taken name was offered again");
+        let parsed = SemanticName::parse(&second).expect("still in the grammar");
+        assert_eq!(parsed.collision(), Some(bp_naming::FIRST_COLLISION));
+    }
+
+    #[test]
+    fn a_documents_own_file_is_not_a_collision_for_its_suggestion() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Budget_02MAR2026.txt");
+        std::fs::write(&path, "# Budget\n").unwrap();
+        let mut state = AppState::new();
+        state.open(path);
+        let id = state.workspace.active_id().unwrap();
+
+        assert_eq!(state.suggested_filename(id), "Budget_02MAR2026.txt");
+    }
+
+    #[test]
+    fn a_new_revision_bumps_the_suffix_and_skips_one_that_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Budget_v2_02MAR2026.txt");
+        std::fs::write(&path, "text\n").unwrap();
+        std::fs::write(dir.path().join("Budget_v3_02MAR2026.txt"), "taken").unwrap();
+        let mut state = AppState::new();
+        state.open(path);
+        let id = state.workspace.active_id().unwrap();
+
+        let next = state.next_revision_path(id).expect("a path");
+
+        assert_eq!(
+            next.file_name().unwrap(),
+            "Budget_v3_02MAR2026_02.txt",
+            "v3 is the next revision; the file already called that is not overwritten"
+        );
+    }
+
+    #[test]
+    fn a_plain_name_is_brought_into_the_grammar_for_its_first_revision() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.md");
+        std::fs::write(&path, "text\n").unwrap();
+        let mut state = AppState::new();
+        state.open(path);
+        let id = state.workspace.active_id().unwrap();
+
+        let next = state.next_revision_path(id).expect("a path");
+        let name = next.file_name().unwrap().to_string_lossy().into_owned();
+        let parsed = SemanticName::parse(&name).expect("in the grammar");
+
+        assert_eq!(parsed.title(), "notes");
+        assert_eq!(parsed.revision(), Some(2));
+        assert_eq!(parsed.extension(), "md");
+    }
+
+    #[test]
+    fn an_untitled_document_has_no_revision_to_save() {
+        let state = AppState::new();
+        let id = state.workspace.active_id().unwrap();
+        assert_eq!(state.next_revision_path(id), None);
+    }
+
+    #[test]
     fn suggested_filename_follows_the_grammar() {
         let state = AppState::new();
         let id = state.workspace.active_id().unwrap();
@@ -2912,6 +4521,7 @@ mod tests {
             action::DATA_CSV_TO_JSON,
             action::DATA_CSV_TO_JSONL,
             action::DATA_COLUMN_TYPES,
+            action::DATA_SORT_KEYS,
             action::NOTE_TITLE,
             action::NOTE_OUTLINE,
             action::SCAN_SECRETS,
@@ -2981,19 +4591,20 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_and_move_line_do_nothing_outside_the_custom_editor_view() {
-        // The row is disabled in that view, but a shortcut key reaches
-        // `run_line_edit` directly and must not act on a caret this crate
-        // cannot trust `TextInput` to have reported correctly.
+    fn duplicate_line_acts_on_the_default_views_caret_once_it_is_copied_in() {
+        // Release plan M1-04. The widget reports its caret in bytes; the
+        // line under it is the one duplicated, accents before it or not.
         let mut state = AppState::new();
-        state.edit("one\ntwo\nthree".to_owned());
+        state.edit("café\nsecond\nthird".to_owned());
         let id = state.workspace.active_id().unwrap();
         state.workspace.get_mut(id).unwrap().record_disk_save(now());
 
+        // Byte 8 is in "second" ("café\n" is six bytes).
+        state.follow_widget_caret(8, 8);
         state.run_line_edit(action::DUPLICATE_LINE);
 
-        assert_eq!(state.active_text(), "one\ntwo\nthree");
-        assert!(!state.is_dirty(id));
+        assert_eq!(state.active_text(), "café\nsecond\nsecond\nthird");
+        assert!(state.is_dirty(id));
     }
 
     // --- CSV / TSV data operations ------------------------------------------
@@ -3090,6 +4701,104 @@ mod tests {
         (state, id, original)
     }
 
+    /// A Windows-1252 file on disk, opened: "café" with a Windows line end.
+    fn opened_1252(dir: &std::path::Path) -> (AppState, DocumentId, PathBuf) {
+        let path = dir.join("ansi.txt");
+        std::fs::write(&path, b"caf\xe9\r\n").unwrap();
+        let mut state = AppState::new();
+        state.open(path.clone());
+        let id = state.workspace.active_id().unwrap();
+        (state, id, path)
+    }
+
+    #[test]
+    fn a_windows_1252_file_opens_as_one_and_saves_back_byte_for_byte() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut state, id, path) = opened_1252(dir.path());
+        assert_eq!(
+            state.workspace.get(id).unwrap().encoding(),
+            Encoding::Windows1252
+        );
+        assert_eq!(state.active_text(), "café\r\n");
+
+        state.edit("café au lait\r\n".to_owned());
+        assert_eq!(state.save_document(id, None), SaveResult::Saved);
+        assert_eq!(std::fs::read(&path).unwrap(), b"caf\xe9 au lait\r\n");
+    }
+
+    #[test]
+    fn a_character_windows_1252_cannot_hold_stops_the_save_and_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut state, id, path) = opened_1252(dir.path());
+        state.edit("café, Gdańsk\r\n".to_owned());
+
+        let result = state.save_document(id, None);
+
+        let SaveResult::Unrepresentable(what) = result else {
+            panic!("saved anyway: {result:?}");
+        };
+        assert_eq!(what.character, 'ń');
+        assert_eq!(&state.active_text()[what.byte_offset..], "ńsk\r\n");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"caf\xe9\r\n",
+            "the file changed"
+        );
+        assert!(state.is_dirty(id), "unsaved work was marked saved");
+    }
+
+    #[test]
+    fn choosing_windows_1252_for_text_it_cannot_hold_is_refused_with_the_line() {
+        let mut state = AppState::new();
+        state.edit("fine\nstill fine\nGdańsk\n".to_owned());
+        let id = state.workspace.active_id().unwrap();
+
+        state.set_encoding(Encoding::Windows1252);
+
+        assert_eq!(state.workspace.get(id).unwrap().encoding(), Encoding::Utf8);
+        let notice = state.error.clone().expect("a reason");
+        assert!(
+            notice.contains('ń') && notice.contains("line 3"),
+            "{notice}"
+        );
+    }
+
+    #[test]
+    fn an_encoding_refusal_names_the_line_the_gutter_shows_in_a_bare_cr_file() {
+        // Decision D6: the bare CRs are breaks and the form feed is not, so
+        // the character is on line 3, where Go to Line would take the user.
+        let mut state = AppState::new();
+        state.edit("one\rtwo\x0Cstill two\rGdańsk\r".to_owned());
+
+        state.set_encoding(Encoding::Windows1252);
+
+        let notice = state.error.clone().unwrap_or_default();
+        assert!(notice.contains("line 3"), "{notice}");
+    }
+
+    #[test]
+    fn redaction_spans_split_as_the_secret_scanner_numbers_lines() {
+        let text = "a\r\nb\rc\n\x0Cd";
+        let spans = line_spans(text);
+        assert_eq!(spans, [(0, "a"), (3, "b"), (5, "c"), (7, "\x0Cd")]);
+        assert_eq!(line_at(text, 5), 3);
+        assert_eq!(line_at(text, 2), 1, "the LF of a CRLF is on the CR's line");
+    }
+
+    #[test]
+    fn choosing_windows_1252_for_text_it_can_hold_changes_the_encoding() {
+        let mut state = AppState::new();
+        state.edit("café — naïve\n".to_owned());
+        let id = state.workspace.active_id().unwrap();
+
+        state.set_encoding(Encoding::Windows1252);
+
+        assert_eq!(
+            state.workspace.get(id).unwrap().encoding(),
+            Encoding::Windows1252
+        );
+    }
+
     #[test]
     fn a_copy_does_not_become_the_documents_path() {
         // The difference that turns Save Copy into Save As. If the path
@@ -3121,6 +4830,238 @@ mod tests {
             state.workspace.get(id).unwrap().is_dirty(),
             "the original still has edits that are not on disk"
         );
+    }
+
+    #[test]
+    fn only_an_explicit_discard_discards_recovered_work() {
+        assert_eq!(RECOVERY_BUTTONS[0], "Restore");
+        assert_eq!(recovery_choice(0), RecoveryChoice::Restore);
+        assert_eq!(RECOVERY_BUTTONS[1], "Discard");
+        assert_eq!(recovery_choice(1), RecoveryChoice::Discard);
+        assert_eq!(RECOVERY_BUTTONS[2], "Not Now");
+        assert_eq!(recovery_choice(2), RecoveryChoice::Keep);
+        // Nothing the sheet can send, but not a decision if it ever did.
+        assert_eq!(recovery_choice(3), RecoveryChoice::Keep);
+        assert_eq!(recovery_choice(usize::MAX), RecoveryChoice::Keep);
+    }
+
+    #[test]
+    fn a_confidential_document_never_enters_the_recent_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut state, id, path) = dirty_saved_state(dir.path());
+        state.recent = Recent::new();
+        state.set_security(bp_security::Security::Named(
+            bp_security::Profile::Confidential,
+        ));
+
+        state.save_document(id, None);
+
+        assert!(
+            !state.recent.paths().contains(&path),
+            "Confidential forbids recording anything about the document"
+        );
+    }
+
+    #[test]
+    fn privacy_mode_keeps_an_opened_file_out_of_the_recent_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("diary.txt");
+        std::fs::write(&path, b"dear diary").unwrap();
+        let mut state = AppState::new();
+        state.set_privacy(bp_security::Privacy::On);
+
+        state.open(path.clone());
+
+        assert!(!state.recent.paths().contains(&path));
+    }
+
+    #[test]
+    fn a_standard_document_is_still_remembered() {
+        // The control: the check must not switch the feature off.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.txt");
+        std::fs::write(&path, b"hello").unwrap();
+        let mut state = AppState::new();
+
+        state.open(path.clone());
+
+        assert!(state.recent.paths().contains(&path));
+    }
+
+    #[test]
+    fn a_file_too_large_to_edit_opens_read_only_and_the_banner_says_why() {
+        // Sparse, so the test costs a `stat` and not 32 MiB of disk. The
+        // point is that the shell never hands such a file to the editable
+        // widget, which is what used to hang the whole application -- and
+        // since owner decision U3, that it opens anyway, read-only.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("server.log");
+        std::fs::File::create(&path)
+            .unwrap()
+            .set_len(bp_files::EDITABLE_LIMIT_BYTES + 1)
+            .unwrap();
+        let mut state = AppState::new();
+        let tabs = state.workspace.len();
+
+        state.open(path);
+
+        assert_eq!(state.workspace.len(), tabs + 1);
+        let banner = state
+            .active_viewer()
+            .expect("a viewer tab")
+            .reason()
+            .banner();
+        assert_eq!(
+            banner,
+            "Read-only: this file is too large to edit (32.1 MiB; the limit is 32 MiB)"
+        );
+    }
+
+    #[test]
+    fn a_large_file_that_loads_says_tools_may_be_slow() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.txt");
+        std::fs::File::create(&path)
+            .unwrap()
+            .set_len(bp_buffer::LARGE_FILE_BYTES + 1)
+            .unwrap();
+        let mut state = AppState::new();
+
+        state.open(path);
+
+        let notice = state.error.expect("a large file is flagged");
+        assert!(notice.starts_with("Large file"), "{notice}");
+    }
+
+    #[test]
+    fn a_test_state_keeps_every_file_it_writes_in_the_temp_directory() {
+        // The protection `locations()` exists to give, pinned for all three
+        // at once. Before it, `AppState::new()` here read and wrote the
+        // developer's own recent list and made a recovery directory in their
+        // real configuration directory on every run.
+        let state = AppState::new();
+        let temp = std::env::temp_dir();
+        for (what, path) in [
+            (
+                "recent list",
+                state.recent_file.clone().expect("a recent file"),
+            ),
+            ("recovery journal", state.journal.location().to_path_buf()),
+            ("security history", state.audit_path.clone()),
+        ] {
+            assert!(
+                path.starts_with(&temp),
+                "the {what} is at {} under test",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn two_test_states_never_share_a_recent_list() {
+        // Parallel tests sharing one file is the failure the security history
+        // hit; the recent list is written on every open and would hit it too.
+        assert_ne!(AppState::new().recent_file, AppState::new().recent_file);
+    }
+
+    #[test]
+    fn opening_a_file_records_it_in_the_list_this_state_was_given() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.txt");
+        std::fs::write(&path, b"hello").unwrap();
+        let mut state = AppState::new();
+        let file = state.recent_file.clone().expect("a recent file");
+
+        state.open(path.clone());
+
+        assert!(
+            bp_config::load_recent(&file).paths().contains(&path),
+            "the list was not written where the state was told to keep it"
+        );
+    }
+
+    #[test]
+    fn a_left_behind_notice_survives_opening_a_file_at_startup() {
+        // The launch a file association makes: one file named, which opens
+        // and then closes the blank tab -- and both used to clear the notice
+        // before anybody could see it.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.txt");
+        std::fs::write(&path, b"hello").unwrap();
+        let mut state = AppState::new();
+        state.left_behind = Some("⚠ an old journal".to_owned());
+
+        state.start_up(Some("config warning".to_owned()), &[path], OpenAs::Normal);
+
+        assert_eq!(state.workspace.len(), 1, "the blank tab was replaced");
+        assert_eq!(
+            state.error.as_deref(),
+            Some("config warning; ⚠ an old journal")
+        );
+    }
+
+    #[test]
+    fn a_file_that_fails_to_open_at_startup_is_reported_beside_the_others() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = AppState::new();
+        state.left_behind = Some("⚠ an old journal".to_owned());
+
+        state.start_up(None, &[dir.path().join("absent.txt")], OpenAs::Normal);
+
+        let error = state.error.expect("something to say");
+        assert!(error.starts_with("⚠ an old journal; "), "{error}");
+        assert!(error.len() > "⚠ an old journal; ".len(), "{error}");
+    }
+
+    #[test]
+    fn a_notice_is_added_beside_the_last_one_not_over_it() {
+        let mut state = AppState::new();
+        state.add_notice("first".to_owned());
+        state.add_notice("second".to_owned());
+        assert_eq!(state.error.as_deref(), Some("first; second"));
+    }
+
+    #[test]
+    fn a_quiet_startup_says_nothing() {
+        let mut state = AppState::new();
+        state.start_up(None, &[], OpenAs::Normal);
+        assert_eq!(state.error, None);
+    }
+
+    #[test]
+    fn a_move_that_worked_or_had_nothing_to_do_says_nothing() {
+        assert_eq!(describe_left_behind(&[]), None);
+        assert_eq!(
+            describe_left_behind(&[
+                bp_config::Adoption::Moved,
+                bp_config::Adoption::NothingToMove
+            ]),
+            None
+        );
+    }
+
+    #[test]
+    fn a_journal_that_could_not_be_moved_is_named_and_the_user_told_it_is_safe() {
+        let legacy = PathBuf::from("/old/bachelorpad/recovery");
+        let line = describe_left_behind(&[bp_config::Adoption::KeptLegacy {
+            legacy: legacy.clone(),
+            error: std::io::Error::other("cross-device link"),
+        }])
+        .expect("a failed move must be reported");
+        assert!(line.contains(&legacy.display().to_string()), "{line}");
+        assert!(line.contains("cross-device link"), "{line}");
+        assert!(line.contains("nothing lost"), "{line}");
+    }
+
+    #[test]
+    fn an_old_copy_left_beside_a_new_one_is_named() {
+        let legacy = PathBuf::from("/old/bachelorpad/recovery");
+        let line = describe_left_behind(&[bp_config::Adoption::BothOccupied {
+            legacy: legacy.clone(),
+        }])
+        .expect("an unread copy must be reported");
+        assert!(line.contains(&legacy.display().to_string()), "{line}");
+        assert!(line.contains("kept, not deleted"), "{line}");
     }
 
     #[test]
@@ -3259,16 +5200,15 @@ mod tests {
     }
 
     #[test]
-    fn go_to_line_without_the_custom_view_says_why_instead_of_doing_nothing() {
+    fn go_to_line_works_without_the_custom_view_and_returns_characters() {
         let mut state = AppState::new();
-        state.edit("one\ntwo".to_owned());
+        state.edit("éé\ntwo".to_owned());
 
-        assert!(state.go_to_line("2").is_none());
-        assert!(
-            state.goto_status.contains("--editor-view"),
-            "got {:?}",
-            state.goto_status
-        );
+        let at = state.go_to_line("2").expect("a caret");
+
+        assert_eq!(at, 3..3, "line 2 starts at character 3");
+        assert_eq!(state.char_to_byte(3), 5, "which TextInput calls byte 5");
+        assert!(state.goto_status.is_empty(), "{:?}", state.goto_status);
     }
 
     // --- tab context menu -------------------------------------------------
@@ -3477,6 +5417,132 @@ mod tests {
         );
     }
 
+    // --- clipboard rows name an entry, not a position (U5, M1-18) ---------
+
+    /// A state whose history holds `texts`, newest last, with a menu just
+    /// opened over it.
+    fn menu_open_over(texts: &[&str]) -> AppState {
+        let mut state = AppState::new();
+        for text in texts {
+            state.clips.push(text, bp_security::Clipboard::InMemory);
+        }
+        state.open_clip_menu();
+        state
+    }
+
+    /// The id of the Edit menu row that pastes `text`, as the menu was built.
+    fn row_for(state: &AppState, text: &str) -> i32 {
+        crate::menus::edit(&state.shown_clips())
+            .into_iter()
+            .find(|row| row.label.as_str() == text)
+            .unwrap_or_else(|| panic!("no row for {text:?}"))
+            .action
+    }
+
+    #[test]
+    fn a_clipboard_row_resolves_to_the_entry_it_showed_after_the_poll_adds_one() {
+        // Build the rows, let the poll record a copy, then click. Decoded
+        // against the live history, as the row ids once were, the row that
+        // showed "newest" named position 0 -- which the copy now holds.
+        let mut state = menu_open_over(&["older", "newest"]);
+        let id = row_for(&state, "newest");
+        state
+            .clips
+            .push("arrived later", bp_security::Clipboard::InMemory);
+
+        let slot = usize::try_from(id - action::CLIP_BASE).unwrap();
+        assert_eq!(state.clips.entries()[slot].text, "arrived later");
+        let named = state.clip_named(slot).expect("the entry is still there");
+        assert_eq!(named.text, "newest");
+        assert!(state.error.is_none());
+    }
+
+    #[test]
+    fn the_rows_do_not_change_under_an_open_menu_until_it_opens_again() {
+        let mut state = menu_open_over(&["older", "newest"]);
+        let before = crate::menus::edit(&state.shown_clips());
+        state
+            .clips
+            .push("arrived later", bp_security::Clipboard::InMemory);
+        assert_eq!(crate::menus::edit(&state.shown_clips()), before);
+
+        state.open_clip_menu();
+        assert_eq!(state.shown_clips()[0].1.text, "arrived later");
+    }
+
+    #[test]
+    fn a_row_whose_entry_has_gone_names_nothing_and_says_so() {
+        let mut state = menu_open_over(&["gone", "other"]);
+        let id = row_for(&state, "gone");
+        state.clips.clear();
+        state.clips.push("other", bp_security::Clipboard::InMemory);
+
+        let slot = usize::try_from(id - action::CLIP_BASE).unwrap();
+        assert!(
+            state.clip_named(slot).is_none(),
+            "it acted on another entry"
+        );
+        let status = state.error.clone().unwrap_or_default();
+        assert!(status.contains("no longer in the history"), "{status:?}");
+    }
+
+    #[test]
+    fn pin_pins_the_entry_its_row_showed_and_says_which_way_it_went() {
+        let mut state = menu_open_over(&["older", "newest"]);
+        state
+            .clips
+            .push("arrived later", bp_security::Clipboard::InMemory);
+
+        state.toggle_clip_pin(0);
+        let pinned: Vec<&str> = state
+            .clips
+            .entries()
+            .iter()
+            .filter(|e| e.pinned)
+            .map(|e| e.text.as_str())
+            .collect();
+        assert_eq!(pinned, ["newest"]);
+        assert!(state.error.as_deref().unwrap_or("").contains("pinned"));
+
+        state.clips.clear_all();
+        state.toggle_clip_pin(0);
+        assert!(
+            state
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("no longer in the history")
+        );
+    }
+
+    #[test]
+    fn clear_forgets_what_the_menu_showed_and_keeps_pins_and_later_copies() {
+        let mut state = AppState::new();
+        state.clips.push("pinned", bp_security::Clipboard::InMemory);
+        state.clips.toggle_pin(0);
+        state.clips.push("shown", bp_security::Clipboard::InMemory);
+        state.open_clip_menu();
+        state
+            .clips
+            .push("arrived later", bp_security::Clipboard::InMemory);
+
+        state.clear_shown_clips();
+        let left: Vec<&str> = state
+            .clips
+            .entries()
+            .iter()
+            .map(|e| e.text.as_str())
+            .collect();
+        assert_eq!(left, ["arrived later", "pinned"]);
+        assert!(
+            state
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .starts_with("1 clipboard entry")
+        );
+    }
+
     #[test]
     fn setting_the_same_profile_again_changes_nothing() {
         // Refresh rebuilds menus constantly; a no-op that cleared the
@@ -3534,6 +5600,10 @@ mod tests {
         assert!(before.journal.pending().is_empty());
         assert_eq!(before.journal.sealed_count(), 1);
 
+        // The first session ends before the second starts, as a crash or a
+        // quit would end it. While it is alive its journal is held, and a
+        // second window rightly neither offers nor discards its work.
+        drop(before);
         let mut after = AppState::new();
         after.journal = bp_history::Journal::new(recovery.path().to_path_buf());
         after.open_maybe_encrypted(target);
@@ -3549,6 +5619,52 @@ mod tests {
             "recovered work is not on disk, so the tab must be dirty or the \
              user can close it and lose it without being asked"
         );
+    }
+
+    #[test]
+    fn a_new_session_says_encrypted_work_is_waiting_without_naming_it() {
+        // Release plan M2-15: it cannot be offered at startup, so it has to
+        // be mentioned, or nobody knows opening the file brings it back.
+        let recovery = tempfile::tempdir().unwrap();
+        let docs = tempfile::tempdir().unwrap();
+        let target = docs.path().join("diary.bpadx");
+        {
+            let mut before = AppState::new();
+            before.journal = bp_history::Journal::new(recovery.path().to_path_buf());
+            before.edit("dear diary".to_owned());
+            let id = before.workspace.active_id().unwrap();
+            before.ask = Some(crate::passphrase::Ask::Set {
+                id,
+                target: target.clone(),
+            });
+            before.answer_passphrase("hunter2");
+            before.answer_passphrase("hunter2");
+            before.set_security(bp_security::Security::Named(bp_security::Profile::Private));
+            before.edit("dear diary, more".to_owned());
+            before.checkpoint_all();
+        }
+
+        let mut after = AppState::new();
+        after.journal = bp_history::Journal::new(recovery.path().to_path_buf());
+        after.error = None;
+        after.note_sealed_recovery();
+
+        let notice = after.error.clone().unwrap_or_default();
+        assert!(notice.contains("1 encrypted document"), "{notice}");
+        assert!(
+            !notice.contains("diary"),
+            "the name is sealed and must stay so: {notice}"
+        );
+    }
+
+    #[test]
+    fn nothing_is_said_when_no_encrypted_work_is_waiting() {
+        let recovery = tempfile::tempdir().unwrap();
+        let mut state = AppState::new();
+        state.journal = bp_history::Journal::new(recovery.path().to_path_buf());
+        state.error = None;
+        state.note_sealed_recovery();
+        assert_eq!(state.error, None);
     }
 
     #[test]
@@ -3632,6 +5748,140 @@ mod tests {
         assert!(state.journal.pending().is_empty(), "the journal survived");
     }
 
+    /// A state journalling into `dir`, with one dirty document.
+    fn journalling(dir: &Path) -> (AppState, DocumentId) {
+        let mut state = AppState::new();
+        state.journal = bp_history::Journal::new(dir.to_path_buf());
+        state.edit("first".to_owned());
+        let id = state.workspace.active_id().unwrap();
+        (state, id)
+    }
+
+    fn journalled_text(state: &AppState) -> Vec<String> {
+        state
+            .journal
+            .pending()
+            .into_iter()
+            .map(|(_, c)| c.text)
+            .collect()
+    }
+
+    #[test]
+    fn an_unchanged_document_is_not_checkpointed_again() {
+        // Release plan M1-08. Detected by removing the checkpoint behind
+        // the journal's back: a second write would bring it back.
+        let dir = tempfile::tempdir().unwrap();
+        let (mut state, id) = journalling(dir.path());
+        state.checkpoint_all();
+        assert_eq!(journalled_text(&state), ["first"]);
+
+        state.journal.discard(id.get()).unwrap();
+        state.checkpoint_all();
+        assert!(
+            journalled_text(&state).is_empty(),
+            "rewritten with nothing new"
+        );
+
+        state.edit("second".to_owned());
+        state.checkpoint_all();
+        assert_eq!(
+            journalled_text(&state),
+            ["second"],
+            "a real edit was not journalled"
+        );
+    }
+
+    #[test]
+    fn a_checkpoint_snapshotted_before_a_save_never_lands_after_it() {
+        // Release plan M1-07: the write now happens later, on another
+        // thread. A save in between discards the journal, and the stale
+        // snapshot must not bring it back as "recovered" work.
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("doc.txt");
+        std::fs::write(&file, "old\n").unwrap();
+        let mut state = AppState::new();
+        state.journal = bp_history::Journal::new(dir.path().join("journal"));
+        state.open(file.clone());
+        state.edit("new\n".to_owned());
+        let id = state.workspace.active_id().unwrap();
+
+        let jobs = state.prepare_checkpoints();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(state.save_document(id, None), SaveResult::Saved);
+        let journal = state.journal.clone();
+        let written = std::thread::spawn(move || write_checkpoints(&journal, jobs))
+            .join()
+            .unwrap();
+        state.apply_checkpoints(written);
+
+        assert!(
+            journalled_text(&state).is_empty(),
+            "the saved work came back as recoverable"
+        );
+        assert!(!state.checkpointed.contains_key(&id));
+    }
+
+    #[test]
+    fn a_checkpoint_written_on_another_thread_is_recorded_when_it_comes_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut state, id) = journalling(dir.path());
+        let jobs = state.prepare_checkpoints();
+        let journal = state.journal.clone();
+        let written = std::thread::spawn(move || write_checkpoints(&journal, jobs))
+            .join()
+            .unwrap();
+        state.apply_checkpoints(written);
+
+        assert_eq!(journalled_text(&state), ["first"]);
+        assert!(state.workspace.get(id).unwrap().last_checkpoint().is_some());
+        // Recorded, so the next pass has nothing to do.
+        assert!(state.prepare_checkpoints().is_empty());
+    }
+
+    #[test]
+    fn leaving_privacy_mode_journals_unchanged_work_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut state, _) = journalling(dir.path());
+        state.checkpoint_all();
+        state.set_privacy(bp_security::Privacy::On);
+        assert!(journalled_text(&state).is_empty());
+
+        state.set_privacy(bp_security::Privacy::Off);
+        state.checkpoint_all();
+
+        assert_eq!(
+            journalled_text(&state),
+            ["first"],
+            "recovery lapsed until the next keystroke"
+        );
+    }
+
+    #[test]
+    fn closing_a_tab_without_saving_leaves_nothing_to_recover() {
+        // Don't Save is a decision. The checkpoint used to outlive the tab,
+        // so the next launch offered to "recover" the work the user had just
+        // thrown away -- and a plaintext copy of it sat on disk until then.
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = AppState::new();
+        state.journal = bp_history::Journal::new(dir.path().to_path_buf());
+        state.edit("thrown away".to_owned());
+        state.new_document();
+        state.edit("kept".to_owned());
+        state.checkpoint_all();
+        assert_eq!(state.journal.pending().len(), 2);
+
+        let first = state.workspace.iter().map(Document::id).next().unwrap();
+        state.close(first);
+
+        let left: Vec<String> = state
+            .journal
+            .pending()
+            .into_iter()
+            .map(|(_, c)| c.text)
+            .collect();
+        assert_eq!(left, ["kept"], "only the open tab's work is journalled");
+    }
+
     #[test]
     fn privacy_mode_acts_on_every_tab_not_only_the_active_one() {
         // It is session-wide. A journal left behind for a background tab is
@@ -3708,6 +5958,40 @@ mod tests {
     }
 
     #[test]
+    fn encrypting_first_says_the_format_has_not_been_reviewed() {
+        // Release plan decision 20: RC1 ships the `.bpadx` envelope without
+        // an independent review, and the first prompt says so in one line.
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = AppState::new();
+        state.edit("secret".to_owned());
+        let id = state.workspace.active_id().unwrap();
+
+        state.begin_encrypting(id, dir.path().join("notes.bpadx"));
+
+        assert!(matches!(
+            state.ask,
+            Some(crate::passphrase::Ask::Set { .. })
+        ));
+        assert_eq!(
+            state.passphrase_status,
+            crate::passphrase::UNREVIEWED_FORMAT
+        );
+        assert!(
+            state.passphrase_status.contains("independent"),
+            "the note names what has not happened; got {}",
+            state.passphrase_status
+        );
+        assert!(
+            !state.passphrase_status.contains('\n') && state.passphrase_status.len() < 80,
+            "a status line, not an essay"
+        );
+
+        // The confirmation is its own question and does not repeat it.
+        assert!(answer(&mut state, "hunter2"));
+        assert!(state.passphrase_status.is_empty());
+    }
+
+    #[test]
     fn a_mismatched_confirmation_starts_again_rather_than_writing() {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("notes.bpadx");
@@ -3774,8 +6058,9 @@ mod tests {
         );
 
         let mut reader = AppState::new();
-        assert!(
+        assert_eq!(
             reader.open_maybe_encrypted(target.clone()),
+            Opening::Passphrase,
             "an encrypted file asks for a passphrase"
         );
         assert!(!answer(&mut reader, "hunter2"), "and then opens");
@@ -3795,7 +6080,7 @@ mod tests {
 
         let mut state = AppState::new();
         let before = state.workspace.len();
-        assert!(state.open_maybe_encrypted(target));
+        assert_eq!(state.open_maybe_encrypted(target), Opening::Passphrase);
 
         assert_eq!(state.workspace.len(), before, "no tab was opened");
     }
@@ -3850,6 +6135,149 @@ mod tests {
         );
     }
 
+    // --- decision 15: an expensive unlock asks first ----------------------
+
+    /// A `.bpadx` sealed cheaply, then its declared cost rewritten. It no
+    /// longer authenticates, which does not matter to anything that refuses
+    /// it before deriving -- the thing under test.
+    fn declaring_cost(path: &Path, memory_kib: u32, iterations: u32) {
+        let cheap = bp_crypto::SealOptions {
+            kdf: bp_crypto::KdfParams {
+                memory_kib: 8,
+                iterations: 1,
+                lanes: 1,
+            },
+            ..bp_crypto::SealOptions::default()
+        };
+        let mut bytes = bp_crypto::seal(b"secret", "hunter2", cheap).unwrap();
+        // magic 6 + version 2 + suite 1 + kdf id 1 = 10.
+        bytes[10..14].copy_from_slice(&memory_kib.to_le_bytes());
+        bytes[14..18].copy_from_slice(&iterations.to_le_bytes());
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn the_expensive_unlock_question_names_memory_passes_and_time() {
+        assert_eq!(
+            unlock_cost_question(256 * 1024, 8, std::time::Duration::from_secs(4)),
+            "This file asks for an unusually expensive unlock (256 MiB, 8 passes, \
+             about 4.0 s). Open it anyway?"
+        );
+        assert_eq!(
+            unlock_cost_question(77_825, 1, std::time::Duration::from_millis(148)),
+            "This file asks for an unusually expensive unlock (76.0 MiB, 1 pass, \
+             about 0.1 s). Open it anyway?"
+        );
+    }
+
+    #[test]
+    fn an_expensive_file_asks_before_the_passphrase_bar_and_opens_once_agreed() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("strong.bpadx");
+        // The cheapest cost that asks: just over four times the default's
+        // memory, at one pass.
+        let options = bp_crypto::SealOptions {
+            kdf: bp_crypto::KdfParams {
+                memory_kib: 4 * 19 * 1024 + 1,
+                iterations: 1,
+                lanes: 1,
+            },
+            ..bp_crypto::SealOptions::default()
+        };
+        std::fs::write(
+            &target,
+            bp_crypto::seal(b"strong secret", "hunter2", options).unwrap(),
+        )
+        .unwrap();
+        let mut state = AppState::new();
+        let before = state.workspace.len();
+
+        let Opening::Expensive { path, question } = state.open_maybe_encrypted(target.clone())
+        else {
+            unreachable!("an expensive file must ask first");
+        };
+        assert!(question.starts_with("This file asks for an unusually expensive unlock"));
+        assert!(question.contains("76.0 MiB, 1 pass"), "{question}");
+        assert_eq!(state.ask, None, "the passphrase bar waits for the answer");
+
+        state.answer_unlock_cost(path, true);
+        assert_eq!(
+            state.ask,
+            Some(crate::passphrase::Ask::Unlock {
+                path: target,
+                agreed_cost: true,
+            })
+        );
+        assert!(!answer(&mut state, "hunter2"), "the bar closes on success");
+        assert_eq!(state.workspace.len(), before + 1);
+        assert_eq!(state.active_text(), "strong secret");
+    }
+
+    #[test]
+    fn declining_an_expensive_unlock_opens_nothing_and_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("strong.bpadx");
+        declaring_cost(
+            &target,
+            bp_crypto::MAX_MEMORY_KIB,
+            bp_crypto::MAX_ITERATIONS,
+        );
+        let mut state = AppState::new();
+        let before = state.workspace.len();
+
+        let Opening::Expensive { path, .. } = state.open_maybe_encrypted(target) else {
+            unreachable!("at the ceiling, a file asks first");
+        };
+        state.answer_unlock_cost(path, false);
+
+        assert_eq!(state.ask, None);
+        assert_eq!(state.workspace.len(), before);
+        assert_eq!(state.error.as_deref(), Some("strong.bpadx was not opened"));
+    }
+
+    #[test]
+    fn a_file_past_the_cost_ceiling_is_refused_in_the_status_bar_without_asking() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("hostile.bpadx");
+        declaring_cost(&target, 512 * 1024, 1);
+        let mut state = AppState::new();
+
+        assert_eq!(state.open_maybe_encrypted(target), Opening::Done);
+
+        assert_eq!(state.ask, None, "nothing to type a passphrase into");
+        let error = state.error.clone().unwrap_or_default();
+        assert!(error.starts_with("hostile.bpadx: "), "{error}");
+        assert!(
+            error.contains("256 MiB"),
+            "the reason names the ceiling: {error}"
+        );
+    }
+
+    #[test]
+    fn a_file_made_expensive_after_it_was_asked_about_is_refused_not_paid() {
+        // The bar asked without the agreement; the file is then replaced by
+        // one at the ceiling. Unlocking must not pay four seconds for it.
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("notes.bpadx");
+        declaring_cost(&target, 8, 1);
+        let mut state = AppState::new();
+        assert_eq!(
+            state.open_maybe_encrypted(target.clone()),
+            Opening::Passphrase
+        );
+        declaring_cost(
+            &target,
+            bp_crypto::MAX_MEMORY_KIB,
+            bp_crypto::MAX_ITERATIONS,
+        );
+
+        let started = std::time::Instant::now();
+        assert!(!answer(&mut state, "hunter2"), "the bar closes");
+        assert!(started.elapsed() < std::time::Duration::from_millis(50));
+        let error = state.error.clone().unwrap_or_default();
+        assert!(error.contains("unusually expensive unlock"), "{error}");
+    }
+
     #[test]
     fn a_plain_document_is_opened_without_asking_for_anything() {
         let dir = tempfile::tempdir().unwrap();
@@ -3857,8 +6285,9 @@ mod tests {
         std::fs::write(&plain, "ordinary text").unwrap();
 
         let mut state = AppState::new();
-        assert!(
-            !state.open_maybe_encrypted(plain),
+        assert_eq!(
+            state.open_maybe_encrypted(plain),
+            Opening::Done,
             "a plain file must not prompt"
         );
         assert_eq!(state.active_text(), "ordinary text");
@@ -4410,6 +6839,146 @@ mod tests {
     }
 
     #[test]
+    fn a_copy_of_an_encrypted_document_is_encrypted_with_the_same_passphrase() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = AppState::new();
+        state.edit("the secret plan\n".to_owned());
+        let id = state.workspace.active_id().unwrap();
+        state
+            .passphrases
+            .insert(id, zeroize::Zeroizing::new("correct horse".to_owned()));
+
+        let copy = dir.path().join("copy.bpadx");
+        assert!(matches!(state.save_copy(id, &copy), SaveResult::Saved));
+
+        let on_disk = std::fs::read(&copy).unwrap();
+        assert!(bp_crypto::is_bpadx(&on_disk), "the copy is an envelope");
+        assert!(
+            !on_disk.windows(10).any(|w| w == b"the secret"),
+            "the text must not reach the disk in clear"
+        );
+        let opened = bp_crypto::open(&on_disk, "correct horse").expect("same passphrase");
+        assert_eq!(opened.as_slice(), b"the secret plan\n");
+    }
+
+    #[test]
+    fn a_copy_of_a_plain_document_stays_plain() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = AppState::new();
+        state.edit("nothing to hide\n".to_owned());
+        let id = state.workspace.active_id().unwrap();
+        let copy = dir.path().join("copy.txt");
+        assert!(matches!(state.save_copy(id, &copy), SaveResult::Saved));
+        assert_eq!(std::fs::read(&copy).unwrap(), b"nothing to hide\n");
+    }
+
+    // --- Sign Document (release plan M2-10) --------------------------------
+
+    /// The saved state, with its signing key kept under `dir` too.
+    fn signing_state(dir: &Path) -> (AppState, PathBuf) {
+        let (mut state, path) = saved_state(dir, "notes.txt", "signed content\n");
+        state.signing_key = Some(
+            dir.join("keys")
+                .join(bp_config::locations::SIGNING_KEY_FILE),
+        );
+        (state, path)
+    }
+
+    #[test]
+    fn the_first_signature_makes_a_sealed_key_asking_for_its_passphrase_twice() {
+        use crate::passphrase::Ask;
+        let dir = tempfile::tempdir().unwrap();
+        let (mut state, path) = signing_state(dir.path());
+
+        assert!(state.begin_signing(), "the bar opens");
+        assert!(matches!(state.ask, Some(Ask::NewKey { .. })));
+        assert!(
+            state.passphrase_status.contains("no signing key yet"),
+            "the user learns a key is about to exist; got {}",
+            state.passphrase_status
+        );
+
+        // A mismatch goes back to the first question and makes nothing.
+        assert!(state.answer_passphrase("correct horse"));
+        assert!(state.answer_passphrase("correct hose"));
+        assert!(matches!(state.ask, Some(Ask::NewKey { .. })));
+        let key_file = dir
+            .path()
+            .join("keys")
+            .join(bp_config::locations::SIGNING_KEY_FILE);
+        assert!(!key_file.exists());
+
+        assert!(state.answer_passphrase("correct horse"));
+        assert!(!state.answer_passphrase("correct horse"), "the bar closes");
+
+        let public = key_file.with_file_name(bp_config::locations::VERIFYING_KEY_FILE);
+        assert!(bp_crypto::is_bpadx(&std::fs::read(&key_file).unwrap()));
+        let verifying = bp_integrity::read_verifying_key(&public).expect("the public half");
+        let verdict = bp_integrity::verify_file(&path, &bp_integrity::Expectation::Key(verifying))
+            .expect("the sidecar reads");
+        assert!(verdict.is_verified(), "signed with the key that was kept");
+        let notice = state.error.clone().unwrap();
+        assert!(notice.starts_with("signed"), "got {notice}");
+        assert!(notice.contains("signing-key.pub"), "got {notice}");
+    }
+
+    #[test]
+    fn a_kept_key_signs_with_its_passphrase_and_a_wrong_one_keeps_the_bar_open() {
+        use crate::passphrase::Ask;
+        let dir = tempfile::tempdir().unwrap();
+        let (mut state, path) = signing_state(dir.path());
+        let key_file = dir
+            .path()
+            .join("keys")
+            .join(bp_config::locations::SIGNING_KEY_FILE);
+        std::fs::create_dir_all(key_file.parent().unwrap()).unwrap();
+        let key = signer(7);
+        bp_integrity::write_sealed_signing_key(&key_file, &key, "correct horse").unwrap();
+
+        assert!(state.begin_signing());
+        assert!(matches!(state.ask, Some(Ask::Sign { .. })));
+        assert!(
+            state.answer_passphrase("battery staple"),
+            "a typo is retried"
+        );
+        assert!(
+            state.passphrase_status.contains("does not open"),
+            "got {}",
+            state.passphrase_status
+        );
+        assert!(!dir.path().join("notes.txt.sig").exists());
+
+        assert!(!state.answer_passphrase("correct horse"));
+        let verdict =
+            bp_integrity::verify_file(&path, &bp_integrity::Expectation::Key(key.verifying_key()))
+                .unwrap();
+        assert!(verdict.is_verified());
+    }
+
+    #[test]
+    fn a_document_with_unsaved_changes_is_not_signed_as_something_else() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut state, _) = signing_state(dir.path());
+        state.edit("changed since it was saved\n".to_owned());
+
+        assert!(!state.begin_signing());
+        assert!(state.ask.is_none());
+        let notice = state.error.clone().unwrap();
+        assert!(notice.contains("unsaved changes"), "got {notice}");
+        assert!(!notice.contains("  "), "{notice:?}");
+    }
+
+    #[test]
+    fn a_document_never_saved_cannot_be_signed() {
+        let mut state = AppState::new();
+        state.edit("never saved\n".to_owned());
+        assert!(!state.begin_signing());
+        let notice = state.error.clone().unwrap();
+        assert!(notice.contains("never been saved"), "got {notice}");
+        assert!(!notice.contains("  "), "{notice:?}");
+    }
+
+    #[test]
     fn a_public_key_pasted_out_of_an_email_as_hexadecimal_is_accepted() {
         // The realistic way a public key travels. Refusing it would teach
         // users to retype keys by hand, which is how a wrong key gets used.
@@ -4509,6 +7078,63 @@ mod tests {
         assert!(
             notice.contains('3'),
             "the count belongs in it; got {notice}"
+        );
+    }
+
+    fn json_state(text: &str) -> AppState {
+        let mut state = AppState::new();
+        let id = state.workspace.active_id().unwrap();
+        state
+            .workspace
+            .get_mut(id)
+            .unwrap()
+            .set_path(PathBuf::from("data.json"));
+        state.edit(text.to_owned());
+        state
+    }
+
+    #[test]
+    fn json_format_keeps_the_key_order_and_sort_keys_sorts() {
+        // Sort Keys shared Format's id and only sorted because Format did.
+        // With the author's order kept, the two have to be different rows
+        // doing different things.
+        let mut state = json_state(r#"{"z":1,"a":2}"#);
+        state.run_data_action(action::DATA_FORMAT);
+        let formatted = state.active_text();
+        assert!(
+            formatted.find("\"z\"") < formatted.find("\"a\""),
+            "{formatted}"
+        );
+
+        state.run_data_action(action::DATA_SORT_KEYS);
+        let sorted = state.active_text();
+        assert!(sorted.find("\"a\"") < sorted.find("\"z\""), "{sorted}");
+    }
+
+    #[test]
+    fn formatting_toml_says_what_it_did_to_the_comments() {
+        let mut state = AppState::new();
+        let id = state.workspace.active_id().unwrap();
+        state
+            .workspace
+            .get_mut(id)
+            .unwrap()
+            .set_path(PathBuf::from("Cargo.toml"));
+        state.edit(
+            "# keep me
+b = 1
+a = 2
+"
+            .to_owned(),
+        );
+
+        state.run_data_action(action::DATA_FORMAT);
+
+        assert!(!state.active_text().contains("keep me"));
+        let notice = state.error.expect("a notice");
+        assert!(
+            notice.contains("comments") && notice.contains("Ctrl+Z"),
+            "{notice}"
         );
     }
 
@@ -4873,8 +7499,8 @@ mod tests {
 
     #[test]
     fn a_plan_measured_against_text_that_has_since_changed_is_refused() {
-        // `rfd` pumps events while its dialog is up, so a callback can edit
-        // the buffer underneath one. `RedactionError::PastEnd` only catches
+        // The consent sheet is answered later, from an event, so something
+        // else can edit the buffer while it is open. `RedactionError::PastEnd` only catches
         // the half of that which runs off the end -- an edit that left the
         // length alone would redact the wrong bytes and report success.
         let mut state = AppState::new();

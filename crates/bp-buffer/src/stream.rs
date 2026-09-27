@@ -28,7 +28,7 @@
 //! than being assumed away.
 
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
@@ -148,7 +148,20 @@ pub struct WindowReader {
     /// bytes immediately before it; `carry` the bytes immediately after.
     emitted_end: u64,
     finished: bool,
+    /// Replace bytes that are not UTF-8 rather than stopping at them. See
+    /// [`WindowReader::substituting_invalid`].
+    substitute: bool,
 }
+
+/// What a byte that is not UTF-8 becomes in a window from a reader that is
+/// [substituting](WindowReader::substituting_invalid): ASCII SUB, the control
+/// character that exists to stand in for one that could not be read.
+///
+/// One byte for one byte, which is the point. A three-byte U+FFFD would move
+/// every offset after it, and [`StreamWindow::byte_offset`] and the line
+/// arithmetic both count bytes of the file. Nobody types SUB into a find
+/// box, so it matches nothing a person searches for.
+pub const INVALID_BYTE_SEARCHED: u8 = 0x1A;
 
 impl WindowReader {
     /// Stream a file with the default window and overlap.
@@ -189,7 +202,42 @@ impl WindowReader {
             prefix_mid_line: false,
             emitted_end: 0,
             finished: false,
+            substitute: false,
         })
+    }
+
+    /// Replace each byte that is not UTF-8 with [`INVALID_BYTE_SEARCHED`]
+    /// instead of ending the stream with [`LargeFileError::InvalidUtf8`].
+    ///
+    /// For searching a file that is only being *read*: a log with one stray
+    /// byte in its first megabyte would otherwise be unsearchable past it.
+    /// Never for anything that writes -- the refusal is what stops a lossy
+    /// decode being saved back over the original.
+    pub fn substituting_invalid(mut self) -> Self {
+        self.substitute = true;
+        self
+    }
+
+    /// Begin at `byte_offset`, which must be the start of 0-based line
+    /// `line`, instead of at the start of the file.
+    ///
+    /// So "find the next match" from the middle of a 2 GB file reads forward
+    /// from there rather than from byte zero. The caller vouches for the
+    /// pairing -- [`crate::LargeFile::line_start`] is where it comes from --
+    /// because checking it would mean counting every line before it, which is
+    /// the walk this exists to skip. Only before the first window; after
+    /// that the stream has a position of its own and this changes nothing.
+    pub fn start_at(&mut self, byte_offset: u64, line: usize) -> Result<(), LargeFileError> {
+        if self.emitted_end != 0 || self.finished || !self.prefix.is_empty() {
+            return Ok(());
+        }
+        self.file
+            .seek(SeekFrom::Start(byte_offset))
+            .map_err(|source| LargeFileError::io(&self.path, source))?;
+        self.emitted_end = byte_offset;
+        self.prefix_line = line;
+        self.prefix_mid_line = false;
+        Ok(())
     }
 
     /// The file being streamed.
@@ -287,6 +335,9 @@ impl WindowReader {
         // incomplete one at end of file, is a real error: this crate refuses
         // to guess at bytes that are not text, for the same reason
         // `bp-files` refuses a lossy decode.
+        if self.substitute {
+            self.substitute_invalid(at_eof);
+        }
         let valid = match std::str::from_utf8(&self.buf) {
             Ok(_) => self.buf.len(),
             Err(error) => {
@@ -306,13 +357,17 @@ impl WindowReader {
         // End on a line break when one is close enough to the end that
         // giving the rest back still leaves real progress. Without the
         // half-window floor, a file that is one enormous line would hand back
-        // almost everything it read, forever.
+        // almost everything it read, forever. Failing that, never end on a
+        // CR before the end of the file: its LF may be in the next read, and
+        // a CRLF split between two windows is counted as two breaks.
         let mut take = text.len();
-        if !at_eof
-            && let Some(newline) = text.rfind('\n')
-            && newline + 1 >= self.window_bytes / 2
-        {
-            take = newline + 1;
+        if !at_eof {
+            match crate::breaks::last_line_start(text.as_bytes(), self.window_bytes / 2, text.len())
+            {
+                Some(start) => take = start,
+                None if text.ends_with('\r') => take -= 1,
+                None => {}
+            }
         }
 
         let emitted = &text[..take];
@@ -345,6 +400,26 @@ impl WindowReader {
         Ok(Some(window))
     }
 
+    /// Overwrite every byte of `buf` that is not part of valid UTF-8 with
+    /// [`INVALID_BYTE_SEARCHED`], in place. An incomplete sequence at the
+    /// end is left for the next read to complete -- unless the file has
+    /// ended, when nothing will.
+    fn substitute_invalid(&mut self, at_eof: bool) {
+        let mut from = 0;
+        while let Err(error) = std::str::from_utf8(&self.buf[from..]) {
+            let at = from + error.valid_up_to();
+            let bad = match error.error_len() {
+                Some(bad) => bad,
+                None if at_eof => self.buf.len() - at,
+                None => return,
+            };
+            for byte in &mut self.buf[at..at + bad] {
+                *byte = INVALID_BYTE_SEARCHED;
+            }
+            from = at + bad;
+        }
+    }
+
     /// Choose the tail of `window` to repeat at the head of the next one.
     ///
     /// Two constraints pull against each other. The repeat must be at least
@@ -374,16 +449,21 @@ impl WindowReader {
         while !text.is_char_boundary(reach) {
             reach += 1;
         }
-        if let Some(newline) = text[reach..split].rfind('\n') {
-            split = reach + newline + 1;
+        if let Some(start) = crate::breaks::last_line_start(text.as_bytes(), reach + 1, split) {
+            split = start;
         }
 
+        // Breaks on the rule the rest of the crate uses (decision D6). A CR
+        // ending `head` whose LF opens the repeat is half of a CRLF: the next
+        // window holds the LF and counts the pair there, once.
         let head = &text[..split];
-        self.prefix_line = window.first_line + head.matches('\n').count();
+        let pair_cut = head.ends_with('\r') && text.as_bytes().get(split) == Some(&b'\n');
+        self.prefix_line =
+            window.first_line + crate::breaks::count(head.as_bytes()) - usize::from(pair_cut);
         self.prefix_mid_line = if split == 0 {
             window.starts_mid_line
         } else {
-            !head.ends_with('\n')
+            !(head.ends_with('\n') || (head.ends_with('\r') && !pair_cut))
         };
         self.prefix = text[split..].to_owned();
     }
@@ -595,6 +675,49 @@ mod tests {
     }
 
     #[test]
+    fn line_numbers_survive_bare_crs_and_crlfs_cut_between_windows() {
+        // Decision D6: a bare CR ends a line, a CRLF is one break wherever a
+        // window boundary falls. Several window sizes and overlaps, zero
+        // among them, so boundaries land on every part of every ending.
+        let dir = TempDir::new().unwrap();
+        let mut text = String::new();
+        for i in 0..4_000 {
+            text.push_str(&format!("line {i}"));
+            text.push_str(["\r", "\n", "\r\n"][i % 3]);
+        }
+        let path = write(&dir, "mixed.txt", text.as_bytes());
+
+        for window in [MIN_WINDOW_BYTES, MIN_WINDOW_BYTES + 1, MIN_WINDOW_BYTES + 7] {
+            for overlap in [0, 1, 64] {
+                let reader = WindowReader::with_config(&path, window, overlap).unwrap();
+                let mut checked = 0;
+                for w in reader {
+                    let w = w.unwrap();
+                    // A one-byte overlap can rarely reach back to a line
+                    // start, so a window may open on a fragment of its first
+                    // line. Its number is still right; its text is partial.
+                    assert!(
+                        overlap == 1 || !w.starts_mid_line,
+                        "window {window} overlap {overlap} lost its alignment"
+                    );
+                    let skip = usize::from(w.starts_mid_line);
+                    for (k, line) in crate::breaks::lines(&w.text).enumerate().skip(skip) {
+                        let absolute = w.absolute_line(k + 1);
+                        assert_eq!(
+                            line,
+                            format!("line {absolute}"),
+                            "window {window} overlap {overlap} at byte {}",
+                            w.byte_offset
+                        );
+                        checked += 1;
+                    }
+                }
+                assert!(checked >= 3_900, "only checked {checked} lines");
+            }
+        }
+    }
+
+    #[test]
     fn one_enormous_line_streams_and_says_it_is_mid_line() {
         let dir = TempDir::new().unwrap();
         let text = "x".repeat(300_000);
@@ -700,6 +823,85 @@ mod tests {
         assert!(
             error.to_string().contains("absent.txt"),
             "the message must name the file: {error}"
+        );
+    }
+
+    #[test]
+    fn a_substituting_reader_keeps_every_offset_and_finds_text_past_a_bad_byte() {
+        let dir = TempDir::new().unwrap();
+        let mut bytes = Vec::new();
+        for i in 0..2_000 {
+            bytes.extend_from_slice(format!("line {i}\n").as_bytes());
+            if i == 10 {
+                bytes.extend_from_slice(b"bad \xFF\xC3 here\n");
+            }
+        }
+        bytes.extend_from_slice(b"tail \xE2\x82");
+        let path = write(&dir, "bad.txt", &bytes);
+
+        assert!(
+            WindowReader::with_config(&path, MIN_WINDOW_BYTES, 64)
+                .unwrap()
+                .any(|w| w.is_err()),
+            "without substitution the stream refuses, as it always has"
+        );
+
+        let reader = WindowReader::with_config(&path, MIN_WINDOW_BYTES, 64)
+            .unwrap()
+            .substituting_invalid();
+        let mut out = Vec::new();
+        for w in reader {
+            let w = w.unwrap();
+            out.extend_from_slice(&w.text.as_bytes()[w.overlap_bytes..]);
+        }
+        assert_eq!(out.len(), bytes.len(), "one byte for one byte");
+        let expected: Vec<u8> = bytes
+            .iter()
+            .map(|b| {
+                if *b >= 0x80 {
+                    INVALID_BYTE_SEARCHED
+                } else {
+                    *b
+                }
+            })
+            .collect();
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn a_reader_started_at_a_line_reports_lines_and_offsets_in_the_file() {
+        let dir = TempDir::new().unwrap();
+        let text: String = (0..5_000).map(|i| format!("entry {i}\n")).collect();
+        let path = write(&dir, "mid.txt", text.as_bytes());
+        let line = 3_210;
+        let offset = text.match_indices('\n').nth(line - 1).unwrap().0 as u64 + 1;
+
+        let mut reader = WindowReader::with_config(&path, MIN_WINDOW_BYTES, 64).unwrap();
+        reader.start_at(offset, line).unwrap();
+        let first = reader.next_window().unwrap().unwrap();
+        assert_eq!(first.byte_offset, offset);
+        assert_eq!(first.first_line, line);
+        assert!(first.text.starts_with("entry 3210\n"));
+
+        let mut rest = first.text.clone();
+        while let Some(w) = reader.next_window().unwrap() {
+            let found = w
+                .text
+                .find("entry 4999")
+                .map(|at| w.text[..at].matches('\n').count());
+            if let Some(newlines) = found {
+                assert_eq!(
+                    w.first_line + newlines,
+                    4_999,
+                    "line arithmetic from a mid start"
+                );
+            }
+            rest.push_str(&w.text[w.overlap_bytes..]);
+        }
+        assert_eq!(
+            rest,
+            text[offset as usize..],
+            "from there to the end, exactly once"
         );
     }
 }

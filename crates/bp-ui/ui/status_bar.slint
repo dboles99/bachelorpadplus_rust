@@ -29,9 +29,18 @@ export component StatusBar inherits Rectangle {
     in property <string> location;
     in property <string> error-message;
 
+    /// What the path and notice segments are showing, for the window tests.
+    out property <string> shown-path: path-text.text;
+    out property <string> shown-notice: root.error-message;
+
     callback cycle-theme();
 
     height: 44px;
+    // The status line is where the app answers -- "saved", a refusal, a
+    // count -- so a screen reader is told when it changes, without
+    // interrupting (release plan M2-14).
+    accessible-role: content-info;
+    accessible-label: "Status";
     background: Palette.panel;
 
     VerticalLayout {
@@ -85,12 +94,41 @@ export component StatusBar inherits Rectangle {
             }
         }
 
-        Text {
-            text: root.error-message == "" ? root.location : root.error-message;
-            color: root.error-message == "" ? Palette.ink-dim : Palette.accent;
-            font-size: 12px;
-            overflow: elide;
-            vertical-alignment: center;
+        // The path and a notice side by side, never one instead of the
+        // other (locked decision #5, release plan M1-16). This line used to
+        // show the notice *in place of* the path, so any message -- "saved",
+        // a warning from a minute ago -- hid where the document lives, which
+        // is the one thing the status bar promises always to say.
+        HorizontalLayout {
+            spacing: 12px;
+
+            // Both start from nothing and split the line by stretch, the
+            // path 55 to the notice's 45, so a long notice elides before the
+            // path has to. Slint elides only at the end, so a squeezed path
+            // loses its file name first -- which the tab strip and the title
+            // bar still show; the folder is shown nowhere else. (Sizing the
+            // notice from the bar's own width was a binding loop.)
+            path-text := Text {
+                text: root.location;
+                color: Palette.ink-dim;
+                font-size: 12px;
+                overflow: elide;
+                vertical-alignment: center;
+                preferred-width: 0px;
+                min-width: 120px;
+                horizontal-stretch: 55;
+            }
+            if root.error-message != "": Text {
+                accessible-live-region: polite;
+                text: root.error-message;
+                color: Palette.accent;
+                font-size: 12px;
+                overflow: elide;
+                vertical-alignment: center;
+                horizontal-alignment: right;
+                preferred-width: 0px;
+                horizontal-stretch: 45;
+            }
         }
     }
 }

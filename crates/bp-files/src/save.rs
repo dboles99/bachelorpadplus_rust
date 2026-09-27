@@ -1,5 +1,6 @@
 //! Atomic save.
 
+use std::borrow::Cow;
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -7,10 +8,20 @@ use std::path::{Path, PathBuf};
 use bp_naming::SemanticName;
 use bp_platform::{
     Platform,
-    paths::{PathProblem, file_name, file_name_problems},
+    paths::{
+        PathProblem, file_name, file_name_problems, needs_extended_length_prefix,
+        to_extended_length,
+    },
 };
 use tempfile::NamedTempFile;
 use thiserror::Error;
+
+/// A stand-in for the temporary file's name when measuring its path.
+///
+/// `tempfile` names it `.tmp` plus six random characters, in the target's
+/// directory. The temporary path is what the final rename moves *from*, so it
+/// has to fit as well as the target does.
+const TEMP_NAME_PROBE: &str = ".tmpXXXXXX";
 
 /// Chunk size for read-back verification. Streaming rather than slurping
 /// keeps peak memory at the buffer size even when saving a huge file.
@@ -24,7 +35,9 @@ const VERIFY_CHUNK: usize = 64 * 1024;
 #[derive(Debug, Error)]
 pub enum SaveError {
     #[error(
-        "cannot save to {} -- {reserved} is a Windows device rather than a file, so writing          there would send the document to the device and leave nothing on disk; choose          another name",
+        "cannot save to {} -- {reserved} is a Windows device rather than a file, so writing \
+         there would send the document to the device and leave nothing on disk; choose \
+         another name",
         .path.display()
     )]
     ReservedDeviceName {
@@ -33,6 +46,14 @@ pub enum SaveError {
         /// the device without echoing the user's casing back at them.
         reserved: &'static str,
     },
+
+    #[error(
+        "cannot save to {} -- the full path is longer than Windows allows, and it \
+         cannot be lengthened because it is not a complete path from a drive or a \
+         network share; save it somewhere shallower or under a shorter name",
+        .path.display()
+    )]
+    PathTooLong { path: PathBuf },
 
     #[error("cannot work out which directory to save {} into", .path.display())]
     NoParentDirectory { path: PathBuf },
@@ -138,8 +159,12 @@ pub fn atomic_write(
 ) -> Result<SaveOutcome, SaveError> {
     refuse_device_name(Platform::HOST, path)?;
 
-    let parent = parent_dir(path)?;
-    let replaced_existing = path.exists();
+    // Every filesystem call below goes to `os_path`; every error names
+    // `path`. The two differ only on Windows, only for a long path, and only
+    // by a prefix the user never typed and should never be shown.
+    let os_path = os_path(path)?;
+    let parent = parent_dir(&os_path)?;
+    let replaced_existing = os_path.exists();
 
     // Same directory as the target, so the later rename is a true atomic
     // rename rather than a cross-filesystem copy.
@@ -167,17 +192,17 @@ pub fn atomic_write(
             source,
         })?;
 
-    preserve_permissions(path, &temp);
+    preserve_permissions(&os_path, &temp);
 
     // The atomic step. Everything before this touched only the temp file, so
     // any earlier failure leaves the user's file exactly as it was.
     let _persisted = match options.overwrite {
-        Overwrite::Replace => temp.persist(path).map_err(|e| SaveError::Replace {
+        Overwrite::Replace => temp.persist(&os_path).map_err(|e| SaveError::Replace {
             path: path.to_owned(),
             source: e.error,
         })?,
         Overwrite::FailIfExists => {
-            temp.persist_noclobber(path)
+            temp.persist_noclobber(&os_path)
                 .map_err(|e| match e.error.kind() {
                     io::ErrorKind::AlreadyExists => SaveError::AlreadyExists {
                         path: path.to_owned(),
@@ -193,7 +218,7 @@ pub fn atomic_write(
     sync_directory(&parent);
 
     let verified = if options.verify {
-        if !verify_contents(path, contents).map_err(|source| SaveError::Verify {
+        if !verify_contents(&os_path, contents).map_err(|source| SaveError::Verify {
             path: path.to_owned(),
             source,
         })? {
@@ -266,6 +291,73 @@ fn refuse_device_name(platform: Platform, path: &Path) -> Result<(), SaveError> 
         }),
         _ => Ok(()),
     }
+}
+
+/// The spelling of `path` to hand the operating system.
+///
+/// Windows refuses a path longer than `MAX_PATH` unless it carries the `\\?\`
+/// prefix. The standard library adds that prefix itself inside `std::fs`, so
+/// opening, reading and creating a long path all work -- but `tempfile`'s
+/// `persist` calls `MoveFileExW` directly with the path as given, and the
+/// rename that makes a save atomic is the one step that then fails. It fails
+/// as `os error 3`, which [`SaveError::Replace`] used to present as a
+/// read-only file or another program holding it: a name `bp-naming` is
+/// willing to generate, in a directory as ordinary as the temp directory, was
+/// unwritable and blamed on the wrong thing.
+///
+/// So the prefix is applied here, once, to the path every later call uses.
+/// A relative long path is made absolute first, because an extended-length
+/// path is not resolved against anything and a relative one is meaningless.
+fn os_path(path: &Path) -> Result<PathBuf, SaveError> {
+    if Platform::HOST != Platform::Windows {
+        return Ok(path.to_owned());
+    }
+    // A path that is not UTF-8 cannot be rewritten as text without changing
+    // which file it names. Leave it as it is; if it is also too long, the
+    // rename says so.
+    let Some(text) = path.to_str() else {
+        return Ok(path.to_owned());
+    };
+    if !needs_lengthening(Platform::Windows, text) {
+        return Ok(path.to_owned());
+    }
+    let absolute = std::path::absolute(path).map_err(|_| SaveError::PathTooLong {
+        path: path.to_owned(),
+    })?;
+    let lengthened = absolute
+        .to_str()
+        .and_then(|text| os_spelling(Platform::Windows, text));
+    match lengthened {
+        Some(spelling) => Ok(PathBuf::from(spelling.into_owned())),
+        None => Err(SaveError::PathTooLong {
+            path: path.to_owned(),
+        }),
+    }
+}
+
+/// Whether saving to `path` touches a path too long for `platform` to accept
+/// as written -- the target itself, or the temporary file beside it.
+fn needs_lengthening(platform: Platform, path: &str) -> bool {
+    if platform != Platform::Windows {
+        return false;
+    }
+    let beside = match path.rfind(['\\', '/']) {
+        Some(split) => format!("{}\\{TEMP_NAME_PROBE}", &path[..split]),
+        None => TEMP_NAME_PROBE.to_owned(),
+    };
+    needs_extended_length_prefix(path) || needs_extended_length_prefix(&beside)
+}
+
+/// How `path` must be spelled for `platform` to accept it, or `None` if it
+/// needs lengthening and cannot have it.
+///
+/// The judgement half of [`os_path`], with the platform a parameter so both
+/// CI legs execute the Windows rule, as [`refuse_device_name`] does.
+fn os_spelling(platform: Platform, path: &str) -> Option<Cow<'_, str>> {
+    if !needs_lengthening(platform, path) {
+        return Some(Cow::Borrowed(path));
+    }
+    to_extended_length(path).map(Cow::Owned)
 }
 
 /// Pick the directory to create the temporary file in.
@@ -663,5 +755,122 @@ mod tests {
                 assert_eq!(std::fs::read(&path).unwrap(), b"body");
             }
         }
+    }
+
+    // --- extended-length paths --------------------------------------------
+
+    /// A Windows path of exactly `len` characters under `C:\`, ending in a
+    /// `.txt` name.
+    fn windows_path_of(len: usize) -> String {
+        let head = r"C:\deep\";
+        let tail = ".txt";
+        format!("{head}{}{tail}", "a".repeat(len - head.len() - tail.len()))
+    }
+
+    #[test]
+    fn a_short_path_is_spelled_as_given_on_both_platforms() {
+        for &platform in Platform::ALL {
+            let short = windows_path_of(100);
+            assert_eq!(
+                os_spelling(platform, &short).as_deref(),
+                Some(short.as_str()),
+                "{}",
+                platform.token()
+            );
+        }
+    }
+
+    #[test]
+    fn a_long_windows_path_gains_the_prefix_the_rename_needs() {
+        // One over MAX_PATH's 259 usable characters: the boundary the rename
+        // in `tempfile::persist` falls over.
+        let at_limit = windows_path_of(259);
+        assert_eq!(
+            os_spelling(Platform::Windows, &at_limit).as_deref(),
+            Some(at_limit.as_str()),
+            "a path that fits was rewritten"
+        );
+        let over = windows_path_of(260);
+        assert_eq!(
+            os_spelling(Platform::Windows, &over).as_deref(),
+            Some(format!(r"\\?\{over}").as_str())
+        );
+    }
+
+    #[test]
+    fn a_path_whose_temporary_sibling_is_too_long_is_lengthened_too() {
+        // The rename moves *from* the temporary file, so a short name in a
+        // deep directory can fit while the temporary path beside it does not.
+        let dir = format!(r"C:\{}", "d".repeat(247));
+        let path = format!(r"{dir}\a.md");
+        assert!(path.chars().count() <= 259, "the target itself must fit");
+        assert!(
+            os_spelling(Platform::Windows, &path)
+                .is_some_and(|spelling| spelling.starts_with(r"\\?\")),
+            "the temporary file beside {} characters of directory would not fit",
+            dir.chars().count()
+        );
+    }
+
+    #[test]
+    fn linux_never_lengthens_anything() {
+        // PATH_MAX is 4096 there and there is no prefix to add; the Windows
+        // rule must not leak into the other leg.
+        let over = windows_path_of(300);
+        assert_eq!(
+            os_spelling(Platform::Linux, &over).as_deref(),
+            Some(over.as_str())
+        );
+    }
+
+    #[test]
+    fn a_long_path_that_cannot_be_lengthened_says_so_rather_than_guessing() {
+        // Relative: an extended-length path is not resolved against the
+        // working directory, so prefixing it would name a different file.
+        // `os_path` makes a relative path absolute before it gets here; this
+        // is the judgement that refuses if it ever arrives unresolved.
+        let relative = format!(r"notes\{}.txt", "a".repeat(300));
+        assert_eq!(os_spelling(Platform::Windows, &relative), None);
+    }
+
+    #[test]
+    fn an_already_lengthened_path_is_left_alone() {
+        let prefixed = format!(r"\\?\{}", windows_path_of(300));
+        assert_eq!(
+            os_spelling(Platform::Windows, &prefixed).as_deref(),
+            Some(prefixed.as_str())
+        );
+    }
+
+    #[test]
+    fn error_messages_read_as_prose() {
+        // A string continuation that lost its backslash once put ten spaces
+        // in the middle of the device-name message, and the status bar showed
+        // them. Every message a user can be shown is checked here.
+        let path = PathBuf::from("note.txt");
+        for message in [
+            SaveError::ReservedDeviceName {
+                path: path.clone(),
+                reserved: "CON",
+            }
+            .to_string(),
+            SaveError::PathTooLong { path: path.clone() }.to_string(),
+        ] {
+            assert!(!message.contains("  "), "{message:?}");
+        }
+    }
+
+    #[test]
+    fn a_long_name_in_a_deep_directory_saves_on_the_host() {
+        // The seam, on whichever leg runs it. On Windows this is the rename
+        // `tempfile` hands to `MoveFileExW` unprefixed; on Linux it is a
+        // control showing the ordinary path is untouched.
+        let dir = tempdir().unwrap();
+        let deep = dir.path().join("d".repeat(120));
+        fs::create_dir(&deep).unwrap();
+        let path = deep.join(format!("{}.txt", "a".repeat(200)));
+
+        write(&path, b"body").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(fs::read(&path).unwrap(), b"body");
     }
 }

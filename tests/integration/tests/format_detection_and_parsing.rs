@@ -296,9 +296,12 @@ fn an_empty_document_is_plain_text_and_offends_nobody() {
 /// `bp-data` cannot parse at all.
 ///
 /// Not a failure -- neither crate promises them -- but a trap with a name.
-/// `Profile::is_data` documents itself as "whether the Data menu's operations
-/// apply", and it answers yes for both of these. The first caller to use it
-/// to enable a menu gets a menu whose every item fails.
+/// `Profile::is_data` used to document itself as "whether the Data menu's
+/// operations apply", and it answers yes for both of these, so the first
+/// caller to use it to enable a menu would have got a menu whose every item
+/// fails. Its doc now says it answers a question about shape and names where
+/// the Data menu is really decided; this list keeps the two formats that make
+/// the difference visible.
 #[test]
 fn formats_bp_data_cannot_parse_are_named_here() {
     for format in [Format::Ini, Format::Xml] {

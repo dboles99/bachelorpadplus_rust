@@ -54,7 +54,7 @@ pub struct Heading {
 pub fn suggest_title(text: &str) -> Option<String> {
     let from_heading = outline(text).into_iter().next().map(|h| h.text);
     let candidate = from_heading.or_else(|| {
-        text.lines()
+        lines(text)
             .map(str::trim)
             .find(|l| !l.is_empty())
             .map(clean_line)
@@ -62,6 +62,33 @@ pub fn suggest_title(text: &str) -> Option<String> {
 
     let title = tidy(&candidate);
     (!title.is_empty()).then_some(title)
+}
+
+/// The lines of `text` without their breaks, on the editor's rule (decision
+/// D6): a line ends at LF, CRLF or a bare CR, and nothing else. Shaped like
+/// `str::lines`, which does not end a line at a bare CR: nothing for the
+/// empty line after a trailing break, and nothing at all for empty text.
+///
+/// `bp-buffer` holds the rule; this crate does not depend on it, so it is
+/// restated here and `tests/integration` holds the two to it. It is what
+/// keeps a heading's line number the one the gutter shows.
+fn lines(text: &str) -> impl Iterator<Item = &str> {
+    let mut rest = Some(text).filter(|t| !t.is_empty());
+    std::iter::from_fn(move || {
+        let current = rest?;
+        let Some(end) = current.find(['\n', '\r']) else {
+            rest = None;
+            return Some(current);
+        };
+        // Both break bytes are ASCII, so every cut is a character boundary.
+        let len = if current[end..].starts_with("\r\n") {
+            2
+        } else {
+            1
+        };
+        rest = Some(&current[end + len..]).filter(|r| !r.is_empty());
+        Some(&current[..end])
+    })
 }
 
 /// Strip the punctuation and markup that decorate a line but do not describe
@@ -100,27 +127,149 @@ fn tidy(text: &str) -> String {
 ///
 /// ATX style (`#`) only; setext underlining is ambiguous with horizontal
 /// rules and prose, and guessing wrong puts nonsense in the outline.
+///
+/// Code is not prose: a `# setup` comment inside a fenced block, or in a
+/// block indented as code, is a line of Python or shell, and listing it
+/// beside the real headings makes the outline lie about the document. The
+/// rules follow CommonMark closely enough to be right in practice -- see
+/// `Fence` and `block_indent` -- without pulling in a Markdown parser
+/// for the sake of one list.
 pub fn outline(text: &str) -> Vec<Heading> {
-    text.lines()
-        .enumerate()
-        .filter_map(|(index, raw)| {
-            let line = raw.trim_start();
-            if !line.starts_with('#') {
-                return None;
+    let mut open: Option<Fence> = None;
+    let mut headings = Vec::new();
+
+    // Enumerating every line, including the ones skipped, is what keeps
+    // `Heading::line` the line the user sees in the gutter.
+    for (index, raw) in lines(text).enumerate() {
+        // Four columns in is indented code outside a fence, and cannot be a
+        // closing fence inside one, so either way it is nothing to us.
+        let Some(line) = block_indent(raw) else {
+            continue;
+        };
+
+        if let Some(fence) = open {
+            if fence.is_closed_by(line) {
+                open = None;
             }
-            let level = line.chars().take_while(|c| *c == '#').count();
-            if level > 6 {
-                return None;
+            continue;
+        }
+        if let Some(fence) = Fence::opened_by(line) {
+            open = Some(fence);
+            continue;
+        }
+        if let Some(heading) = atx_heading(line, index + 1) {
+            headings.push(heading);
+        }
+    }
+    // A fence still open here simply ran to the end of the document, which
+    // is what CommonMark says an unclosed fence does: nothing after it was
+    // ever a heading.
+    headings
+}
+
+/// An open fenced code block: the character that opened it and how many.
+///
+/// Both matter for closing it. A fence is closed only by a run of the *same*
+/// character at least as long as the opener, which is exactly what lets a
+/// document show a three-backtick example inside a four-backtick block --
+/// the inner ``` is content, not the end.
+#[derive(Debug, Clone, Copy)]
+struct Fence {
+    marker: u8,
+    len: usize,
+}
+
+/// The shortest run of backticks or tildes that opens a fence.
+const MIN_FENCE: usize = 3;
+
+impl Fence {
+    /// The fence `line` opens, if it opens one.
+    ///
+    /// `line` has already had its (at most three columns of) indentation
+    /// removed by `block_indent`.
+    fn opened_by(line: &str) -> Option<Self> {
+        let marker = *line.as_bytes().first()?;
+        if marker != b'`' && marker != b'~' {
+            return None;
+        }
+        let len = marker_run(line, marker);
+        if len < MIN_FENCE {
+            return None;
+        }
+        // A backtick in the info string means this is inline code that
+        // happens to start a line (```a` b```), not a fence. Tilde fences
+        // have no such restriction.
+        let info = line.get(len..).unwrap_or_default();
+        if marker == b'`' && info.contains('`') {
+            return None;
+        }
+        Some(Self { marker, len })
+    }
+
+    /// Whether `line` closes this fence: the same character, at least as
+    /// many of it, and nothing after but spaces or tabs.
+    fn is_closed_by(self, line: &str) -> bool {
+        let len = marker_run(line, self.marker);
+        len >= self.len
+            && line
+                .get(len..)
+                .is_some_and(|rest| rest.trim_matches([' ', '\t']).is_empty())
+    }
+}
+
+/// How many times `marker` repeats at the start of `line`.
+fn marker_run(line: &str, marker: u8) -> usize {
+    line.bytes().take_while(|b| *b == marker).count()
+}
+
+/// `line` without its indentation, or `None` if it is indented four columns
+/// or more.
+///
+/// CommonMark allows a heading or a fence up to three spaces of indentation;
+/// at four the line is an indented code block (or the continuation of a
+/// paragraph), and neither is a heading. A tab advances to the next multiple
+/// of four, as CommonMark counts it, so a single leading tab is already
+/// code. The one case this gets wrong is a heading nested inside a list
+/// item, which CommonMark measures from the item's content rather than the
+/// margin; that is rare in notes, whereas `    # comment` in pasted code is
+/// not.
+fn block_indent(line: &str) -> Option<&str> {
+    const CODE_INDENT: usize = 4;
+    let mut column = 0;
+    for (offset, c) in line.char_indices() {
+        match c {
+            ' ' => column += 1,
+            '\t' => column = (column / CODE_INDENT + 1) * CODE_INDENT,
+            _ => {
+                return (column < CODE_INDENT).then(|| line.get(offset..)).flatten();
             }
-            // A heading needs a space after its hashes; `#hashtag` is not one.
-            let rest = line[level..].strip_prefix(' ')?.trim();
-            (!rest.is_empty()).then(|| Heading {
-                level,
-                text: rest.trim_end_matches('#').trim().to_owned(),
-                line: index + 1,
-            })
-        })
-        .collect()
+        }
+        if column >= CODE_INDENT {
+            return None;
+        }
+    }
+    // Blank or whitespace-only: nothing to outline, but nothing that ends
+    // or opens a fence either.
+    Some("")
+}
+
+/// The ATX heading on `line`, which has already had its indentation
+/// removed.
+fn atx_heading(line: &str, number: usize) -> Option<Heading> {
+    if !line.starts_with('#') {
+        return None;
+    }
+    let level = marker_run(line, b'#');
+    if level > 6 {
+        return None;
+    }
+    // A heading needs a space after its hashes; `#hashtag` is not one.
+    let rest = line.get(level..)?.strip_prefix(' ')?.trim();
+    (!rest.is_empty()).then(|| Heading {
+        level,
+        text: rest.trim_end_matches('#').trim().to_owned(),
+        line: number,
+    })
 }
 
 /// The most frequent meaningful words, most common first.
@@ -158,7 +307,7 @@ pub fn keywords(text: &str, limit: usize) -> Vec<String> {
 /// produces a summary that reads like a fault.
 pub fn summary(text: &str, max_chars: usize) -> String {
     let mut paragraph = String::new();
-    for line in text.lines() {
+    for line in lines(text) {
         let trimmed = line.trim();
         // Skip headings, so the summary is the prose under the title rather
         // than the title again.
@@ -238,14 +387,18 @@ pub fn statistics(text: &str) -> Statistics {
     let mut line_has_content = false;
     let mut in_paragraph = false;
 
-    for c in text.chars() {
-        // `\r` is line-ending encoding, not content: dropping it here
-        // unconditionally (not only as half of "\r\n") means the remaining
-        // character stream for a CRLF document is identical to its LF
-        // equivalent, so every field below agrees between the two, not
-        // just the line count.
+    let mut stream = text.chars().peekable();
+    while let Some(mut c) = stream.next() {
+        // `\r` is line-ending encoding, not content. Half of a CRLF is
+        // dropped, and a bare one is a line break in its own right (decision
+        // D6) and read as `\n`, so the character stream for a CRLF or a
+        // classic Mac document is identical to its LF equivalent and every
+        // field below agrees between them, not just the line count.
         if c == '\r' {
-            continue;
+            if stream.peek() == Some(&'\n') {
+                continue;
+            }
+            c = '\n';
         }
 
         characters += 1;
@@ -419,6 +572,134 @@ mod tests {
         assert_eq!(outline("###### six is fine").len(), 1);
     }
 
+    /// The text and line of every heading, which is what a fence test cares
+    /// about.
+    fn texts_and_lines(text: &str) -> Vec<(String, usize)> {
+        outline(text)
+            .into_iter()
+            .map(|h| (h.text, h.line))
+            .collect()
+    }
+
+    #[test]
+    fn a_comment_inside_a_backtick_fence_is_not_a_heading() {
+        let text = "# Setup\n\n```python\n# setup\nimport os\n```\n\n## Usage\n";
+        assert_eq!(
+            texts_and_lines(text),
+            vec![("Setup".to_owned(), 1), ("Usage".to_owned(), 8)],
+            "the Python comment on line 4 is code, not an outline entry"
+        );
+    }
+
+    #[test]
+    fn a_tilde_fence_hides_its_contents_too() {
+        let text = "~~~sh\n# install\n~~~\n# After\n";
+        assert_eq!(texts_and_lines(text), vec![("After".to_owned(), 4)]);
+    }
+
+    #[test]
+    fn a_heading_right_after_a_closing_fence_is_found() {
+        let text = "```\ncode\n```\n# Straight After\n";
+        assert_eq!(
+            texts_and_lines(text),
+            vec![("Straight After".to_owned(), 4)],
+            "the fence closed on line 3, so line 4 is prose again"
+        );
+    }
+
+    #[test]
+    fn a_shorter_fence_inside_a_longer_one_does_not_close_it() {
+        // The usual way to show a fenced example inside a fenced example.
+        let text = "````md\n```\n# inner example\n```\n# still inside\n````\n# Out\n";
+        assert_eq!(
+            texts_and_lines(text),
+            vec![("Out".to_owned(), 7)],
+            "only four or more backticks close a four-backtick fence"
+        );
+    }
+
+    #[test]
+    fn a_longer_closing_fence_still_closes() {
+        let text = "```\n# code\n`````\n# Heading\n";
+        assert_eq!(texts_and_lines(text), vec![("Heading".to_owned(), 4)]);
+    }
+
+    #[test]
+    fn a_fence_is_closed_only_by_its_own_character() {
+        let text = "```\n~~~\n# still code\n```\n~~~\n# code again\n~~~\n# Done\n";
+        assert_eq!(
+            texts_and_lines(text),
+            vec![("Done".to_owned(), 8)],
+            "tildes inside a backtick fence are content, and vice versa"
+        );
+    }
+
+    #[test]
+    fn a_closing_fence_carries_nothing_but_whitespace() {
+        // "``` not a close" has text after it, so the block is still open.
+        let text = "```\n``` not a close\n# code\n```  \n# Heading\n";
+        assert_eq!(texts_and_lines(text), vec![("Heading".to_owned(), 5)]);
+    }
+
+    #[test]
+    fn an_unclosed_fence_runs_to_the_end_of_the_document() {
+        let text = "# Before\n```\n# not a heading\n\n# nor this\n";
+        assert_eq!(texts_and_lines(text), vec![("Before".to_owned(), 1)]);
+    }
+
+    #[test]
+    fn two_backticks_do_not_open_a_fence() {
+        let text = "``\n# Heading\n";
+        assert_eq!(texts_and_lines(text), vec![("Heading".to_owned(), 2)]);
+    }
+
+    #[test]
+    fn a_backtick_in_the_info_string_is_inline_code_not_a_fence() {
+        // CommonMark: ```a` b``` is a code span, so nothing was opened.
+        let text = "```a` b```\n# Heading\n";
+        assert_eq!(texts_and_lines(text), vec![("Heading".to_owned(), 2)]);
+    }
+
+    #[test]
+    fn fences_and_headings_may_be_indented_up_to_three_spaces() {
+        let text = "   ```\n# code\n   ```\n   # Indented Heading\n";
+        assert_eq!(
+            texts_and_lines(text),
+            vec![("Indented Heading".to_owned(), 4)]
+        );
+    }
+
+    #[test]
+    fn four_columns_of_indentation_is_code_not_a_heading() {
+        assert!(outline("    # a comment in indented code").is_empty());
+        assert!(
+            outline("\t# a tab is four columns").is_empty(),
+            "a leading tab reaches column four on its own"
+        );
+        assert_eq!(outline("   # three spaces is still a heading").len(), 1);
+    }
+
+    #[test]
+    fn an_indented_fence_marker_does_not_close_the_fence() {
+        // Four spaces in, the backticks are content of the open block.
+        let text = "```\n    ```\n# still code\n```\n# Heading\n";
+        assert_eq!(texts_and_lines(text), vec![("Heading".to_owned(), 5)]);
+    }
+
+    #[test]
+    fn crlf_fences_are_recognised() {
+        let text = "```\r\n# code\r\n```\r\n# Heading\r\n";
+        assert_eq!(texts_and_lines(text), vec![("Heading".to_owned(), 4)]);
+    }
+
+    #[test]
+    fn a_fenced_comment_is_not_offered_as_the_title() {
+        // The outline feeds the suggested title, so the bug surfaced there
+        // too: a note that opens with code would be named after a comment.
+        let text = "```python\n# setup\n```\n# Real Title\n";
+        assert_eq!(suggest_title(text).as_deref(), Some("Real Title"));
+    }
+
     #[test]
     fn keywords_rank_by_frequency_and_skip_noise() {
         let text = "rust rust rust the the the editor editor migration 2026 2026 2026";
@@ -535,6 +816,30 @@ mod tests {
         // empty line, and the gutter has to number it.
         let stats = statistics("a\n");
         assert_eq!(stats.lines, 2, "str::lines() says 1, and is wrong here");
+    }
+
+    #[test]
+    fn bare_cr_documents_count_the_same_as_their_lf_equivalent() {
+        // Decision D6: a bare CR is a line break, so a classic Mac file is
+        // the same document as its LF form in every count.
+        let lf = "# Title\n\nOne para.\nStill it.\n\nTwo\n";
+        let cr = lf.replace('\n', "\r");
+        assert_eq!(statistics(lf), statistics(&cr));
+        assert_eq!(statistics(&cr).lines, 7);
+        // And a form feed or U+2028 is not a break.
+        assert_eq!(statistics("a\x0Cb\u{2028}c").lines, 1);
+    }
+
+    #[test]
+    fn an_outline_numbers_headings_on_the_editors_line_rule() {
+        let text = "intro\r\x0Cstill intro\r\n# Heading\r";
+        let headings = outline(text);
+        assert_eq!(headings.len(), 1);
+        assert_eq!(headings[0].line, 3);
+        assert_eq!(
+            suggest_title("\r\rTitle here\rbody").as_deref(),
+            Some("Title here")
+        );
     }
 
     #[test]

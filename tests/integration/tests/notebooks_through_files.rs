@@ -254,11 +254,17 @@ fn what_the_format_cannot_carry_is_lost_with_a_warning_and_not_silently() {
         )),
         "an output on a non-code cell was dropped without saying so: {warnings:?}"
     );
-    // Cell 3 -- code explicitly tagged by another tool as a language we
-    // cannot name -- is deliberately *not* asserted here. It produces no
-    // warning at all, which is the defect pinned by
-    // `an_unnameable_language_is_silently_replaced_by_the_notebooks_kernel`
-    // at the bottom of this file.
+    // Cell 3 is code another tool tagged as a language we cannot name. This
+    // used to produce no warning at all -- it was quietly given the kernel's
+    // language -- and is pinned in detail by
+    // `an_unnameable_language_is_not_replaced_by_the_notebooks_kernel` at the
+    // bottom of this file.
+    assert!(
+        warnings
+            .iter()
+            .any(|w| matches!(w, ImportWarning::UnknownCodeLanguage { cell_index: 3 })),
+        "code in a language we cannot name was reclassified without saying so: {warnings:?}"
+    );
 
     let notebook = import.into_notebook();
 
@@ -396,25 +402,17 @@ fn importing_a_notebook_from_disk_produces_nothing_runnable_without_a_gesture() 
     assert!(!CellKind::Raw.is_executable());
 }
 
+/// A cell that names a language we cannot map keeps that refusal even when
+/// the notebook names a kernel.
+///
+/// This was a defect, found by this file: `infer_kind` computed
+/// `stated.or(notebook_language)`, which conflated a cell that said *nothing*
+/// about its language (the kernel's is right) with one that said something we
+/// could not map (the kernel's is a guess). ADR-0025's promise -- such a cell
+/// becomes `Raw`, with a warning, and is never run -- held only for notebooks
+/// with no kernelspec, which almost no real `.ipynb` is.
 #[test]
-#[ignore = "DEFECT: bp-notebook silently replaces a cell language it cannot name with the \
-            notebook's kernel language, and offers the cell to a runner. ipynb.rs \
-            infer_kind computes `stated.or(notebook_language)`, which conflates two \
-            different facts: a cell that said NOTHING about its language (falling back to \
-            the kernel is right) and a cell that said something we could not map \
-            (falling back is a guess). No ImportWarning distinguishes them, so a cell \
-            another tool tagged as, say, brainfuck is imported as Python and becomes \
-            runnable, with the user told nothing. ADR-0025 states the opposite outcome in \
-            as many words -- 'a code cell in a language we cannot name ... becomes \
-            CellKind::Raw and an ImportWarning::UnknownCodeLanguage says so ... Raw is \
-            the kind that is carried verbatim and never run' -- and that only holds for \
-            notebooks with no kernelspec, which almost no real .ipynb is. \
-            CellKind::from_language_name's own doc gives the reason it matters: guessing \
-            wrong 'means offering to run someone's text through the wrong interpreter'. \
-            Fix belongs in ipynb.rs infer_kind: an unmappable explicit language tag \
-            should warn and fall to Raw rather than fall through to the kernel. Left red \
-            rather than weakened."]
-fn an_unnameable_language_is_silently_replaced_by_the_notebooks_kernel() {
+fn an_unnameable_language_is_not_replaced_by_the_notebooks_kernel() {
     // The control first: with no kernelspec, the documented behaviour holds
     // exactly. This is what makes the failure below a disagreement about the
     // kernelspec fallback rather than a claim that the warning never fires.

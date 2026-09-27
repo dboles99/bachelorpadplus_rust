@@ -65,6 +65,11 @@ pub struct Palette {
     pub accent: Rgb,
 }
 
+/// What `config.toml` says for "follow the desktop's light or dark
+/// preference" -- the View menu's System row. A name rather than a fifth
+/// [`ThemeId`], for the reason [`ThemeId::for_system`] gives.
+pub const SYSTEM_THEME_NAME: &str = "System";
+
 /// Which built-in theme.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ThemeId {

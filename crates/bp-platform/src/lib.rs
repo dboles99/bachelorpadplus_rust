@@ -32,18 +32,22 @@
 //! * [`editor`] -- default-editor registration under ADR-0012: which file
 //!   types we would register for, what the current association actually is,
 //!   and the artefacts registration needs (a `.desktop` entry and a MIME
-//!   package on Linux, an `HKCU\Software\Classes` shape on Windows).
+//!   package on Linux, an `HKCU\Software\Classes` shape on Windows). It is
+//!   also the single source of the static files in `packaging/linux/` and
+//!   of the generated blocks of the Windows installer
+//!   ([`editor::inno`]).
 //!
 //! ## The line this crate draws
 //!
 //! **Reading state and generating artefacts is decision-free. Changing the
 //! user's machine is not.** Every function that answers a question or builds
 //! a file is pure or nearly so, always available, and needs no permission.
-//! The single function that writes anything into a location the desktop
-//! environment reads -- [`editor::install`] -- takes an explicit
-//! [`Consent`](editor::Consent) value and an explicit destination root, and
-//! refuses without both. It is the only item in this crate that can change
-//! what happens when the user double-clicks a file.
+//! The two functions that change anything in a location the desktop
+//! environment reads -- [`editor::install`] and its inverse
+//! [`editor::uninstall`] -- each take an explicit
+//! [`Consent`](editor::Consent) value and an explicit root, and refuse
+//! without both. They are the only items in this crate that can change what
+//! happens when the user double-clicks a file.
 //!
 //! ## What is deliberately not here
 //!
@@ -62,9 +66,11 @@
 //! why" rather than a silent absence.
 //!
 //! **Anything that runs a program.** Registration on Linux is only complete
-//! once `update-desktop-database` and `update-mime-database` have run, and on
-//! Windows the user has to visit Default Apps. This crate names those steps
-//! ([`editor::FollowUp`], [`editor::Handoff`]) and executes none of them: a
+//! once `update-desktop-database`, `update-mime-database` and `xdg-mime
+//! default` have run, and on Windows the user has to visit Default Apps. This
+//! crate names those steps as data ([`editor::FollowUp`],
+//! [`editor::LinuxPlan::commands`], [`editor::Handoff`]) and executes none of
+//! them; the shell runs them once the user has agreed to those exact lines. A
 //! library that spawns processes on the user's behalf is a library that can
 //! be talked into spawning a different one.
 
@@ -87,7 +93,28 @@ pub const CRATE_NAME: &str = "bp-platform";
 /// One constant rather than a literal per call site, because the string
 /// appears in a config path, a data path, a cache path and a registry key,
 /// and four spellings of it is four half-migrated installs.
+///
+/// Deliberately *not* the application id. ADR-0032 moved the id to
+/// reverse-DNS and left this alone: it is a path, not an identity, and
+/// changing it would move every user's settings and recovery journal for no
+/// benefit to anyone.
 pub const APP_DIR: &str = "bachelorpad";
+
+/// The application id (ADR-0032, plan decision 4).
+///
+/// The product's identity on a Linux desktop: the `.desktop` file is named
+/// after it, so every `mimeapps.list` refers to the product by it, and the
+/// MIME package, the icon and the AppStream component share it. Reverse-DNS
+/// and without the `+`, which a desktop-file id may not contain. **Changing
+/// it after anyone has installed the product orphans every association they
+/// made**, which is why it is a constant with a decision record behind it
+/// rather than something derived from the display name.
+///
+/// Windows does not use it: the ProgIDs and the Capabilities key have their
+/// own names (`editor::windows`), and the `.reg` script is named after
+/// [`APP_DIR`] so the file a Windows user saves is the same file it always
+/// was.
+pub const APP_ID: &str = "io.github.dboles99.BachelorPad";
 
 /// One of the two operating systems ADR-0001 names, as a *value*.
 ///

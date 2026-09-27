@@ -23,19 +23,20 @@ use std::ops::Range;
 
 use ropey::Rope;
 
+pub mod breaks;
 pub mod large;
 pub mod line_index;
 pub mod stream;
 
 pub use large::{
-    Access, CHUNK_BYTES, DisplayLine, HUGE_FILE_BYTES, INDEX_BUDGET_BYTES, IndexProgress,
-    LARGE_FILE_BYTES, LargeFile, LargeFileError, MAX_DISPLAY_BYTES, MAX_DISPLAY_LINE_BYTES,
-    MAX_DISPLAY_LINES, SizeClass,
+    Access, CHUNK_BYTES, DisplayLine, HUGE_FILE_BYTES, INDEX_BUDGET_BYTES, INVALID_BYTE_DISPLAY,
+    IndexProgress, LARGE_FILE_BYTES, LargeFile, LargeFileError, MAX_DISPLAY_BYTES,
+    MAX_DISPLAY_LINE_BYTES, MAX_DISPLAY_LINES, SizeClass,
 };
 pub use line_index::{LineIndex, LineLocation, MAX_ANCHORS, MAX_INDEX_HEAP_BYTES};
 pub use stream::{
-    DEFAULT_OVERLAP_BYTES, DEFAULT_WINDOW_BYTES, MAX_OVERLAP_BYTES, MIN_WINDOW_BYTES, StreamWindow,
-    WindowReader,
+    DEFAULT_OVERLAP_BYTES, DEFAULT_WINDOW_BYTES, INVALID_BYTE_SEARCHED, MAX_OVERLAP_BYTES,
+    MIN_WINDOW_BYTES, StreamWindow, WindowReader,
 };
 
 /// Crate identity used by workspace smoke tests and diagnostics.
@@ -45,12 +46,13 @@ pub const CRATE_NAME: &str = "bp-buffer";
 ///
 /// `"a\n"` is **two** lines: the caret can sit on the second one and the
 /// gutter has to number it. `str::lines()` reports one, which is right for
-/// iterating content and wrong for displaying a document.
+/// iterating content and wrong for displaying a document. A line ends at LF,
+/// CRLF or a bare CR ([`breaks`]), exactly as in [`Buffer`].
 ///
 /// A free function so callers that only need the count -- the gutter, on
 /// every keystroke -- get it without building a rope.
 pub fn line_count(text: &str) -> usize {
-    text.bytes().filter(|b| *b == b'\n').count() + 1
+    breaks::count(text.as_bytes()) + 1
 }
 
 /// A 1-based line and column, as displayed to the user.
@@ -127,6 +129,22 @@ impl Buffer {
         self.rope.len_bytes()
     }
 
+    /// The character index of UTF-8 byte offset `byte`: the character that
+    /// contains it, so an offset inside a multi-byte character lands on that
+    /// character's start. Past the end is the end.
+    ///
+    /// The bridge between `TextInput`, whose caret and selection are byte
+    /// offsets, and everything in this workspace, which counts characters.
+    pub fn byte_to_char(&self, byte: usize) -> usize {
+        self.rope.byte_to_char(byte.min(self.rope.len_bytes()))
+    }
+
+    /// The UTF-8 byte offset at which character `char_idx` starts. Past the
+    /// end is the end.
+    pub fn char_to_byte(&self, char_idx: usize) -> usize {
+        self.rope.char_to_byte(char_idx.min(self.rope.len_chars()))
+    }
+
     pub fn is_empty(&self) -> bool {
         self.rope.len_chars() == 0
     }
@@ -136,6 +154,10 @@ impl Buffer {
     /// This differs from `str::lines()`, which reports `"a\n"` as one line.
     /// An editor must report two: the caret can sit on that second line, and
     /// the gutter has to number it.
+    ///
+    /// A line ends at LF, CRLF or a bare CR, and nothing else (decision D6,
+    /// [`breaks`]); the rope is built with `ropey`'s `cr_lines` for exactly
+    /// that set.
     pub fn len_lines(&self) -> usize {
         self.rope.len_lines()
     }
@@ -217,16 +239,9 @@ impl Buffer {
             return 0;
         }
         let slice = self.rope.line(line_idx);
-        let mut len = slice.len_chars();
-        // Strip the line break, CRLF or LF.
         let text = slice.to_string();
-        if text.ends_with('\n') {
-            len -= 1;
-            if text.ends_with("\r\n") {
-                len -= 1;
-            }
-        }
-        len
+        // A break is ASCII, so its bytes are its characters.
+        slice.len_chars() - (text.len() - breaks::strip(&text).len())
     }
 
     /// Character index at which `line_idx` starts.
@@ -251,6 +266,26 @@ impl From<&str> for Buffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn byte_and_character_offsets_convert_both_ways_across_multibyte_text() {
+        let buffer = Buffer::from_text("aé€😀b");
+        // a=1 byte, é=2, €=3, 😀=4.
+        let starts = [(0, 0), (1, 1), (3, 2), (6, 3), (10, 4), (11, 5)];
+        for (byte, char_idx) in starts {
+            assert_eq!(buffer.byte_to_char(byte), char_idx, "byte {byte}");
+            assert_eq!(buffer.char_to_byte(char_idx), byte, "char {char_idx}");
+        }
+    }
+
+    #[test]
+    fn an_offset_inside_a_character_or_past_the_end_is_clamped() {
+        let buffer = Buffer::from_text("é€");
+        assert_eq!(buffer.byte_to_char(1), 0, "inside é");
+        assert_eq!(buffer.byte_to_char(4), 1, "inside €");
+        assert_eq!(buffer.byte_to_char(99), 2);
+        assert_eq!(buffer.char_to_byte(99), 5);
+    }
 
     #[test]
     fn an_empty_buffer_has_one_line() {
@@ -377,6 +412,11 @@ mod tests {
             "\n\n\n",
             "line\r\nline\r\n",
             "日本\n語",
+            "classic\rmac\r",
+            "mixed\r\nendings\rand\nall",
+            "a\r\r\nb",
+            "form\x0Cfeed",
+            "line\u{2028}separator",
         ] {
             assert_eq!(
                 line_count(text),
@@ -384,6 +424,37 @@ mod tests {
                 "disagreement on {text:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_line_ends_at_lf_crlf_or_a_bare_cr_and_nothing_else() {
+        // Decision D6, the Notepad rule. A CRLF is one break, not two.
+        let b = Buffer::from_text("one\rtwo\r\nthree\nfour");
+        assert_eq!(b.len_lines(), 4);
+        assert_eq!(b.position_of(4), Position::new(2, 1), "after the bare CR");
+        assert_eq!(b.line_len_chars(0), 3, "the CR is not content");
+        assert_eq!(b.line_len_chars(1), 3, "nor is the CRLF");
+        assert_eq!(b.line(1), "two\r\n");
+
+        for (text, what) in [
+            ("a\x0Bb", "a vertical tab"),
+            ("a\x0Cb", "a form feed"),
+            ("a\u{0085}b", "U+0085 NEXT LINE"),
+            ("a\u{2028}b", "U+2028 LINE SEPARATOR"),
+            ("a\u{2029}b", "U+2029 PARAGRAPH SEPARATOR"),
+        ] {
+            let b = Buffer::from_text(text);
+            assert_eq!(b.len_lines(), 1, "{what} started a new line");
+            assert_eq!(b.line_len_chars(0), 3, "{what} is content");
+        }
+    }
+
+    #[test]
+    fn a_trailing_bare_cr_creates_a_line_as_a_trailing_lf_does() {
+        let b = Buffer::from_text("a\r");
+        assert_eq!(b.len_lines(), 2);
+        assert_eq!(line_count("a\r"), 2);
+        assert_eq!(b.position_of(2), Position::new(2, 1));
     }
 
     #[test]

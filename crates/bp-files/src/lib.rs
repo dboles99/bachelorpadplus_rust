@@ -14,7 +14,11 @@
 //! `load` and [`encode`] are a pair, and the property that makes the pair
 //! worth having is that they are inverses: writing a document's text back
 //! under its own encoding and reading it again returns the same text, the
-//! same encoding and the same line endings. Keeping the encoder in the shell
+//! same encoding and the same line endings. The encodings are UTF-8 (with
+//! or without a mark), UTF-16 in both byte orders, and Windows-1252 as the
+//! fallback for a file that is none of those; [`try_encode`] is the save
+//! path for the last, because it is the one encoding that cannot hold every
+//! character. Keeping the encoder in the shell
 //! -- which is where it started -- meant that property could not be stated by
 //! any test that did not open a window.
 
@@ -26,8 +30,8 @@ mod save;
 mod utf16;
 mod watch;
 
-pub use encode::{LineEndingPolicy, LineEndingSurvey, encode};
-pub use load::{LoadError, LoadedFile, load};
+pub use encode::{EncodeError, LineEndingPolicy, LineEndingSurvey, encode, try_encode};
+pub use load::{EDITABLE_LIMIT_BYTES, LoadError, LoadedFile, load, load_with_limit};
 pub use save::{Overwrite, SaveError, SaveOptions, SaveOutcome, atomic_write, resolve_in_dir};
 pub use watch::{DiskState, FileStamp, check};
 

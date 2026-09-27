@@ -1,220 +1,195 @@
 # BachelorPad+
 
-**BachelorPad+** is a Rust-native semantic text-processing appliance for **Windows 10, Windows 11, and Linux**.
+**Notepad when you want it. More when you need it.**
 
-It begins as a fast Notepad-like editor and progressively adds:
+BachelorPad+ is a plain-text editor for **Windows 10, Windows 11 and Linux**,
+written in Rust. It opens, edits and saves text files the way Notepad does,
+and adds what people who live in text files tend to want next: tabs, find and
+replace across a folder, tools for JSON, YAML, TOML and CSV, a clipboard
+history, crash recovery, and local security features such as encrypted
+documents, per-document security profiles, secret scanning and signatures.
 
-- semantic filenames using `Title_DDMMMYYYY.ext`
-- full-path and last-save visibility
-- rope-based editing and huge-file / memory-mapped modes
-- Markdown, YAML, JSON, JSONL/NDJSON, TOML, CSV/TSV, XML and source-code awareness
-- semantic organization, related notes, duplicate detection and hybrid search
-- Jupyter-compatible notebook behavior and mixed-language execution
-- clipboard history and format-aware paste operations
-- Light, Dark, Organic and Green themes
-- strong local security, encrypted `.bpadx` notes, secure recovery, privacy profiles and secret scanning
-- Windows/Linux default-editor integration
-- original retro-futurist "text appliance" branding
+Everything happens on your machine. **Version 1 contains no network code:
+nothing you type or open is sent anywhere.**
 
-The product philosophy is:
+It is pre-release software. The first release candidate (1.0.0-rc.1) is
+being prepared; read [Known gaps](#known-gaps) before you rely on it.
 
-> **Notepad when you want it. More when you need it.**
+- [User guide](docs/user/GUIDE.md): how to do things, task by task
+- [CHANGELOG.md](CHANGELOG.md): what has changed
+- [SECURITY.md](SECURITY.md): what the security features do and do not
+  protect, and how to report a vulnerability
+- [CONTRIBUTING.md](CONTRIBUTING.md): building from source, the test gate,
+  and the project's records
 
-## Install the repository scaffold
+## Install
 
-1. Put the release ZIP and `Install-BachelorPadPlusRepo.ps1` in your Windows Downloads folder.
-2. Open PowerShell 7.
-3. Run:
+Packages arrive with the first release candidate. They will be published on
+the project's [GitHub releases page](https://github.com/dboles99/bachelorpadplus_rust/releases):
 
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\Install-BachelorPadPlusRepo.ps1
-```
-
-Default destination:
-
-```text
-G:\dev2\bachelorpadplus_rust
-```
-
-The installer is conservative: it will not silently overwrite an existing repository. It creates a timestamped backup if you explicitly use `-BackupExisting`.
-
-## Development
-
-```powershell
-./scripts/Install-GitHooks.ps1   # once per clone
-./scripts/Invoke-LocalCI.ps1     # format, check, clippy, test
-```
-
-This project has **no hosted CI**. `scripts/Invoke-LocalCI.ps1` is the
-authoritative gate and runs from `pre-commit` and `pre-push`. See
-[docs/governance/LOCAL_CI.md](docs/governance/LOCAL_CI.md) and ADR-0016.
-
-```powershell
-cargo run --release            # the app
-cargo run --release -- --editor-view   # with the custom editor view (ADR-0018)
-./scripts/Measure-Startup.ps1  # startup and idle memory vs specs.md §22
-```
-
-## Current state (2026-08-20)
-
-**24 crates, 1,649 tests, green on Windows and Linux.** The app opens, edits and
-saves atomically, and does rather more than that:
-
-| Area | What works |
+| System | Packages |
 | --- | --- |
-| Editing | Tabs, four themes plus Follow System, zoom, indentation (tabs or soft tabs, 2/4/8), honest save state, atomic save, undo/cut/copy/paste, sort / deduplicate / reverse / trim lines, duplicate and move lines, go to line |
-| Storage | A rope buffer holds every document; whole-document operations are one undo step |
-| Safety | Unsaved-changes prompts, external-change detection, crash recovery journal — encrypted and recovered at unlock for encrypted documents ([ADR-0022](docs/decisions/ADR-0022.md)) |
-| Files | Open/Save/Save As/Save All/Save a Copy/Reload, recent files, tab context menu, command-line file opening. UTF-8, UTF-8 with BOM and **UTF-16 LE/BE** all load and save; a truncated or malformed UTF-16 file is refused by name rather than repaired with replacement characters |
-| Search | Find and replace with case-sensitive, whole-word and regex toggles, changes shown before they are applied, recursive cross-file search |
-| Data | JSON / JSONL / TOML / **YAML** validate, format, minify, convert; RFC 4180 CSV/TSV shape report, conversion to JSON and JSON Lines, column types. YAML refuses deep nesting, alias bombs and duplicate keys in words that say what to do ([ADR-0023](docs/decisions/ADR-0023.md)) |
-| Semantic | Title, keywords, summary and outline extracted from the document; document statistics; date and time insertion |
-| Clipboard | History with kind detection, paste from history, format-aware paste transformations |
-| Metadata | A SQLite store with migrations — built and tested, not yet wired in ([ADR-0019](docs/decisions/ADR-0019.md)) |
-| Encryption | `.bpadx` documents — Security ▸ Encrypt Document, unlock on open, and saves stay encrypted. Argon2id, XChaCha20-Poly1305 or AES-256-GCM, chunked with position authenticated ([ADR-0021](docs/decisions/ADR-0021.md)) |
-| Security | Per-document profiles (Standard / Private / Confidential / Maximum) governing the recovery journal, clipboard history and metadata store ([ADR-0020](docs/decisions/ADR-0020.md)) |
-| Security (phase 16) | Privacy Mode, a session override that can only tighten; Scan for Secrets, which reports where a credential is and never what it is; Redact Found Secrets, as an undoable edit with a consent step; Inspect Metadata; Hash Document; Verify Signature; Security History, which every row above it writes into (ADR-0024). Signing is greyed with the reason on the row — there is nowhere to keep a key yet |
+| Windows 10, Windows 11 | A per-user installer (no administrator rights needed), and a portable zip |
+| Linux | `.deb` (Debian, Ubuntu), `.rpm` (Fedora), a `.tar.gz`, and an Arch `PKGBUILD` |
 
-Startup, with the software renderer ([ADR-0017](docs/decisions/ADR-0017.md)):
-**35.7 ms to window, 21.9 MB idle**, against targets of 150 ms and 50 MB.
-Idle memory rose ~2.7 MB this session; `std-widgets` is imported now, for the
-one thing that reports the desktop's light/dark preference.
+AppImage and Flatpak builds may follow later. Until the packages exist,
+**build from source**: see [CONTRIBUTING.md](CONTRIBUTING.md#build-and-run).
 
-Configuration precedence: command line (`--theme=`, `--renderer=`, `--log=`,
-`--font-size=`, `--tab-width=`, `--indent-spaces=`),
-environment (`BACHELORPAD_*`), a TOML file
-(`%APPDATA%\bachelorpad\config.toml`, or `$XDG_CONFIG_HOME` on Linux), then
-defaults. Broken config warns and falls back; it never stops the editor
-starting.
+## Requirements
 
-### Known gaps
+**Windows.** Windows 11, or Windows 10 22H2, 64-bit. Nothing else to install:
+the C runtime is built into the program.
 
-- **Nobody has typed into the custom editor view.** `--editor-view` gives
-  Ln/Col, our own undo, and a view that draws only the lines on screen. Its
-  rules are covered by 147 tests in `bp-editor`; the widget has been shown to
-  render a frame with a real file open and exit cleanly, and nothing beyond
-  that. Whether the caret lands under the pointer is not a thing a test can
-  say. Duplicate Line and Move Line Up/Down are enabled only there, so they
-  inherit the answer. See [ADR-0018](docs/decisions/ADR-0018.md).
-- **Input-method composition does not work under `--editor-view`, and cannot
-  on this Slint.** `FocusScope` rejects `UpdateComposition` and
-  `CommitComposition` in both its handlers and exposes no callback for either;
-  `TextInput` is the only item in the toolkit that consumes them. Without it
-  CJK entry does not work at all, so the default stays `TextInput`. **This was
-  the second of two parity conditions, and it is now a blocker rather than a
-  task** -- see `project/WORK_QUEUE.md`.
-- **Word wrap now works under `--editor-view`.** A document line can occupy
-  several visual rows: `bp_editor::wrap` decides where they break, the view
-  maps rows to characters, Up and Down move by row rather than by line, and
-  scrolling is anchored to a line *and* a row within it so a line taller than
-  the window can be scrolled through.
-- **Drag and drop to open does not work, and cannot yet.** specs §4 wants it.
-  On Slint 1.17.1 the winit backend has no file-drop plumbing and
-  `DataTransfer` carries only plain text or an image, so there is no channel a
-  dropped file's path could arrive through. Blocked on Slint, not on effort.
-- **Five features are enabled only under `--editor-view`**: duplicate and move
-  line, date and time insertion, and go to line. All need the caret
-  `TextInput` does not expose. [MENU_MAP.md](docs/product/MENU_MAP.md) marks
-  which rows those are.
-- **The crates are tested where they meet, and that is where the defects
-  are.** Eleven files of cross-crate tests join load/rope/atomic save, the
-  `.bpadx` envelope over a real file, the security profile against all three
-  of its dependants, format detection against the parser that then handles
-  the file, search against the buffer, journal recovery, the notebook through
-  the file layer, the audit log, redaction, signing, and the filename grammar
-  against the platform's own rules. Between them they have found seven
-  defects that no unit test did. **Five are fixed.** The most serious is the
-  newest: `bp-naming` asked whether a *whole* sanitised title was a Windows
-  device name, while Win32 asks only about the stem before the first dot --
-  so `con.txt`, `aux.log` and `NUL.dat` passed untouched, and on Windows
-  saving to one of those writes **the device**, reports success, and the
-  document is gone. The sanitiser now tests the stem, its list gained
-  `CONIN$` and `CONOUT$`, and a property compares its verdict against
-  `bp-platform`'s stem by stem in both directions so the two lists cannot
-  drift apart quietly.
+Windows 10 is supported on 22H2 with Extended Security Updates, or on an LTSC
+edition, since ordinary Windows 10 no longer receives security fixes. It runs
+the same program as Windows 11 and is tested at every release candidate, but
+after 1.0 there will be no fixes for problems that occur only on Windows 10. The current code compiles for
+Windows but has not yet been run on a Windows machine; see
+[Known gaps](#known-gaps).
 
-  **The other half of that hole was a name nobody sanitised.** `bp-naming`
-  defends the name the product *suggests*; the one a user types over the top
-  of it in a Save dialog had never been checked by anything. `bp-files`
-  depends on `bp-platform` now and `atomic_write` refuses a device name
-  outright -- the only refusal in that module that is checked rather than
-  attempted, because attempting it does not fail: the open succeeds, the
-  read-back verifies against the console, and the status bar reports a
-  document that is nowhere. The platform is a parameter rather than a `cfg`,
-  so `con.txt` stays an ordinary file on Linux and both CI legs execute both
-  rule sets.
+**Linux.** A 64-bit desktop running Wayland or X11. The program needs these
+shared libraries at run time (the packages will declare them):
 
-  **Three tests remain `#[ignore]`d and each names a real defect**:
-  `bp-search` counts only the newline while `bp-buffer`'s rope also breaks on
-  a bare carriage return and four other separators, so find-in-files can
-  scroll to the wrong line in any file carrying one -- one line definition
-  has to win, and that is a decision rather than a patch; `bp-notebook`
-  cannot tell a cell that said nothing about its language from one that named
-  a language it cannot map, and runs the second through the kernel's
-  interpreter; and `bp-files` never applies `\\?\`, so a filename at
-  `SemanticName::to_filename`'s own documented maximum is unwritable in a
-  deep enough directory, blamed on a read-only file.
-- **Three crates and one module are built and unreachable, and this list is
-  now counted rather than remembered.** `bp-research`, `bp-notebook` and
-  `bp-storage` have zero reverse dependencies anywhere in the application:
-  nothing in `bp-ui`, in `apps/bachelorpad`, or in any other `bp-*` crate
-  names them. `bp-notebook` is reached only by the fuzz harness. `bp-audit`
-  came off this list when Security ▸ Security History shipped. Add `bp-buffer`'s
-  large-file engine -- depended on, but `LargeFile` and `SizeClass` appear
-  nowhere outside their own crate, so opening a 2 GB file still loads 2 GB --
-  and it is over ten thousand lines defended by 237 unit tests that no user
-  can reach. It is still the largest thing standing between this
-  repository and a product.
+- fontconfig and FreeType
+- xkbcommon and **xkbcommon-x11** (on Debian and Ubuntu, `libxkbcommon-x11-0`;
+  without it the program stops at startup)
+- the X11 client libraries (X11, X11-xcb, Xcursor, Xi) and the Wayland
+  client library
+- D-Bus
+- an XDG desktop portal backend (for example `xdg-desktop-portal-gtk` or
+  `xdg-desktop-portal-kde`), which draws the Open and Save dialogs
 
-  | Crate | Lines | Tests | Reached by |
-  | --- | --- | --- | --- |
-  | `bp-research` | 5,208 | 161 | nothing |
-  | `bp-notebook` | 3,514 | 55 | the fuzz harness only |
-  | `bp-buffer` ▸ `large.rs` | 1,198 | — | nothing |
-  | `bp-storage` | 721 | 21 | nothing, by decision (ADR-0019) |
+The editor's font, DejaVu Sans Mono, is bundled, so no font package is
+needed.
 
-  `bp-integrity`, `bp-platform` and `bp-redaction` came off this list --
-  Verify Signature, Set as Default Editor, redaction and the metadata
-  inspector all have rows now.
-- **Still barely used in anger.** The tests cover the pieces and now the
-  seams; a person driving the application has done so once, several sessions
-  ago. The four rows added to the Security menu this session have never been
-  clicked.
-- **`bp-storage` is still not called by the application.** That is now a
-  product decision rather than a security one: ADR-0020 permits recording a
-  summary under Standard, and `record_document` honours the policy. What
-  remains is ADR-0019's judgement plus a design pass.
-- **A plaintext document under Private or Confidential gets no crash
-  recovery.** The journal for those profiles is sealed with the document's
-  own passphrase ([ADR-0022](docs/decisions/ADR-0022.md)), so a document
-  that is not encrypted has no key to use. The status bar says what fixes
-  it: encrypt the document.
-- **Recovery for an encrypted document is invisible until you open it.** Its
-  journal is filed under a digest of its path and can only be read once you
-  have unlocked the document, so nothing prompts at startup — deliberately.
+## What works
 
-[ROADMAP.md](ROADMAP.md) has per-phase status;
-[MENU_MAP.md](docs/product/MENU_MAP.md) says which menu rows are real;
-[ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md) has the crate map and the
-editor-view constraint; [WORK_QUEUE.md](project/WORK_QUEUE.md) lists what is
-ready to take and what cannot run in parallel;
-[NEXT_SESSION.md](project/NEXT_SESSION.md) is the plan for picking this up
-again.
+- **Editing.** Tabs (Ctrl+Tab to move between them), undo and redo, cut,
+  copy and paste, overwrite mode (Insert), word wrap, line numbers, zoom, go
+  to line (Ctrl+G), duplicate and move lines, sort, deduplicate, reverse and
+  trim lines, date and time insertion, four themes (Light, Dark, Organic,
+  Green) plus Follow System.
+- **Files.** Open several files at once, Save, Save As, Save All, Save a
+  Copy, Save as New Revision, Reload from Disk, and a recent-files list.
+  Every save is atomic: the file on disk is either the old version or the new
+  one, never half of each. The status bar always shows the file's full path.
+  If another program changes the file while you have it open, you are told
+  before you overwrite its changes.
+- **Encodings and line endings.** UTF-8, UTF-8 with a byte-order mark, and
+  UTF-16 (both byte orders) open and save as they came. A file that is none
+  of those opens as Windows-1252 (what Notepad calls "ANSI") and saves back
+  byte for byte. LF and CRLF line endings, switchable from the Format menu.
+- **Find.** Find and replace in the current document, with case, whole-word
+  and regular-expression options, and Replace All shows the changes before
+  making them. Find in Files searches a folder and its subfolders without
+  freezing the window.
+- **Structured data.** For JSON, JSON Lines, YAML, TOML, CSV and TSV
+  documents, the Data menu validates, formats, minifies and converts between
+  formats. JSON keeps your key order unless you ask it to sort.
+- **Notes.** Suggested title, summary, keywords, outline and statistics,
+  worked out from the text on your machine. A suggested file name follows the
+  pattern `Title_DDMMMYYYY.ext`.
+- **Clipboard history.** What you copy inside the editor is kept for the
+  session and can be pasted again from the Edit menu, with paste
+  transformations such as "Join Lines" or "Pretty-Print JSON". Copies made in
+  other programs are recorded only if you turn that on in Settings.
+- **Crash recovery.** Unsaved changes are written to a recovery journal
+  every few seconds. After a crash, the next start offers to restore them.
+- **Security.** Per-document security profiles (Standard, Private,
+  Confidential, Maximum) and a session-wide Privacy Mode that control what
+  the editor keeps about a document; encrypted `.bpadx` documents; Scan for
+  Secrets and Redact Found Secrets; Inspect Metadata; SHA-256 document hashes;
+  Ed25519 signatures (Sign Document and Verify Signature); and a Security
+  History. [SECURITY.md](SECURITY.md) says what each of these does and does
+  not protect.
+- **Default editor.** File ▸ Set as Default Editor shows what opens your
+  text files today, then helps you change it. On Linux it registers the
+  editor and makes it the default after you agree, and File ▸ Remove
+  Registration undoes that. On Windows the program never writes the registry
+  itself: the installer registers it, and the row opens the Default apps page
+  in Settings (a portable copy saves registration files for you to run
+  instead).
+- **Keyboard and screen readers.** F10, or Alt with a menu's letter, opens
+  the menus; the menu bar, tabs and status bar carry labels for screen
+  readers.
 
-## Governance hierarchy
+## Known gaps
 
-Where logical and useful, work follows:
+This is a release candidate in preparation, and some things are missing or
+unproven. The honest list:
 
-```text
-project
-  -> task
-    -> step
-      -> prompts/rosettas
-        -> artifacts
-          -> metadata
-            -> database
-              -> note
-```
+- **Not yet run on Windows.** The current code builds for Windows, but
+  nobody has run it on a Windows 10 or 11 machine since the last Windows test
+  run, many changes ago. The Windows-only parts (default-editor registration,
+  the console for `--help`, the crash message box) have never run at all.
+- **No installers or packages yet.** They arrive with the release candidate.
+- **The `.bpadx` encryption format has not had an independent
+  cryptographic review.** It is built from standard, widely used components,
+  but the way they are put together has only been reviewed by this project.
+  Do not rely on it against a determined, well-resourced attacker until it
+  has been. See [SECURITY.md](SECURITY.md).
+- **Files larger than 32 MiB open read-only**, in a viewer that reads only
+  the lines on screen (the limit can be changed in Tools ▸ Settings). The
+  viewer has no selection or copy, cannot show UTF-16 files, shows bytes
+  that are not UTF-8 as `�`, and shows only the first 64 KiB of any one
+  line. It has been tested with files of tens of megabytes; a 1 GB file on
+  each operating system is still to be tried. `--readonly` opens any file
+  in the same viewer.
+- **No syntax highlighting.** Source files open as plain text. There is no
+  Markdown preview, no printing, no multi-cursor or column selection, and no
+  replace across files.
+- **Drag and drop does not open files.** The toolkit the editor is built on
+  does not pass dropped file names to the program yet. Use File ▸ Open or the
+  command line.
+- **Each file opened from your file manager opens a new window.** There is
+  no hand-off to a window that is already running.
+- **The default editor view draws line breaks as its toolkit does.** A line
+  ends at LF, CRLF or a bare carriage return, and nothing else, for line
+  numbers, Go to Line, Find and Find in Files. The toolkit behind the default
+  view may still draw a form feed or a Unicode line separator as a new line,
+  which the line numbers do not count. The custom editor view draws the lines
+  that are counted.
+- **Some profiles mean no crash recovery.** Under Private or Confidential, a
+  document that is not encrypted has no recovery journal, because the journal
+  would have to be sealed with the document's passphrase. Under Maximum, and
+  in Privacy Mode, there is no recovery journal at all.
+- **Recovered work for an encrypted document appears only when you open it**
+  and give its passphrase. At startup you are told how many encrypted
+  documents have recovered work, but not which. Moving an encrypted document
+  loses its recovered work.
+- **The experimental custom editor view** (`--editor-view`, or Settings ▸
+  Custom editor view) cannot take input-method (for example Chinese, Japanese
+  or Korean) text. The default view can.
+- **Signing keys are protected by a passphrase only.** Windows Hello, DPAPI
+  and the Linux keyring are not used yet. Forgetting the passphrase means
+  making a new key.
+- **Deferred to later versions:** notebook execution (1.1); related notes,
+  duplicate detection and semantic search (1.2); personality modes and
+  syntax highlighting (1.x).
+- **Barely used by people yet.** Automated tests drive the real window, but
+  very few hours of human use are on record. Please report what you find.
 
-See `docs/governance/WORK_MODEL.md`.
+## Where your files and settings live
+
+| What | Windows | Linux |
+| --- | --- | --- |
+| Settings (`config.toml`) | `%APPDATA%\bachelorpad\` | `$XDG_CONFIG_HOME/bachelorpad/` (usually `~/.config/bachelorpad/`) |
+| Recent files, security history, document profiles, logs | `%LOCALAPPDATA%\bachelorpad\state\` | `$XDG_STATE_HOME/bachelorpad/` (usually `~/.local/state/bachelorpad/`) |
+| Recovery journal, signing key | `%LOCALAPPDATA%\bachelorpad\data\` | `$XDG_DATA_HOME/bachelorpad/` (usually `~/.local/share/bachelorpad/`) |
+
+Only the settings roam with a Windows profile; everything else stays on the
+machine. Tools ▸ Open Config Folder and Tools ▸ Open Log Folder take you
+there. The [user guide](docs/user/GUIDE.md#settings-and-where-things-live)
+has the details.
+
+## Licence
+
+Copyright Daniel Boles.
+
+BachelorPad+ is licensed under either the MIT licence or the Apache License,
+Version 2.0, at your option (`MIT OR Apache-2.0`). The program includes
+[Slint](https://slint.dev), used under the Slint Royalty-free Desktop, Mobile,
+and Web Applications Licence 2.0, and the DejaVu Sans Mono font, whose licence
+(the Bitstream Vera licence, with the DejaVu changes placed in the public
+domain) is in [crates/bp-ui/fonts/LICENSE-DejaVu.txt](crates/bp-ui/fonts/LICENSE-DejaVu.txt).
+Help ▸ About BachelorPad+ shows these terms in the program.

@@ -72,6 +72,33 @@ fn write_and_sign(contents: &[u8]) -> Signed {
     }
 }
 
+// --- the kept key (release plan M2-10) ------------------------------------
+
+#[test]
+fn a_key_kept_sealed_signs_what_a_recipient_verifies_with_its_public_half() {
+    // The shipping path: the seed lives in a passphrase envelope, the public
+    // half beside it in hex, and a recipient holding only that hex and the
+    // two files gets "signed by who you expected".
+    let dir = tempdir().expect("temp dir");
+    let document = dir.path().join("statement.txt");
+    atomic_write(&document, b"the agreed text\n", SaveOptions::default()).expect("atomic_write");
+    let sealed = dir.path().join("signing-key.bpadx");
+    let public = dir.path().join("signing-key.pub");
+
+    let key = SigningKey::generate().expect("generate");
+    bp_integrity::write_sealed_signing_key(&sealed, &key, "correct horse").expect("sealed");
+    bp_integrity::write_verifying_key(&public, &key.verifying_key()).expect("public half");
+    drop(key);
+
+    let unsealed =
+        bp_integrity::read_sealed_signing_key(&sealed, "correct horse").expect("unsealed");
+    sign_file(&document, &unsealed).expect("sign_file");
+
+    let expected = bp_integrity::read_verifying_key(&public).expect("read the public half");
+    let verdict = verify_file(&document, &Expectation::Key(expected)).expect("verify_file");
+    assert!(verdict.is_verified(), "{verdict:?}");
+}
+
 // --- the good case, end to end ------------------------------------------
 
 #[test]

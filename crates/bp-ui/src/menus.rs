@@ -73,12 +73,16 @@ pub mod action {
     pub const ENCODING_UTF8_BOM: i32 = 43;
 
     /// Indentation, in the Format block: it is a property of the text, like
-    /// the line ending and the encoding beside it. 48 and 49 are free.
+    /// the line ending and the encoding beside it.
     pub const INDENT_TABS: i32 = 44;
     pub const INDENT_SPACES: i32 = 45;
     pub const TAB_WIDTH_2: i32 = 46;
     pub const TAB_WIDTH_4: i32 = 47;
     pub const TAB_WIDTH_8: i32 = 48;
+    /// The third encoding row (release plan M1-10), at the Format block's
+    /// last free id rather than beside the other two at 42-43, which have no
+    /// neighbour free. The Format block is now full.
+    pub const ENCODING_WINDOWS_1252: i32 = 49;
 
     pub const SHORTCUTS: i32 = 50;
     pub const ABOUT: i32 = 51;
@@ -141,7 +145,7 @@ pub mod action {
     pub const DATA_JSON_TO_YAML: i32 = 211;
 
     /// File ▸ Set as Default Editor (ADR-0012), opening a block of its own at
-    /// 220-229 for platform integration. 221-229 are free.
+    /// 220-229 for platform integration. 223-229 are free.
     ///
     /// Not one of the three ids left at 207-209, and not one of the eight at
     /// 212-219: those are the Security operations' block and the Data
@@ -153,12 +157,38 @@ pub mod action {
     /// Above 100, so outside Slint's `UNDO..=SELECT_ALL` window, on the same
     /// argument as the two blocks above.
     pub const SET_DEFAULT_EDITOR: i32 = 220;
+    /// File ▸ Save as New Revision (release plan M1-17), in the File
+    /// block beside Set as Default Editor.
+    pub const SAVE_REVISION: i32 = 221;
+    /// File ▸ Remove Registration (release plan M2-06), Linux only: the
+    /// inverse of Set as Default Editor, beside it.
+    pub const REMOVE_REGISTRATION: i32 = 222;
+
+    /// The Tools menu (release plan M1-05): the application's own settings
+    /// and the folders it keeps its files in. A block of its own at 230-239,
+    /// for the reason every block above gives. 233-239 are free.
+    pub const SETTINGS: i32 = 230;
+    pub const OPEN_LOG_FOLDER: i32 = 231;
+    pub const OPEN_CONFIG_FOLDER: i32 = 232;
+
+    /// The clipboard rows that are not one entry's (release plan M1-18), in
+    /// a block of their own at 240-249. 242-249 are free.
+    ///
+    /// `ui/app.slint`'s editor context menu names these two by number, as it
+    /// names the widget's 100-105.
+    pub const PASTE_SPECIAL: i32 = 240;
+    /// Forget the unpinned entries the menu showed.
+    pub const CLIP_CLEAR: i32 = 241;
 
     /// Clipboard history occupies `CLIP_BASE ..` (bounded by [`super::clip_end`]).
     ///
     /// Slint's `dispatch` routes exactly `UNDO..=SELECT_ALL` to the widget and
     /// everything else to Rust, so this range only has to avoid that window —
     /// not sit below it.
+    ///
+    /// The offset is a slot in the snapshot taken when the menu opened
+    /// (`bp_clipboard::Snapshot`), not a position in the history, which can
+    /// move under an open menu (U5). The same goes for the two ranges below.
     pub const CLIP_BASE: i32 = 300;
 
     /// How many transform rows are reserved per clipboard entry.
@@ -176,6 +206,10 @@ pub mod action {
     /// plain-paste arm's `id - CLIP_BASE` arithmetic never has to know
     /// transform rows exist.
     pub const CLIP_TRANSFORM_BASE: i32 = 500;
+    /// Pin or unpin one entry (the editor context menu's Pin submenu):
+    /// `CLIP_PIN_BASE + slot`, bounded by [`super::clip_pin_end`]. Directly
+    /// after the transform rows' range, which ends at 600.
+    pub const CLIP_PIN_BASE: i32 = 600;
 
     pub const NOTE_TITLE: i32 = 80;
     pub const NOTE_RENAME: i32 = 81;
@@ -218,7 +252,11 @@ pub mod action {
     pub const DATA_CSV_TO_JSON: i32 = 76;
     pub const DATA_CSV_TO_JSONL: i32 = 77;
     pub const DATA_COLUMN_TYPES: i32 = 78;
-    // 79 is free.
+    /// JSON only. Its own id since `bp-data` built `serde_json` with
+    /// `preserve_order`: Format now keeps the author's key order, so the row
+    /// that used to share Format's id -- and only sorted because Format did
+    /// -- would have silently stopped sorting. The Data block is full now.
+    pub const DATA_SORT_KEYS: i32 = 79;
 
     /// Recently-opened files occupy `RECENT_BASE .. RECENT_BASE + MAX_RECENT`.
     /// The range is sized to the list so a longer list cannot silently run
@@ -268,7 +306,26 @@ fn row_end(label: &str, shortcut: &str, action: i32) -> MenuItem {
     }
 }
 
-/// A row that exists to say what is coming, and does nothing.
+/// A greyed row that reports something -- what a profile does, that the
+/// clipboard history is empty -- rather than offering anything.
+///
+/// Not [`planned`]: a readout is true and finished, where a planned row is a
+/// promise. The release menus hold readouts and never planned rows (release
+/// plan M1-05), and the test that says so tells them apart by which of the
+/// two built the row.
+fn readout(label: &str) -> MenuItem {
+    MenuItem {
+        label: label.into(),
+        shortcut: String::new().into(),
+        action: action::NONE,
+        enabled: false,
+        separator_after: false,
+    }
+}
+
+/// A row that exists to say what is coming, and does nothing. Only in the
+/// planned menus, which the menu bar shows only when `show_planned_menus`
+/// is set.
 fn planned(label: &str) -> MenuItem {
     MenuItem {
         label: label.into(),
@@ -292,6 +349,97 @@ fn toggle(label: &str, on: bool, action: i32) -> MenuItem {
 /// The trailing note naming when a menu's contents arrive.
 fn arrives(phase: &str) -> MenuItem {
     planned(&format!("— not implemented yet ({phase})"))
+}
+
+/// The next row after `from` in direction `delta` that is enabled, wrapping
+/// at either end (`MenuNav.next` in `ui/menu.slint`, release plan M2-14).
+///
+/// `from` below zero means "nothing highlighted yet", so a step down lands
+/// on the first live row and a step up on the last. `from` itself when no
+/// row is live, and -1 for an empty menu -- a menu of readouts has nothing
+/// for Enter to choose, and the highlight must not pretend otherwise.
+pub(crate) fn next_live_row(enabled: &[bool], from: i32, delta: i32) -> i32 {
+    let n = enabled.len();
+    if n == 0 {
+        return -1;
+    }
+    let forward = delta >= 0;
+    let start = match usize::try_from(from) {
+        Ok(at) if at < n => at,
+        // Nothing highlighted: start just outside the end being moved from.
+        _ if forward => n - 1,
+        _ => 0,
+    };
+    let mut at = start;
+    for _ in 0..n {
+        at = if forward {
+            (at + 1) % n
+        } else {
+            (at + n - 1) % n
+        };
+        if enabled[at] {
+            return i32::try_from(at).unwrap_or(-1);
+        }
+    }
+    from
+}
+
+/// Why `id` cannot act on a document open in the read-only viewer, or `None`
+/// when it can (release plan M1-06).
+///
+/// One list for both ends: the menus grey a row with this as its hint, and
+/// `dispatch` refuses the same ids when they arrive some other way -- a
+/// keyboard shortcut, or a menu built before the tab changed. "read-only"
+/// for a row that would change or write the document; "not in the viewer"
+/// for one that would have to read all of it into memory to answer, which
+/// is the thing the viewer exists not to do.
+pub(crate) fn viewer_refusal(id: i32) -> Option<&'static str> {
+    use action::*;
+    const READ_ONLY: &str = "read-only";
+    const NOT_HERE: &str = "not in the viewer";
+    let in_range = |base: i32, end: i32| (base..end).contains(&id);
+    let refusal = match id {
+        NEW | OPEN | SAVE_ALL | RELOAD | CLOSE_TAB | CLOSE_OTHER_TABS | CLOSE_ALL_TABS
+        | COPY_TAB_PATH | THEME_LIGHT | THEME_DARK | THEME_ORGANIC | THEME_GREEN | THEME_SYSTEM
+        | TOGGLE_GUTTER | ZOOM_IN | ZOOM_OUT | ZOOM_RESET | INDENT_TABS | INDENT_SPACES
+        | TAB_WIDTH_2 | TAB_WIDTH_4 | TAB_WIDTH_8 | SHORTCUTS | ABOUT | PRIVACY_MODE
+        | SECURITY_HISTORY | SET_DEFAULT_EDITOR | REMOVE_REGISTRATION | SETTINGS
+        | OPEN_LOG_FOLDER | OPEN_CONFIG_FOLDER | GO_TO_LINE | NONE => return None,
+        // A document's profile is a setting about it, not a change to it.
+        _ if in_range(PROFILE_BASE, profile_end()) => return None,
+        // Pinning and clearing change the clipboard history, not the
+        // document.
+        CLIP_CLEAR => return None,
+        _ if in_range(CLIP_PIN_BASE, clip_pin_end()) => return None,
+        _ if in_range(
+            RECENT_BASE,
+            RECENT_BASE + i32::try_from(bp_config::MAX_RECENT).unwrap_or(0),
+        ) =>
+        {
+            return None;
+        }
+        TOGGLE_WRAP | SCAN_SECRETS | HASH_DOCUMENT | VERIFY_SIGNATURE | INSPECT_METADATA
+        | DOCUMENT_STATS | DATA_VALIDATE | DATA_REPORT | DATA_COLUMN_TYPES | COPY => NOT_HERE,
+        _ if (NOTE_TITLE..=NOTE_OUTLINE).contains(&id) && id != NOTE_RENAME => NOT_HERE,
+        _ => READ_ONLY,
+    };
+    Some(refusal)
+}
+
+/// `items` as they stand for a document open in the viewer: every row that
+/// cannot act on it greyed, with the reason as its hint. Readouts and rows
+/// already greyed keep what they say.
+pub(crate) fn for_viewer(items: Vec<MenuItem>) -> Vec<MenuItem> {
+    items
+        .into_iter()
+        .map(|item| match viewer_refusal(item.action) {
+            Some(why) if item.enabled => MenuItem {
+                separator_after: item.separator_after,
+                ..row_enabled(item.label.as_str(), why, item.action, false)
+            },
+            _ => item,
+        })
+        .collect()
 }
 
 /// One past the last plain-paste clipboard id `CLIP_BASE` can produce.
@@ -325,6 +473,20 @@ pub(crate) fn stamp_end() -> i32 {
 pub(crate) fn clip_transform_end() -> i32 {
     action::CLIP_TRANSFORM_BASE
         + action::CLIP_TRANSFORM_SLOTS * i32::try_from(bp_clipboard::MAX_ENTRIES).unwrap_or(0)
+}
+
+/// One past the last pin id.
+pub(crate) fn clip_pin_end() -> i32 {
+    action::CLIP_PIN_BASE + i32::try_from(bp_clipboard::MAX_ENTRIES).unwrap_or(0)
+}
+
+/// Clipboard entries as a menu shows them: each with its slot in the
+/// snapshot the menu was opened with (`bp_clipboard::Snapshot::shown`).
+pub(crate) type Shown<'h> = [(usize, &'h bp_clipboard::Entry)];
+
+/// A slot as the offset of a row id.
+fn slot_id(base: i32, slot: usize) -> i32 {
+    base + i32::try_from(slot).unwrap_or(0)
 }
 
 /// A menu label for a paste transformation.
@@ -365,30 +527,73 @@ pub(crate) fn apply_transform(transform: bp_clipboard::Transform, text: &str) ->
     (result != text).then_some(result)
 }
 
-/// Decode a `CLIP_TRANSFORM_BASE`-range id back to which entry and
-/// transform it means.
+/// What Paste Special... offers for the clipboard's text: a sentence saying
+/// what is there, and each way to paste it, labelled, with the text it
+/// would paste.
+pub(crate) struct PasteSpecial {
+    pub body: String,
+    /// The transformations that would change the text, in the order the
+    /// clipboard rows offer them, then the text unchanged.
+    pub choices: Vec<(&'static str, String)>,
+}
+
+/// Paste Special... over `text`. The same transformations, and the same
+/// rule about offering only the ones that change something, as each
+/// clipboard history row -- one list, so the two cannot drift.
+pub(crate) fn paste_special(text: &str) -> PasteSpecial {
+    let kind = bp_clipboard::detect_kind(text);
+    let mut choices: Vec<(&'static str, String)> = bp_clipboard::transforms_for(kind)
+        .iter()
+        .filter_map(|&transform| {
+            apply_transform(transform, text).map(|result| (transform_label(transform), result))
+        })
+        .collect();
+    // Its shape and not a preview: this is the clipboard as it stands, which
+    // may be another program's copy -- a password manager's, say -- and the
+    // history keeps those off screen unless asked (`record_other_programs`).
+    let lines = text.lines().count();
+    let chars = text.chars().count();
+    let body = format!(
+        "The clipboard holds {}: {lines} {}, {chars} {}.\n\n{}",
+        kind.label(),
+        if lines == 1 { "line" } else { "lines" },
+        if chars == 1 {
+            "character"
+        } else {
+            "characters"
+        },
+        if choices.is_empty() {
+            "No transformation would change it."
+        } else {
+            "Paste it transformed, or as it is."
+        }
+    );
+    choices.push(("Paste Unchanged", text.to_owned()));
+    PasteSpecial { body, choices }
+}
+
+/// Decode a `CLIP_TRANSFORM_BASE`-range id to the snapshot slot of the
+/// entry it belongs to and which of that entry's transforms it is, or
+/// `None` for an id outside the range.
 ///
-/// `None` covers a stale id the same way as an unknown one: the range is
-/// wrong, the entry is no longer there (the history moved between the menu
-/// being built and the click landing), or the slot is past however many
-/// transforms that entry's kind actually offers. All three are "do nothing"
-/// as far as the caller is concerned.
-pub(crate) fn decode_transform(
-    id: i32,
-    clips: &[bp_clipboard::Entry],
-) -> Option<(usize, bp_clipboard::Transform)> {
+/// Whether the entry is still there, and whether its kind offers that many
+/// transforms, is for whoever resolves the slot: both are "do nothing".
+pub(crate) fn decode_transform(id: i32) -> Option<(usize, usize)> {
     if !(action::CLIP_TRANSFORM_BASE..clip_transform_end()).contains(&id) {
         return None;
     }
     let offset = id - action::CLIP_TRANSFORM_BASE;
-    let entry_index = usize::try_from(offset / action::CLIP_TRANSFORM_SLOTS).ok()?;
-    let slot = usize::try_from(offset % action::CLIP_TRANSFORM_SLOTS).ok()?;
-    let entry = clips.get(entry_index)?;
-    let transform = *bp_clipboard::transforms_for(entry.kind).get(slot)?;
-    Some((entry_index, transform))
+    let slot = usize::try_from(offset / action::CLIP_TRANSFORM_SLOTS).ok()?;
+    let transform = usize::try_from(offset % action::CLIP_TRANSFORM_SLOTS).ok()?;
+    Some((slot, transform))
 }
 
-pub fn file(any_dirty: bool, has_path: bool, recent: &[std::path::PathBuf]) -> Vec<MenuItem> {
+pub fn file(
+    any_dirty: bool,
+    has_path: bool,
+    recent: &[std::path::PathBuf],
+    integration: &crate::default_editor::Rows,
+) -> Vec<MenuItem> {
     let mut items = vec![
         row("New", "Ctrl+N", action::NEW),
         row_end("Open...", "Ctrl+O", action::OPEN),
@@ -421,6 +626,8 @@ pub fn file(any_dirty: bool, has_path: bool, recent: &[std::path::PathBuf]) -> V
     items.extend([
         row("Save", "Ctrl+S", action::SAVE),
         row("Save As...", "Ctrl+Shift+S", action::SAVE_AS),
+        // Needs a file to be a revision of.
+        row_enabled("Save as New Revision", "", action::SAVE_REVISION, has_path),
         MenuItem {
             enabled: any_dirty,
             ..row_end("Save All", "", action::SAVE_ALL)
@@ -436,22 +643,45 @@ pub fn file(any_dirty: bool, has_path: bool, recent: &[std::path::PathBuf]) -> V
             ..row("Save a Copy...", "", action::SAVE_COPY)
         },
         row_end("Close Tab", "Ctrl+W", action::CLOSE_TAB),
-        // Live on both platforms, and it is not the same amount of work on
-        // each: on Linux it writes the artefacts, on Windows it saves a `.reg`
-        // the user applies. Neither sets a default -- ADR-0012 leaves that to
-        // the operating system's own UI -- so the row asks first and says so.
+        // Not the same amount of work on each platform: on Linux it writes
+        // the per-user files and runs the commands that make it the
+        // default; on Windows it opens Default apps, or saves the `.reg`
+        // pair a portable build needs first. Either way the row asks first
+        // and says what it will do.
         //
         // The preset is named in the hint rather than chosen out of sight.
         // specs.md section 19 wants all five offered, which wants a settings
         // screen; five more rows in the File menu would be a worse answer
         // than one row that says which preset it means.
-        row(
+        integration_row(
             "Set as Default Editor...",
             "Notepad Replacement",
             action::SET_DEFAULT_EDITOR,
+            integration.set_default,
         ),
     ]);
+    if let Some(remove) = integration.remove {
+        items.push(integration_row(
+            "Remove Registration...",
+            "",
+            action::REMOVE_REGISTRATION,
+            remove,
+        ));
+    }
     items
+}
+
+/// A platform-integration row: live, or greyed with the reason as its hint.
+fn integration_row(
+    label: &str,
+    hint: &str,
+    action: i32,
+    state: crate::default_editor::RowState,
+) -> MenuItem {
+    match state {
+        crate::default_editor::RowState::Live => row(label, hint, action),
+        crate::default_editor::RowState::Greyed(why) => row_enabled(label, why, action, false),
+    }
 }
 
 /// Trim a path for the menu's right-hand hint, keeping the tail.
@@ -469,50 +699,30 @@ fn shorten(text: &str, max: usize) -> String {
     format!("…{tail}")
 }
 
-/// `editor_view` gates the caret-dependent line operations: `TextInput`
-/// never exposes where the caret is, so those rows stay present but greyed
-/// rather than vanishing, per this module's convention for a feature that
-/// exists but is not usable right now.
-pub fn edit(clips: &[bp_clipboard::Entry], editor_view: bool) -> Vec<MenuItem> {
+/// The Edit menu. Every row is live in both editor views: the caret rows
+/// read `TextInput`'s caret since release plan M1-04, and were greyed
+/// without `--editor-view` before that.
+///
+/// `clips` is the history as it was when the menu opened, not as it is now
+/// (U5): see `action::CLIP_BASE`.
+pub fn edit(clips: &Shown<'_>) -> Vec<MenuItem> {
     let mut items = vec![
         row("Undo", "Ctrl+Z", action::UNDO),
         row_end("Redo", "Ctrl+Y", action::REDO),
         row("Cut", "Ctrl+X", action::CUT),
         row("Copy", "Ctrl+C", action::COPY),
-        row_end("Paste", "Ctrl+V", action::PASTE),
+        row("Paste", "Ctrl+V", action::PASTE),
+        row_end("Paste Special...", "", action::PASTE_SPECIAL),
         row_end("Select All", "Ctrl+A", action::SELECT_ALL),
     ];
 
     // Clipboard history. Each row shows a preview and what the entry looks
     // like, so a column of similar-looking clips is still distinguishable.
     if clips.is_empty() {
-        items.push(planned("Clipboard History — nothing copied yet"));
+        items.push(readout("Clipboard History — nothing copied yet"));
     } else {
-        for (index, entry) in clips.iter().take(bp_clipboard::MAX_ENTRIES).enumerate() {
-            let pin = if entry.pinned { "📌 " } else { "" };
-            items.push(row(
-                &format!("{pin}{}", entry.preview(44)),
-                entry.kind.label(),
-                action::CLIP_BASE + i32::try_from(index).unwrap_or(0),
-            ));
-
-            // Format-aware paste transformations (specs.md section 14) --
-            // only the ones that would actually change this entry's text.
-            // A row that does nothing when clicked is worse than no row.
-            for (slot, &transform) in bp_clipboard::transforms_for(entry.kind).iter().enumerate() {
-                if apply_transform(transform, &entry.text).is_none() {
-                    continue;
-                }
-                let id = action::CLIP_TRANSFORM_BASE
-                    + i32::try_from(index).unwrap_or(0) * action::CLIP_TRANSFORM_SLOTS
-                    + i32::try_from(slot).unwrap_or(0);
-                items.push(row(
-                    &format!("    ↳ {}", transform_label(transform)),
-                    "",
-                    id,
-                ));
-            }
-        }
+        items.extend(clip_rows(clips, false));
+        items.push(clear_row("Clear Clipboard History", clips));
     }
     if let Some(last) = items.last_mut() {
         last.separator_after = true;
@@ -524,35 +734,100 @@ pub fn edit(clips: &[bp_clipboard::Entry], editor_view: bool) -> Vec<MenuItem> {
         row("Remove Duplicate Lines", "", action::LINES_DEDUPE),
         row("Reverse Lines", "", action::LINES_REVERSE),
         row_end("Trim Trailing Whitespace", "", action::LINES_TRIM),
-        // Both need the caret bp-editor owns, which only the custom surface
-        // exposes -- TextInput's caret is unreadable from here.
-        MenuItem {
-            enabled: editor_view,
-            ..row("Duplicate Line", "Ctrl+D", action::DUPLICATE_LINE)
-        },
-        MenuItem {
-            enabled: editor_view,
-            ..row("Move Line Up", "Alt+Up", action::MOVE_LINE_UP)
-        },
-        MenuItem {
-            enabled: editor_view,
-            ..row_end("Move Line Down", "Alt+Down", action::MOVE_LINE_DOWN)
-        },
-        // Caret work as well -- `Editor::go_to_line` moves the caret we own,
-        // and `TextInput`'s cannot be moved from here.
-        MenuItem {
-            enabled: editor_view,
-            ..row_end("Go to Line...", "Ctrl+G", action::GO_TO_LINE)
-        },
-        planned("Multi-cursor"),
-        arrives("phase 2"),
+        // Caret work, in both views: under `TextInput` the caret is read
+        // from the widget and put back after (release plan M1-04).
+        row("Duplicate Line", "Ctrl+D", action::DUPLICATE_LINE),
+        row("Move Line Up", "Alt+Up", action::MOVE_LINE_UP),
+        row_end("Move Line Down", "Alt+Down", action::MOVE_LINE_DOWN),
+        row("Go to Line...", "Ctrl+G", action::GO_TO_LINE),
     ]);
     items
+}
+
+/// One row per entry, pasting it, each followed by its transformations.
+///
+/// Shared by the Edit menu and the editor context menu's Clipboard History
+/// submenu, so the two cannot offer different rows for the same entry.
+/// `kind_in_label` because a context menu has no hint column: Slint shows a
+/// `MenuItem`'s shortcut only in a menu bar.
+fn clip_rows(clips: &Shown<'_>, kind_in_label: bool) -> Vec<MenuItem> {
+    let mut items = Vec::new();
+    for &(slot, entry) in clips.iter().take(bp_clipboard::MAX_ENTRIES) {
+        let pin = if entry.pinned { "📌 " } else { "" };
+        let preview = entry.preview(44);
+        let id = slot_id(action::CLIP_BASE, slot);
+        items.push(if kind_in_label {
+            row(&format!("{pin}{preview}  ({})", entry.kind.label()), "", id)
+        } else {
+            row(&format!("{pin}{preview}"), entry.kind.label(), id)
+        });
+
+        // Format-aware paste transformations (specs.md section 14) --
+        // only the ones that would actually change this entry's text.
+        // A row that does nothing when clicked is worse than no row.
+        for (index, &transform) in bp_clipboard::transforms_for(entry.kind).iter().enumerate() {
+            if apply_transform(transform, &entry.text).is_none() {
+                continue;
+            }
+            let id = action::CLIP_TRANSFORM_BASE
+                + i32::try_from(slot).unwrap_or(0) * action::CLIP_TRANSFORM_SLOTS
+                + i32::try_from(index).unwrap_or(0);
+            items.push(row(
+                &format!("    ↳ {}", transform_label(transform)),
+                "",
+                id,
+            ));
+        }
+    }
+    items
+}
+
+/// Clear, live only when there is something unpinned to clear.
+fn clear_row(label: &str, clips: &Shown<'_>) -> MenuItem {
+    let unpinned = clips.iter().any(|(_, entry)| !entry.pinned);
+    row_enabled(label, "keeps pinned", action::CLIP_CLEAR, unpinned)
+}
+
+/// The editor context menu's Clipboard History submenu (release plan
+/// M1-18): the Edit menu's clipboard rows, or a readout saying why there
+/// are none.
+pub(crate) fn context_history(clips: &Shown<'_>) -> Vec<MenuItem> {
+    if clips.is_empty() {
+        return vec![readout("Nothing copied yet")];
+    }
+    clip_rows(clips, true)
+}
+
+/// The editor context menu's Pin submenu: every entry the menu shows,
+/// ticked when pinned. Choosing one pins or unpins that entry -- the one
+/// the row names, wherever the history has moved it since (U5).
+pub(crate) fn context_pins(clips: &Shown<'_>) -> Vec<MenuItem> {
+    if clips.is_empty() {
+        return vec![readout("Nothing copied yet")];
+    }
+    clips
+        .iter()
+        .take(bp_clipboard::MAX_ENTRIES)
+        .map(|&(slot, entry)| {
+            toggle(
+                &entry.preview(44),
+                entry.pinned,
+                slot_id(action::CLIP_PIN_BASE, slot),
+            )
+        })
+        .collect()
+}
+
+/// Whether the context menu's Clear row is live: the same test as the Edit
+/// menu's.
+pub(crate) fn context_can_clear(clips: &Shown<'_>) -> bool {
+    clear_row("", clips).enabled
 }
 
 pub fn view(
     theme: ThemeId,
     follow_system: bool,
+    system_reports: bool,
     gutter: bool,
     wrap: bool,
     font_size: u8,
@@ -566,9 +841,21 @@ pub fn view(
         toggle("Dark", chosen(ThemeId::Dark), action::THEME_DARK),
         toggle("Organic", chosen(ThemeId::Organic), action::THEME_ORGANIC),
         toggle("Green", chosen(ThemeId::Green), action::THEME_GREEN),
+        // Still clickable where the desktop does not say -- plain X11, some
+        // window managers -- because the choice is remembered for when it
+        // does; but the row says so, rather than looking like it did
+        // nothing (release plan M1-21).
         MenuItem {
             separator_after: true,
-            ..toggle("Follow System", follow_system, action::THEME_SYSTEM)
+            ..toggle(
+                if system_reports {
+                    "Follow System"
+                } else {
+                    "Follow System (this desktop does not say)"
+                },
+                follow_system,
+                action::THEME_SYSTEM,
+            )
         },
         toggle("Line Numbers", gutter, action::TOGGLE_GUTTER),
         MenuItem {
@@ -592,17 +879,12 @@ pub fn view(
             action::ZOOM_OUT,
             font_size > bp_config::MIN_FONT_SIZE,
         ),
-        MenuItem {
-            separator_after: true,
-            ..row_enabled(
-                &format!("Reset Zoom ({font_size} pt)"),
-                "Ctrl+0",
-                action::ZOOM_RESET,
-                font_size != bp_config::DEFAULT_FONT_SIZE,
-            )
-        },
-        planned("Split / Preview"),
-        arrives("phase 8"),
+        row_enabled(
+            &format!("Reset Zoom ({font_size} pt)"),
+            "Ctrl+0",
+            action::ZOOM_RESET,
+            font_size != bp_config::DEFAULT_FONT_SIZE,
+        ),
     ]
 }
 
@@ -618,12 +900,21 @@ pub fn format(encoding: Encoding, line_ending: LineEnding, indent: Indent) -> Ve
             )
         },
         toggle("UTF-8", encoding == Encoding::Utf8, action::ENCODING_UTF8),
+        toggle(
+            "UTF-8 with BOM",
+            encoding == Encoding::Utf8Bom,
+            action::ENCODING_UTF8_BOM,
+        ),
+        // What Notepad called "ANSI" on a Western-European Windows. Offered
+        // so a file opened in it can be saved back the way it came, and so a
+        // UTF-8 document can be written for a program that reads nothing
+        // else -- refused, with the reason, if its text does not fit.
         MenuItem {
             separator_after: true,
             ..toggle(
-                "UTF-8 with BOM",
-                encoding == Encoding::Utf8Bom,
-                action::ENCODING_UTF8_BOM,
+                "Windows-1252",
+                encoding == Encoding::Windows1252,
+                action::ENCODING_WINDOWS_1252,
             )
         },
         toggle("Indent with Tabs", !indent.spaces, action::INDENT_TABS),
@@ -633,11 +924,7 @@ pub fn format(encoding: Encoding, line_ending: LineEnding, indent: Indent) -> Ve
         },
         toggle("Tab Width 2", indent.width == 2, action::TAB_WIDTH_2),
         toggle("Tab Width 4", indent.width == 4, action::TAB_WIDTH_4),
-        MenuItem {
-            separator_after: true,
-            ..toggle("Tab Width 8", indent.width == 8, action::TAB_WIDTH_8)
-        },
-        arrives("phase 5"),
+        toggle("Tab Width 8", indent.width == 8, action::TAB_WIDTH_8),
     ]
 }
 
@@ -677,21 +964,23 @@ pub fn security(
     // What the profile in force actually does, in the user's terms. Greyed,
     // because they are a readout rather than something to click.
     items.extend([
-        planned(&format!(
+        readout(&format!(
             "Recovery journal: {}",
-            describe_recovery(policy.recovery)
+            describe_recovery(policy.recovery, encrypted)
         )),
-        planned(&format!(
+        readout(&format!(
             "Clipboard history: {}",
             describe_clipboard(policy.clipboard)
         )),
         MenuItem {
             separator_after: true,
-            ..planned(&format!(
+            ..readout(&format!(
                 "Leaves this machine: {}",
+                // ADR-0034: nothing in v1 sends anything anywhere, so a
+                // profile that would allow it has nothing to allow.
                 match policy.network {
-                    bp_security::Network::Allowed => "permitted",
-                    bp_security::Network::Denied => "never",
+                    bp_security::Network::Allowed => "nothing (no network code)",
+                    bp_security::Network::Denied => "never (forbidden by this profile)",
                 }
             ))
         },
@@ -744,20 +1033,23 @@ pub fn security(
         // digest you are about to read down a telephone is useless unless you
         // already know which of the two the other end took.
         row("Hash Document (SHA-256)", "", action::HASH_DOCUMENT),
-        // Greyed with a reason, deliberately not `planned`. `bp_crypto`'s
-        // signing half exists and is tested; what does not exist is anywhere
-        // to keep a signing key, and inventing a key store on the way to a
-        // menu row would be a worse answer than the row saying so. The reason
-        // is in the label because the greying is the only thing on screen.
+        // Live for a saved document (release plan M2-10): the key is kept
+        // sealed in a passphrase envelope in the data directory, made on
+        // first use. Greyed for a document never saved, with the reason on
+        // the row, because a signature covers a file.
         row_enabled(
-            "Sign Document — no signing key yet",
+            if has_path {
+                "Sign Document..."
+            } else {
+                "Sign Document — save it first"
+            },
             "",
             action::SIGN_DOCUMENT,
-            false,
+            has_path,
         ),
-        // Live even though signing is not: verifying needs the other party's
-        // signature and, to say more than "intact", their public key. It is
-        // the half of the feature that needs nothing stored.
+        // Verifying needs the other party's signature and, to say more than
+        // "intact", their public key. It is the half of the feature that
+        // needs nothing stored.
         //
         // Greyed rather than `planned` for a document that has never been
         // saved, and the reason is on the row: `bp_integrity::verify_file`
@@ -782,21 +1074,27 @@ pub fn security(
         // somebody most wants to look is when they think something should be
         // there and are not sure it is.
         row("Security History...", "", action::SECURITY_HISTORY),
-        planned("Lock Document"),
-        arrives("phase 16"),
     ]);
     items
 }
 
-fn describe_recovery(recovery: bp_security::Recovery) -> &'static str {
+/// What the recovery journal is doing for this document, in the user's terms.
+///
+/// `encrypted` is whether the document has a passphrase, because under a
+/// profile that wants an encrypted journal that is the whole answer:
+/// `bp-history` seals the checkpoint with the document's own passphrase
+/// (ADR-0022) and refuses, rather than writing plaintext, when there is none
+/// (ADR-0020). This row used to say encryption had not shipped, a session
+/// after it had.
+fn describe_recovery(recovery: bp_security::Recovery, encrypted: bool) -> &'static str {
     match recovery {
         // Named plainly. A user who has not thought about it should be able
         // to read this row and understand that unsaved work is on disk.
         bp_security::Recovery::Plaintext => "on, unencrypted",
-        // The honest answer while bp-crypto does not exist (ADR-0020): the
-        // profile asks for encryption, so the journal is off rather than
-        // silently plaintext.
-        bp_security::Recovery::Encrypted => "off until encryption ships (phase 15)",
+        bp_security::Recovery::Encrypted if encrypted => "on, sealed with the passphrase",
+        // Says what fixes it: Encrypt Document gives the journal the
+        // passphrase it needs.
+        bp_security::Recovery::Encrypted => "off until the document is encrypted",
         bp_security::Recovery::Disabled => "off",
     }
 }
@@ -843,27 +1141,18 @@ pub fn tab_context(others: usize, has_path: bool) -> Vec<MenuItem> {
 ///
 /// Caret rows, like Duplicate Line: inserting at the caret needs a caret, and
 /// `TextInput` does not expose one (ADR-0018).
-pub fn insert(at: time::OffsetDateTime, editor_view: bool) -> Vec<MenuItem> {
-    let mut items: Vec<MenuItem> = bp_naming::Stamp::all()
+pub fn insert(at: time::OffsetDateTime) -> Vec<MenuItem> {
+    bp_naming::Stamp::all()
         .iter()
         .enumerate()
-        .map(|(index, stamp)| MenuItem {
-            enabled: editor_view,
-            ..row(
+        .map(|(index, stamp)| {
+            row(
                 stamp.label(),
                 &shorten(&bp_naming::render(*stamp, at), 24),
                 action::STAMP_BASE + i32::try_from(index).unwrap_or(0),
             )
         })
-        .collect();
-    if let Some(last) = items.last_mut() {
-        last.separator_after = true;
-    }
-    items.extend([
-        planned("Markdown constructs, citation, code block, table"),
-        arrives("phase 6"),
-    ]);
-    items
+        .collect()
 }
 
 /// The Data menu, which depends entirely on what the document is.
@@ -877,7 +1166,7 @@ pub fn data(format: Format) -> Vec<MenuItem> {
             row_end("Validate", "", action::DATA_VALIDATE),
             row("Format", "", action::DATA_FORMAT),
             row("Minify", "", action::DATA_MINIFY),
-            row_end("Sort Keys", "", action::DATA_FORMAT),
+            row_end("Sort Keys", "", action::DATA_SORT_KEYS),
             row("Convert to JSON Lines", "", action::DATA_TO_JSONL),
             // No warning on this one, and the asymmetry is the point:
             // every JSON value has a YAML spelling, so this is the
@@ -912,24 +1201,31 @@ pub fn data(format: Format) -> Vec<MenuItem> {
             row_end("Validate", "", action::DATA_VALIDATE),
             row("Convert to JSON", "", action::DATA_TO_JSON),
         ],
+        // The same warning YAML's rows carry, for the same reason: the `toml`
+        // crate parses into data, so a round trip drops every comment -- and,
+        // built without `preserve_order`, sorts the keys as well.
         Format::Toml => vec![
             row_end("Validate", "", action::DATA_VALIDATE),
-            row("Format", "", action::DATA_FORMAT),
+            row(
+                "Format",
+                "comments not kept, keys sorted",
+                action::DATA_FORMAT,
+            ),
         ],
         Format::Csv | Format::Tsv => vec![
             row("Report Shape", "", action::DATA_REPORT),
             row_end("Column Types", "", action::DATA_COLUMN_TYPES),
             row("Convert to JSON", "", action::DATA_CSV_TO_JSON),
-            row_end("Convert to JSON Lines", "", action::DATA_CSV_TO_JSONL),
+            row("Convert to JSON Lines", "", action::DATA_CSV_TO_JSONL),
         ],
-        _ => {
-            let mut items = planned_menu("Data");
-            items.insert(
-                0,
-                planned(&format!("— nothing for {} documents", format.label())),
-            );
-            items
-        }
+        // One honest row. This used to append the phase-6 placeholder list,
+        // which offered Validate and Format as "not implemented yet" on a
+        // `.txt` -- while the same rows worked on the JSON document in the
+        // next tab.
+        _ => vec![readout(&format!(
+            "Nothing here for {} documents",
+            format.label()
+        ))],
     }
 }
 
@@ -965,20 +1261,25 @@ pub fn note(has_content: bool) -> Vec<MenuItem> {
         // Not gated on `has_content`: "0 words" is a legitimate answer to
         // "how long is this", and an empty document is exactly when someone
         // might check they are looking at the right tab.
-        row_end("Document Statistics", "", action::DOCUMENT_STATS),
-        planned("Tags"),
-        planned("Related Notes"),
-        planned("Revision History"),
-        arrives("phase 9"),
+        row("Document Statistics", "", action::DOCUMENT_STATS),
     ]
 }
 
 pub fn help() -> Vec<MenuItem> {
     vec![
         row("Keyboard Shortcuts", "", action::SHORTCUTS),
-        row_end("About BachelorPad+", "", action::ABOUT),
-        planned("Diagnostics"),
-        arrives("phase 19"),
+        row("About BachelorPad+", "", action::ABOUT),
+    ]
+}
+
+/// The Tools menu: the application's own settings, and the two folders a
+/// user is sent to when something goes wrong -- the log, and the
+/// configuration -- so nobody has to be told where either lives on their OS.
+pub fn tools() -> Vec<MenuItem> {
+    vec![
+        row_end("Settings...", "Ctrl+,", action::SETTINGS),
+        row("Open Log Folder", "", action::OPEN_LOG_FOLDER),
+        row("Open Config Folder", "", action::OPEN_CONFIG_FOLDER),
     ]
 }
 
@@ -1090,11 +1391,16 @@ mod tests {
     /// pinning one here enough.
     const STAMP_CLOCK: time::OffsetDateTime = time::macros::datetime!(2026-08-19 14:05:09 UTC);
 
+    /// `entries` as a menu opened now would show them: each at its own slot.
+    fn shown(entries: &[bp_clipboard::Entry]) -> Vec<(usize, &bp_clipboard::Entry)> {
+        entries.iter().enumerate().collect()
+    }
+
     #[test]
     fn every_stamp_row_is_inside_the_range_dispatch_matches() {
         // `stamp_end` is sized from `Stamp::all()`, so a sixth stamp extends
         // the window with the menu. This fails if the two ever part company.
-        let items = insert(STAMP_CLOCK, true);
+        let items = insert(STAMP_CLOCK);
         let rows: Vec<&MenuItem> = items.iter().filter(|i| i.action != action::NONE).collect();
 
         assert_eq!(rows.len(), bp_naming::Stamp::all().len());
@@ -1114,7 +1420,7 @@ mod tests {
         // The label names the format; the hint is the format applied to the
         // clock. A row reading "ISO 8601" tells you nothing about whether it
         // is the one you want.
-        let items = insert(STAMP_CLOCK, true);
+        let items = insert(STAMP_CLOCK);
         let iso = items
             .iter()
             .find(|i| i.label.contains("ISO"))
@@ -1127,21 +1433,10 @@ mod tests {
     }
 
     #[test]
-    fn the_stamp_rows_are_disabled_without_the_custom_editor_view() {
-        // Inserting at the caret needs a caret. `TextInput` does not expose
-        // one, so the rows grey rather than silently doing nothing.
-        for row in insert(STAMP_CLOCK, false)
-            .iter()
-            .filter(|i| i.action != action::NONE)
-        {
-            assert!(!row.enabled, "'{}' should be greyed", row.label);
-        }
-        assert!(
-            insert(STAMP_CLOCK, true)
-                .iter()
-                .filter(|i| i.action != action::NONE)
-                .all(|i| i.enabled)
-        );
+    fn the_stamp_rows_are_live_in_either_view() {
+        // They were greyed without the custom editor view, whose caret was
+        // the only one this crate could read (release plan M1-04).
+        assert!(insert(STAMP_CLOCK).iter().all(|i| i.enabled));
     }
 
     #[test]
@@ -1242,6 +1537,20 @@ mod tests {
                 .collect::<Vec<_>>()
         );
 
+        let standard = security(
+            bp_security::Security::Named(bp_security::Profile::Standard),
+            false,
+            bp_security::Privacy::Off,
+            true,
+            true,
+        );
+        assert!(
+            standard
+                .iter()
+                .any(|i| i.label == "Leaves this machine: nothing (no network code)"),
+            "ADR-0034: a looser profile must not read as though something is sent"
+        );
+
         let maximum = security(
             bp_security::Security::Named(bp_security::Profile::Maximum),
             false,
@@ -1262,9 +1571,10 @@ mod tests {
     }
 
     #[test]
-    fn a_profile_wanting_encryption_says_recovery_is_off_not_encrypted() {
-        // The honest readout while `bp-crypto` does not exist. Saying
-        // "encrypted" here would be the exact lie ADR-0020 forbids.
+    fn a_profile_wanting_encryption_says_recovery_is_off_for_a_plain_document() {
+        // `bp-history` refuses to journal such a document at all rather than
+        // write plaintext (ADR-0020). Saying "encrypted" here would be the
+        // exact lie that rule exists to prevent.
         let items = security(
             bp_security::Security::Named(bp_security::Profile::Private),
             false,
@@ -1282,6 +1592,46 @@ mod tests {
             "the journal is not being written; got {:?}",
             row.label
         );
+    }
+
+    #[test]
+    fn an_encrypted_document_under_such_a_profile_says_its_journal_is_sealed() {
+        // The other half: with a passphrase the journal really is written,
+        // sealed (ADR-0022), and "off" would send the user looking for a
+        // setting that is already on.
+        let items = security(
+            bp_security::Security::Named(bp_security::Profile::Private),
+            true,
+            bp_security::Privacy::Off,
+            true,
+            true,
+        );
+        let row = items
+            .iter()
+            .find(|i| i.label.contains("Recovery journal"))
+            .expect("a recovery row");
+        assert!(row.label.contains("sealed"), "got {:?}", row.label);
+    }
+
+    #[test]
+    fn no_menu_text_promises_a_phase_that_has_shipped() {
+        // The recovery row said "off until encryption ships (phase 15)" for a
+        // session after phase 15 shipped. A readout naming a phase is a claim
+        // about the future that goes stale silently; none may name one that
+        // is already done.
+        for encrypted in [false, true] {
+            for profile in bp_security::Profile::all() {
+                for item in security(
+                    bp_security::Security::Named(*profile),
+                    encrypted,
+                    bp_security::Privacy::Off,
+                    true,
+                    true,
+                ) {
+                    assert!(!item.label.contains("phase 15"), "{:?}", item.label);
+                }
+            }
+        }
     }
 
     /// The Security menu as the shell builds it for an ordinary document.
@@ -1322,7 +1672,7 @@ mod tests {
             ("note actions", action::NOTE_TITLE..action::NOTE_OUTLINE + 1),
             (
                 "data operations",
-                action::DATA_VALIDATE..action::DATA_COLUMN_TYPES + 1,
+                action::DATA_VALIDATE..action::DATA_SORT_KEYS + 1,
             ),
             (
                 "YAML conversions",
@@ -1389,7 +1739,7 @@ mod tests {
         // the row is what keeps it from being made out of sight -- and the
         // ellipsis is the house convention for a row that asks first, which
         // this one does, because registration writes files.
-        let row = file(false, true, &[])
+        let row = file(false, true, &[], &crate::default_editor::Rows::default())
             .into_iter()
             .find(|i| i.action == action::SET_DEFAULT_EDITOR)
             .expect("a default-editor row");
@@ -1655,7 +2005,7 @@ mod tests {
     fn the_security_menu_no_longer_calls_the_history_planned() {
         // The same trap as the redaction row above: a planned label and a
         // live row for the same thing reads as the feature being in two
-        // states at once. `Lock Document` is still planned and must stay.
+        // states at once.
         let items = security_menu();
         assert!(
             !items
@@ -1663,12 +2013,143 @@ mod tests {
                 .any(|i| i.action == action::NONE && i.label.contains("audit history")),
             "the security history is live; it must not also be listed as planned"
         );
-        assert!(
-            items
-                .iter()
-                .any(|i| i.action == action::NONE && i.label.contains("Lock Document")),
-            "Lock Document is still planned and must still say so"
+    }
+
+    /// Every menu a release shows, in a representative state -- every Data
+    /// variant included, since that menu is rebuilt per format.
+    fn release_menus() -> Vec<(String, Vec<MenuItem>)> {
+        let now = time::macros::datetime!(2026-09-25 20:05 UTC);
+        let mut menus = vec![
+            (
+                "File".to_owned(),
+                file(true, true, &[], &crate::default_editor::Rows::default()),
+            ),
+            ("Edit".to_owned(), edit(&[])),
+            (
+                "View".to_owned(),
+                view(ThemeId::Green, false, true, true, false, 11),
+            ),
+            (
+                "Format".to_owned(),
+                format(Encoding::Utf8, LineEnding::Lf, Indent::default()),
+            ),
+            ("Security".to_owned(), security_menu()),
+            ("Tab".to_owned(), tab_context(2, true)),
+            ("Insert".to_owned(), insert(now)),
+            ("Note".to_owned(), note(true)),
+            ("Tools".to_owned(), tools()),
+            ("Help".to_owned(), help()),
+        ];
+        for format in [
+            Format::PlainText,
+            Format::Markdown,
+            Format::Json,
+            Format::JsonLines,
+            Format::Yaml,
+            Format::Toml,
+            Format::Csv,
+            Format::Tsv,
+            Format::Log,
+        ] {
+            menus.push((format!("Data ({})", format.label()), data(format)));
+        }
+        menus
+    }
+
+    #[test]
+    fn no_release_row_is_a_placeholder() {
+        // Release plan M1-05. A row that promises a feature and does nothing
+        // reads as a broken product; the promises live in the planned menus,
+        // which are off the bar unless `show_planned_menus` is set.
+        let planned_labels: Vec<String> = ["Insert", "Data", "Note", "Security", "Tools"]
+            .iter()
+            .flat_map(|name| planned_menu(name))
+            .map(|i| i.label.to_string())
+            .collect();
+        for (name, items) in release_menus() {
+            for item in &items {
+                assert!(
+                    !item.label.contains("not implemented"),
+                    "{name} still has a trailer: {:?}",
+                    item.label
+                );
+                if item.action == action::NONE {
+                    assert!(
+                        !planned_labels.contains(&item.label.to_string()),
+                        "{name} still lists a planned row: {:?}",
+                        item.label
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn no_release_menu_ends_on_a_divider() {
+        // Taking the trailers away left dividers under the last real row.
+        for (name, items) in release_menus() {
+            if let Some(last) = items.last() {
+                assert!(!last.separator_after, "{name} ends on a divider");
+            }
+        }
+    }
+
+    #[test]
+    fn follow_system_says_when_the_desktop_reports_nothing() {
+        let label = |reports| {
+            view(ThemeId::Green, true, reports, true, false, 11)
+                .into_iter()
+                .find(|i| i.action == action::THEME_SYSTEM)
+                .map(|i| i.label.to_string())
+                .unwrap_or_default()
+        };
+        assert!(!label(true).contains("does not say"), "{}", label(true));
+        assert!(label(false).contains("does not say"), "{}", label(false));
+    }
+
+    #[test]
+    fn keyboard_movement_skips_greyed_rows_and_wraps() {
+        let rows = [false, true, false, true, false];
+        assert_eq!(
+            next_live_row(&rows, -1, 1),
+            1,
+            "first live row from nothing"
         );
+        assert_eq!(
+            next_live_row(&rows, -1, -1),
+            3,
+            "last live row from nothing"
+        );
+        assert_eq!(next_live_row(&rows, 1, 1), 3);
+        assert_eq!(next_live_row(&rows, 3, 1), 1, "wraps past the bottom");
+        assert_eq!(next_live_row(&rows, 1, -1), 3, "wraps past the top");
+    }
+
+    #[test]
+    fn a_menu_with_nothing_live_highlights_nothing() {
+        assert_eq!(next_live_row(&[false, false], -1, 1), -1);
+        assert_eq!(next_live_row(&[], 0, 1), -1);
+    }
+
+    #[test]
+    fn the_tools_menu_is_live_and_its_ids_are_its_own() {
+        let items = tools();
+        assert!(items.iter().all(|i| i.enabled), "{items:?}");
+        let ids: Vec<i32> = items.iter().map(|i| i.action).collect();
+        assert_eq!(
+            ids,
+            [
+                action::SETTINGS,
+                action::OPEN_LOG_FOLDER,
+                action::OPEN_CONFIG_FOLDER
+            ]
+        );
+        for id in ids {
+            assert!(
+                (230..240).contains(&id),
+                "id {id} is outside the Tools block"
+            );
+        }
     }
 
     #[test]
@@ -1714,35 +2195,40 @@ mod tests {
     }
 
     #[test]
-    fn signing_is_greyed_with_a_reason_rather_than_listed_as_not_existing() {
-        // `planned` means "this does not exist yet"; `bp_crypto::sign_document`
-        // does exist and is tested. What is missing is somewhere to keep a
-        // key, which is a different sentence -- and it has to be on the row,
-        // because the greying is all the user gets.
-        let items = security_menu();
-        let row = items
+    fn signing_is_live_for_a_saved_document_and_says_why_not_otherwise() {
+        // A signature covers a file, so an unsaved document cannot be
+        // signed; the reason is on the row because the greying is all the
+        // user gets. It is still a real row, never a planned one.
+        let saved = security_menu();
+        let row = saved
             .iter()
             .find(|i| i.action == action::SIGN_DOCUMENT)
             .expect("a signing row");
+        assert!(row.enabled, "a saved document can be signed");
 
-        assert!(!row.enabled, "there is nowhere to keep a signing key yet");
-        assert_ne!(
-            row.action,
-            action::NONE,
-            "a real capability with a missing prerequisite is not a planned row"
+        let unsaved = security(
+            bp_security::Security::default(),
+            false,
+            bp_security::Privacy::Off,
+            true,
+            false,
         );
+        let row = unsaved
+            .iter()
+            .find(|i| i.action == action::SIGN_DOCUMENT)
+            .expect("a signing row");
+        assert!(!row.enabled);
         assert!(
-            row.label.contains("key"),
+            row.label.contains("save"),
             "the row must say why it is greyed; got '{}'",
             row.label
         );
     }
 
     #[test]
-    fn verifying_is_live_even_though_signing_is_not() {
+    fn verifying_is_live_for_a_saved_document() {
         // Verification needs the other party's public key and their `.sig`,
-        // both supplied by the user. Greying it alongside signing would hide
-        // the half of the feature that needs nothing stored.
+        // both supplied by the user, and nothing stored here.
         let items = security_menu();
         assert!(
             items
@@ -1795,21 +2281,21 @@ mod tests {
 
     #[test]
     fn save_all_is_disabled_when_nothing_is_unsaved() {
-        let items = file(false, true, &[]);
+        let items = file(false, true, &[], &crate::default_editor::Rows::default());
         let save_all = items
             .iter()
             .find(|i| i.action == action::SAVE_ALL)
             .expect("Save All");
         assert!(!save_all.enabled);
 
-        let items = file(true, true, &[]);
+        let items = file(true, true, &[], &crate::default_editor::Rows::default());
         let save_all = items.iter().find(|i| i.action == action::SAVE_ALL).unwrap();
         assert!(save_all.enabled);
     }
 
     #[test]
     fn reload_needs_a_file_to_reload_from() {
-        let items = file(false, false, &[]);
+        let items = file(false, false, &[], &crate::default_editor::Rows::default());
         let reload = items
             .iter()
             .find(|i| i.action == action::RELOAD)
@@ -1822,6 +2308,7 @@ mod tests {
         let items = view(
             ThemeId::Green,
             false,
+            true,
             true,
             false,
             bp_config::DEFAULT_FONT_SIZE,
@@ -1839,7 +2326,14 @@ mod tests {
 
     #[test]
     fn the_zoom_rows_grey_out_at_the_bound_they_cannot_pass() {
-        let at_max = view(ThemeId::Dark, false, true, false, bp_config::MAX_FONT_SIZE);
+        let at_max = view(
+            ThemeId::Dark,
+            false,
+            true,
+            true,
+            false,
+            bp_config::MAX_FONT_SIZE,
+        );
         let zoom_in = at_max
             .iter()
             .find(|i| i.action == action::ZOOM_IN)
@@ -1858,7 +2352,14 @@ mod tests {
             "Zoom Out is still available at the largest size"
         );
 
-        let at_min = view(ThemeId::Dark, false, true, false, bp_config::MIN_FONT_SIZE);
+        let at_min = view(
+            ThemeId::Dark,
+            false,
+            true,
+            true,
+            false,
+            bp_config::MIN_FONT_SIZE,
+        );
         assert!(
             at_min
                 .iter()
@@ -1879,6 +2380,7 @@ mod tests {
             ThemeId::Dark,
             false,
             true,
+            true,
             false,
             bp_config::DEFAULT_FONT_SIZE,
         );
@@ -1891,6 +2393,7 @@ mod tests {
         let zoomed = view(
             ThemeId::Dark,
             false,
+            true,
             true,
             false,
             bp_config::DEFAULT_FONT_SIZE + 2,
@@ -1907,7 +2410,7 @@ mod tests {
     fn the_reset_row_names_the_size_currently_in_force() {
         // The question a zoom menu is opened to answer. A row reading "Reset
         // Zoom" alone leaves the user no way to tell 13 pt from 15 pt.
-        let items = view(ThemeId::Dark, false, true, false, 22);
+        let items = view(ThemeId::Dark, false, true, true, false, 22);
         let reset = items
             .iter()
             .find(|i| i.action == action::ZOOM_RESET)
@@ -1926,6 +2429,7 @@ mod tests {
             false,
             true,
             true,
+            true,
             bp_config::DEFAULT_FONT_SIZE,
         );
         let gutter = on
@@ -1937,6 +2441,7 @@ mod tests {
         let off = view(
             ThemeId::Dark,
             false,
+            true,
             false,
             false,
             bp_config::DEFAULT_FONT_SIZE,
@@ -1946,6 +2451,21 @@ mod tests {
             .find(|i| i.action == action::TOGGLE_GUTTER)
             .unwrap();
         assert!(!gutter.label.starts_with('✓'));
+    }
+
+    #[test]
+    fn a_windows_1252_document_ticks_its_own_row_and_no_utf8_one() {
+        // Before the row existed, a document opened as Windows-1252 showed
+        // neither encoding ticked, which reads as "no encoding at all".
+        let items = format(Encoding::Windows1252, LineEnding::CrLf, Indent::default());
+        let ticked: Vec<&str> = items
+            .iter()
+            .filter(|i| i.label.starts_with('✓'))
+            .map(|i| i.label.as_str())
+            .filter(|l| l.contains("UTF") || l.contains("1252"))
+            .collect();
+        assert_eq!(ticked.len(), 1, "{ticked:?}");
+        assert!(ticked[0].contains("Windows-1252"));
     }
 
     #[test]
@@ -2039,13 +2559,19 @@ mod tests {
     #[test]
     fn every_working_row_has_an_action() {
         let mut all = Vec::new();
-        all.extend(file(true, true, &[]));
+        all.extend(file(
+            true,
+            true,
+            &[],
+            &crate::default_editor::Rows::default(),
+        ));
         // `true` so the caret-dependent rows are enabled here too -- the
         // stronger check, since a disabled row is exempt below regardless.
-        all.extend(edit(&[], true));
+        all.extend(edit(&[]));
         all.extend(view(
             ThemeId::Organic,
             false,
+            true,
             true,
             false,
             bp_config::DEFAULT_FONT_SIZE,
@@ -2072,7 +2598,12 @@ mod tests {
             std::path::PathBuf::from("/notes/a/Report_17AUG2026.txt"),
             std::path::PathBuf::from("/notes/b/Report_17AUG2026.txt"),
         ];
-        let items = file(false, true, &recent);
+        let items = file(
+            false,
+            true,
+            &recent,
+            &crate::default_editor::Rows::default(),
+        );
 
         let rows: Vec<&MenuItem> = items
             .iter()
@@ -2091,7 +2622,7 @@ mod tests {
 
     #[test]
     fn no_recent_files_means_no_recent_rows() {
-        let items = file(false, true, &[]);
+        let items = file(false, true, &[], &crate::default_editor::Rows::default());
         assert!(
             items
                 .iter()
@@ -2106,7 +2637,12 @@ mod tests {
         let recent: Vec<std::path::PathBuf> = (0..bp_config::MAX_RECENT + 5)
             .map(|i| std::path::PathBuf::from(format!("/f{i}.txt")))
             .collect();
-        let items = file(false, true, &recent);
+        let items = file(
+            false,
+            true,
+            &recent,
+            &crate::default_editor::Rows::default(),
+        );
 
         // The recent rows, picked out by their labels rather than by the id
         // range under test -- a filter written from `RECENT_BASE` would agree
@@ -2145,10 +2681,16 @@ mod tests {
 
         let clips = [bp_clipboard::Entry::new("copied")];
         let mut rust_side = Vec::new();
-        rust_side.extend(file(true, true, &[std::path::PathBuf::from("/a.txt")]));
+        rust_side.extend(file(
+            true,
+            true,
+            &[std::path::PathBuf::from("/a.txt")],
+            &crate::default_editor::Rows::default(),
+        ));
         rust_side.extend(view(
             ThemeId::Green,
             false,
+            true,
             true,
             false,
             bp_config::DEFAULT_FONT_SIZE,
@@ -2159,7 +2701,7 @@ mod tests {
         rust_side.extend(data(Format::Csv));
         rust_side.extend(data(Format::Yaml));
         rust_side.extend(help());
-        rust_side.extend(insert(STAMP_CLOCK, true));
+        rust_side.extend(insert(STAMP_CLOCK));
         rust_side.extend(tab_context(2, true));
         rust_side.extend(security(
             bp_security::Security::default(),
@@ -2194,7 +2736,7 @@ mod tests {
         // `true` so Duplicate Line and Move Line Up/Down are enabled here
         // too -- they are outside the editor window either way, but a
         // disabled row would skip the check below and prove nothing.
-        for item in edit(&clips, true).iter().filter(|i| i.enabled) {
+        for item in edit(&shown(&clips)).iter().filter(|i| i.enabled) {
             if widget_rows.contains(&item.action) {
                 continue;
             }
@@ -2213,7 +2755,7 @@ mod tests {
             bp_clipboard::Entry::new("first"),
             bp_clipboard::Entry::new("second"),
         ];
-        let items = edit(&clips, false);
+        let items = edit(&shown(&clips));
         // Bounded above by `clip_end()`: both entries are plain text and
         // single words, so each also offers transform rows (As Bullet
         // List, As Code Block) whose ids live past `clip_end()` -- an
@@ -2244,7 +2786,7 @@ mod tests {
         let clips: Vec<bp_clipboard::Entry> = (0..bp_clipboard::MAX_ENTRIES)
             .map(|i| bp_clipboard::Entry::new(&format!("first line {i}\nsecond line {i}")))
             .collect();
-        let items = edit(&clips, true);
+        let items = edit(&shown(&clips));
 
         // A row is 28px. Against the 680px client area the window starts with,
         // and menus opening 28px down, about 23 rows is all that fits.
@@ -2277,7 +2819,7 @@ mod tests {
         // change. The plain-paste row must still be there; nothing beyond
         // it should be.
         let clips = [bp_clipboard::Entry::new("/usr/local/bin")];
-        let items = edit(&clips, false);
+        let items = edit(&shown(&clips));
 
         assert!(
             items.iter().any(|i| i.action == action::CLIP_BASE),
@@ -2294,17 +2836,31 @@ mod tests {
         // `bp_clipboard::apply` always returns `None` for these two -- the
         // shell is supposed to route them to `bp-data` instead, and the
         // menu row is the proof that routing actually happens.
-        let clips = [bp_clipboard::Entry::new(r#"{"b":1,"a":2}"#)];
-        let items = edit(&clips, false);
+        //
+        // The fixture is spaced on purpose. Minify used to sort keys as a
+        // side effect, so compact-but-unsorted JSON counted as changed; now
+        // that `bp-data` keeps the author's order, compact JSON is already
+        // minified and rightly gets no row (the test below).
+        let clips = [bp_clipboard::Entry::new(r#"{"b": 1, "a": 2}"#)];
+        let items = edit(&shown(&clips));
 
         assert!(
             items.iter().any(|i| i.label.contains("Pretty-Print JSON")),
-            "unsorted, compact JSON should offer to be pretty-printed"
+            "one-line JSON should offer to be pretty-printed"
         );
         assert!(
             items.iter().any(|i| i.label.contains("Minify JSON")),
-            "unsorted JSON minifies to a different (sorted) string"
+            "spaced JSON minifies to a different string"
         );
+    }
+
+    #[test]
+    fn already_minified_json_is_not_offered_minify() {
+        // A row that would change nothing is not offered -- and with key
+        // order kept, compact JSON in any order is already minified.
+        let clips = [bp_clipboard::Entry::new(r#"{"b":1,"a":2}"#)];
+        let items = edit(&shown(&clips));
+        assert!(items.iter().all(|i| !i.label.contains("Minify JSON")));
     }
 
     #[test]
@@ -2338,38 +2894,19 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_and_move_line_rows_are_present_but_disabled_without_the_custom_editor_view() {
-        let items = edit(&[], false);
+    fn duplicate_move_line_and_go_to_line_are_live_in_either_view() {
+        let items = edit(&[]);
         for id in [
             action::DUPLICATE_LINE,
             action::MOVE_LINE_UP,
             action::MOVE_LINE_DOWN,
+            action::GO_TO_LINE,
         ] {
             let row = items
                 .iter()
                 .find(|i| i.action == id)
                 .unwrap_or_else(|| panic!("row for action {id} is missing"));
-            assert!(
-                !row.enabled,
-                "'{}' needs the caret, which TextInput does not expose",
-                row.label
-            );
-        }
-    }
-
-    #[test]
-    fn duplicate_and_move_line_rows_are_enabled_under_the_custom_editor_view() {
-        let items = edit(&[], true);
-        for id in [
-            action::DUPLICATE_LINE,
-            action::MOVE_LINE_UP,
-            action::MOVE_LINE_DOWN,
-        ] {
-            let row = items
-                .iter()
-                .find(|i| i.action == id)
-                .unwrap_or_else(|| panic!("row for action {id} is missing"));
-            assert!(row.enabled, "'{}' should be usable here", row.label);
+            assert!(row.enabled, "'{}' should be usable", row.label);
         }
     }
 
@@ -2413,10 +2950,155 @@ mod tests {
 
     #[test]
     fn an_empty_clipboard_history_says_so_rather_than_showing_nothing() {
-        let items = edit(&[], false);
+        let items = edit(&[]);
         assert!(
             items.iter().any(|i| i.label.contains("nothing copied yet")),
             "an empty section with no explanation reads as broken"
         );
+    }
+
+    // --- the editor context menu and U5 (release plan M1-18) ---------------
+
+    #[test]
+    fn a_clipboard_row_keeps_the_slot_it_was_shown_at_when_an_earlier_entry_goes() {
+        // The id is the slot, not the row's position in the menu: with the
+        // entry at slot 1 gone, the one at slot 2 must still say 2, or a
+        // click on it would resolve to whatever the snapshot has at 1.
+        let a = bp_clipboard::Entry::new("alpha");
+        let c = bp_clipboard::Entry::new("gamma");
+        let items = edit(&[(0, &a), (2, &c)]);
+        let ids: Vec<i32> = items
+            .iter()
+            .filter(|i| (action::CLIP_BASE..clip_end()).contains(&i.action))
+            .map(|i| i.action)
+            .collect();
+        assert_eq!(ids, [action::CLIP_BASE, action::CLIP_BASE + 2]);
+
+        let pins: Vec<i32> = context_pins(&[(0, &a), (2, &c)])
+            .iter()
+            .map(|i| i.action)
+            .collect();
+        assert_eq!(pins, [action::CLIP_PIN_BASE, action::CLIP_PIN_BASE + 2]);
+    }
+
+    #[test]
+    fn the_context_menus_clipboard_history_offers_the_edit_menus_rows() {
+        let clips = [
+            bp_clipboard::Entry::new("one line\nand another"),
+            bp_clipboard::Entry::new(r#"{"b": 1, "a": 2}"#),
+        ];
+        let ids = |items: Vec<MenuItem>| -> Vec<i32> {
+            items
+                .into_iter()
+                .map(|i| i.action)
+                .filter(|&id| id >= action::CLIP_BASE && id < clip_transform_end())
+                .collect()
+        };
+        let from_edit = ids(edit(&shown(&clips)));
+        assert!(
+            from_edit.len() > 2,
+            "the fixture should offer transforms too"
+        );
+        assert_eq!(ids(context_history(&shown(&clips))), from_edit);
+    }
+
+    #[test]
+    fn a_context_menu_row_names_its_entry_in_the_label_for_want_of_a_hint_column() {
+        let clips = [bp_clipboard::Entry::new("https://example.com")];
+        let items = context_history(&shown(&clips));
+        assert!(items[0].label.contains("example.com"));
+        assert!(items[0].label.contains("(URL)"), "{}", items[0].label);
+    }
+
+    #[test]
+    fn the_pin_submenu_ticks_exactly_the_pinned_entries() {
+        let mut pinned = bp_clipboard::Entry::new("kept");
+        pinned.pinned = true;
+        let loose = bp_clipboard::Entry::new("loose");
+        let items = context_pins(&[(0, &pinned), (1, &loose)]);
+        assert!(items[0].label.starts_with('✓'), "{}", items[0].label);
+        assert!(!items[1].label.starts_with('✓'), "{}", items[1].label);
+    }
+
+    #[test]
+    fn clear_is_live_only_while_something_shown_is_unpinned() {
+        let mut pinned = bp_clipboard::Entry::new("kept");
+        pinned.pinned = true;
+        let loose = bp_clipboard::Entry::new("loose");
+        assert!(!context_can_clear(&[]));
+        assert!(!context_can_clear(&[(0, &pinned)]));
+        assert!(context_can_clear(&[(0, &pinned), (1, &loose)]));
+    }
+
+    #[test]
+    fn an_empty_history_gives_both_submenus_a_readout_rather_than_nothing() {
+        // A submenu with no rows opens as an empty box, which reads as broken.
+        for items in [context_history(&[]), context_pins(&[])] {
+            assert_eq!(items.len(), 1);
+            assert!(!items[0].enabled);
+            assert!(items[0].label.contains("Nothing copied yet"));
+        }
+    }
+
+    #[test]
+    fn pin_ids_start_after_the_last_transform_id() {
+        // Paste Special and Clear are checked against Slint's window with
+        // the rest of the Edit menu, above; the pin rows are only in the
+        // context menu, so their range is checked here.
+        assert!(
+            clip_transform_end() <= action::CLIP_PIN_BASE,
+            "a full history's transform rows would run into the pin rows"
+        );
+    }
+
+    #[test]
+    fn a_transform_id_decodes_to_the_slot_and_transform_it_was_built_from() {
+        let id = action::CLIP_TRANSFORM_BASE + 3 * action::CLIP_TRANSFORM_SLOTS + 2;
+        assert_eq!(decode_transform(id), Some((3, 2)));
+        assert_eq!(decode_transform(action::CLIP_BASE), None);
+        assert_eq!(decode_transform(clip_transform_end()), None);
+    }
+
+    #[test]
+    fn over_the_viewer_pin_and_clear_stay_live_and_every_paste_is_refused() {
+        // The history is not the document, so the viewer has no reason to
+        // refuse a pin or a clear. Every paste would change the document.
+        assert_eq!(viewer_refusal(action::CLIP_PIN_BASE), None);
+        assert_eq!(viewer_refusal(action::CLIP_CLEAR), None);
+        for id in [
+            action::PASTE_SPECIAL,
+            action::CLIP_BASE,
+            action::CLIP_TRANSFORM_BASE,
+        ] {
+            assert_eq!(viewer_refusal(id), Some("read-only"), "{id}");
+        }
+    }
+
+    #[test]
+    fn paste_special_offers_only_changes_and_always_the_text_unchanged() {
+        let offer = paste_special("first line\nsecond line");
+        let labels: Vec<&str> = offer.choices.iter().map(|(label, _)| *label).collect();
+        assert_eq!(
+            labels,
+            [
+                "Join Lines",
+                "As Bullet List",
+                "As Code Block",
+                "Paste Unchanged"
+            ]
+        );
+        assert_eq!(offer.choices[0].1, "first line second line");
+        assert_eq!(offer.choices[3].1, "first line\nsecond line");
+        assert!(
+            offer.body.contains("text: 2 lines, 22 characters"),
+            "{}",
+            offer.body
+        );
+        assert!(!offer.body.contains("first line"), "no preview of the text");
+
+        // A URL has no transformations, so the one choice is the text.
+        let offer = paste_special("https://example.com");
+        assert_eq!(offer.choices.len(), 1);
+        assert!(offer.body.contains("No transformation"), "{}", offer.body);
     }
 }

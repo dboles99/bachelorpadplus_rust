@@ -107,8 +107,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "bp-buffer"
+version = "1.0.0-rc.0"
+dependencies = [
+ "ropey",
+ "thiserror",
+]
+
+[[package]]
 name = "bp-core"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "bp-security",
  "time",
@@ -116,7 +124,7 @@ dependencies = [
 
 [[package]]
 name = "bp-crypto"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -131,7 +139,7 @@ dependencies = [
 
 [[package]]
 name = "bp-data"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "csv",
  "saphyr",
@@ -144,8 +152,9 @@ dependencies = [
 
 [[package]]
 name = "bp-files"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
+ "bp-buffer",
  "bp-core",
  "bp-naming",
  "bp-platform",
@@ -155,7 +164,7 @@ dependencies = [
 
 [[package]]
 name = "bp-formats"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 
 [[package]]
 name = "bp-fuzz"
@@ -174,14 +183,14 @@ dependencies = [
 
 [[package]]
 name = "bp-naming"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "time",
 ]
 
 [[package]]
 name = "bp-notebook"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -190,11 +199,11 @@ dependencies = [
 
 [[package]]
 name = "bp-platform"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 
 [[package]]
 name = "bp-security"
-version = "0.1.0"
+version = "1.0.0-rc.0"
 dependencies = [
  "serde",
 ]
@@ -743,6 +752,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
+name = "ropey"
+version = "1.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93411e420bcd1a75ddd1dc3caf18c23155eda2c090631a85af21ba19e97093b5"
+dependencies = [
+ "smallvec",
+ "str_indices",
+]
+
+[[package]]
 name = "rustc_version"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -846,6 +865,7 @@ version = "1.0.151"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
 dependencies = [
+ "indexmap",
  "itoa",
  "memchr",
  "serde",
@@ -883,6 +903,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "smallvec"
+version = "1.16.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9395f0f0eee849a9b707b2f06bb92a6a422090e2123bb2ef8e87a0e61892a8e"
+
+[[package]]
 name = "spki"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -891,6 +917,12 @@ dependencies = [
  "base64ct",
  "der",
 ]
+
+[[package]]
+name = "str_indices"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d08889ec5408683408db66ad89e0e1f93dff55c73a4ccc71c427d5b277ee47e6"
 
 [[package]]
 name = "subtle"

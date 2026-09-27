@@ -43,6 +43,10 @@ pub struct Document {
     title: String,
     created_at: OffsetDateTime,
     save_state: SaveState,
+    /// How many times the document has been marked modified. Never goes
+    /// back, and says nothing about *what* changed -- only that something
+    /// did since a caller last looked (see [`Self::edits`]).
+    edits: u64,
     last_checkpoint: Option<CheckpointTime>,
     encoding: Encoding,
     line_ending: LineEnding,
@@ -64,6 +68,7 @@ impl Document {
             title: UNTITLED.to_owned(),
             created_at,
             save_state: SaveState::NeverSaved,
+            edits: 0,
             last_checkpoint: None,
             encoding: Encoding::default(),
             line_ending: LineEnding::default(),
@@ -90,6 +95,7 @@ impl Document {
             // Opening is not saving. Until a write completes, this document
             // has no disk save of its own to report.
             save_state: SaveState::NeverSaved,
+            edits: 0,
             last_checkpoint: None,
             encoding: Encoding::default(),
             line_ending: LineEnding::default(),
@@ -201,11 +207,22 @@ impl Document {
     /// Idempotent, and preserves the previous disk-save time so the status
     /// bar can keep showing "last disk save 8:01 PM" while unsaved.
     pub fn mark_modified(&mut self) {
+        self.edits = self.edits.wrapping_add(1);
         if !self.save_state.is_dirty() {
             self.save_state = SaveState::Dirty {
                 last_disk_save: self.save_state.last_disk_save(),
             };
         }
+    }
+
+    /// A counter that moves on every [`Self::mark_modified`].
+    ///
+    /// For "has anything changed since I last did X?": the shell compares
+    /// it with the value it saw when it last checkpointed, and skips a
+    /// document whose checkpoint is already current -- which for an
+    /// encrypted one saves a key derivation every few seconds.
+    pub const fn edits(&self) -> u64 {
+        self.edits
     }
 
     /// Assign or change the document's path, as Save As does.
@@ -234,6 +251,19 @@ impl Document {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_modification_moves_the_edit_counter_even_when_already_dirty() {
+        let mut d = Document::new(DocumentId::new(1), CREATED);
+        let start = d.edits();
+        d.mark_modified();
+        d.mark_modified();
+        assert_eq!(d.edits(), start + 2);
+        // A save or a checkpoint is not an edit.
+        d.record_disk_save(CREATED);
+        d.record_checkpoint(CREATED);
+        assert_eq!(d.edits(), start + 2);
+    }
     use time::macros::datetime;
 
     const CREATED: OffsetDateTime = datetime!(2026-08-16 09:00 UTC);

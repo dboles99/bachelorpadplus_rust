@@ -77,9 +77,12 @@ Each of these has already cost somebody a debugging session.
    pump events, and a re-entrant callback on a live `borrow_mut()` panics.
    Compute what you need, end the borrow, then show the dialog.
 
-8. **Do not enable rfd's `common-controls-v6`.** It has been tried. The binary
-   fails to start with `STATUS_ENTRYPOINT_NOT_FOUND` before `main`. The
-   comment in `crates/bp-ui/Cargo.toml` says so; leave it there.
+8. **Do not add rfd's `common-controls-v6`; there is nothing for it to do.**
+   It only switches rfd's message dialogs to `TaskDialogIndirect`, and every
+   message dialog is in-window (M1-01). It embeds no manifest: the
+   `STATUS_ENTRYPOINT_NOT_FOUND` it once caused was a binary with no
+   ComCtl32 v6 declaration. `apps/bachelorpad/app.manifest` declares v6 now
+   (M2-02). The comment in `crates/bp-ui/Cargo.toml` has the detail.
 
 9. **The log-hygiene gate stage is real.** A `tracing::*!` macro mentioning an
    identifier that carries document text or secrets fails the build. Log
@@ -126,20 +129,24 @@ From `docs/governance/DEFINITION_OF_DONE.md`, the parts that apply here:
   says)
 - a user-visible error state exists — an operation that can fail says so in
   the status bar rather than doing nothing
-- documentation updated: `README.md`'s current-state table if it is
-  user-visible, `ROADMAP.md` if it moves a phase
+- documentation updated: `CONTRIBUTING.md`'s current-state table, and
+  `README.md` and `docs/user/GUIDE.md` if it is user-visible, `ROADMAP.md`
+  if it moves a phase
 - an ADR if the decision has consequences beyond one file
 
 ## The gate
 
 ```powershell
-./scripts/Invoke-LocalCI.ps1 -Linux
+./scripts/Invoke-LocalCI.ps1 -Linux                 # on Windows
+pwsh -NoProfile -File scripts/Invoke-LocalCI.ps1     # on a Linux host
 ```
 
 This **is** the gate — there is no hosted CI (ADR-0016). Every commit in this
 repository has passed it. It runs `fmt`, `check --locked`, `clippy -D
 warnings`, `test`, an actual binary launch, and the log-hygiene scan, then the
-whole lot again inside WSL.
+whole lot again inside WSL. On a Linux host the same script runs every stage
+natively (launch under `xvfb-run -a` when there is no display) and skips the
+WSL leg.
 
 Two practical notes:
 

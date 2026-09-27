@@ -25,7 +25,73 @@
 //! program.
 
 use super::AppInfo;
-use super::file_type::AssociationSelection;
+use super::file_type::{AssociationPreset, AssociationSelection};
+
+/// The preset a distribution package claims in its `.desktop` entry and MIME
+/// package, and the one File ▸ Set as Default Editor registers for.
+///
+/// One constant for both, because they have to agree: when a package has
+/// installed the system `.desktop` entry, Set as Default writes no per-user
+/// copy (see [`super::linux_plan`]), so the system entry's `MimeType=` line is
+/// the whole claim. Notepad Replacement is the smallest useful set -- plain
+/// text, logs and the product's own `.bpadx` -- and the one that takes
+/// nothing from anybody by surprise: a package claiming `.csv` or `.html`
+/// would become the fallback handler for them on every desktop where nothing
+/// else is set, which is choosing for the user by another route.
+pub const PACKAGED_PRESET: AssociationPreset = AssociationPreset::NotepadReplacement;
+
+/// The first line of every file a per-user registration writes.
+///
+/// How [`super::uninstall`] tells a file this product wrote from one that
+/// merely has its name. A menu editor (alacarte, KDE's) makes a per-user copy
+/// of a `.desktop` entry under the *same* id when the user customises it, and
+/// Remove Registration deleting the user's own customisation would be taking
+/// something that was never ours. Plain text rather than a key, so it changes
+/// nothing a desktop reads; and free of `<`, `>`, `&` and `--`, so it is the
+/// same text in a desktop-entry comment and an XML comment (a test holds it
+/// to that).
+pub const PER_USER_MARKER: &str =
+    "Written by BachelorPad+ Set as Default Editor. Remove Registration deletes this file.";
+
+/// One entry of the AppStream `<releases>` list, newest first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Release {
+    /// The version, exactly as `Cargo.toml` spells it.
+    pub version: &'static str,
+    /// ISO 8601 date of the release.
+    pub date: &'static str,
+}
+
+/// Every release, newest first.
+///
+/// A release adds a line here, and a test fails until it does: the newest
+/// entry must be the workspace version, because a software centre shows the
+/// newest `<release>` as "what's new" and a stale one tells users they are
+/// running something they are not.
+pub const RELEASES: &[Release] = &[Release {
+    version: "1.0.0-rc.0",
+    date: "2026-09-26",
+}];
+
+/// The freedesktop menu categories, for the `.desktop` entry's `Categories=`
+/// and AppStream's `<categories>` alike.
+///
+/// `TextEditor` alone is not enough: the menu specification makes it an
+/// additional category, valid only beside a main one, and `Utility` is the
+/// main category text editors use.
+pub const CATEGORIES: &[&str] = &["Utility", "TextEditor"];
+
+/// The project's home page, for AppStream.
+pub const HOMEPAGE: &str = "https://github.com/dboles99/bachelorpadplus_rust";
+
+/// A file shipped in `packaging/linux/`, generated here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackagedAsset {
+    /// The file name under `packaging/linux/`.
+    pub file_name: String,
+    /// The whole file.
+    pub contents: String,
+}
 
 /// Characters the Exec key treats as reserved, per the Desktop Entry
 /// Specification.
@@ -53,6 +119,12 @@ pub fn desktop_file_name(app: &AppInfo) -> String {
 #[must_use]
 pub fn mime_package_file_name(app: &AppInfo) -> String {
     format!("{}.xml", app.app_id)
+}
+
+/// The file name of the AppStream metadata for `app`.
+#[must_use]
+pub fn metainfo_file_name(app: &AppInfo) -> String {
+    format!("{}.metainfo.xml", app.app_id)
 }
 
 /// A `.desktop` entry claiming `selection`.
@@ -86,7 +158,12 @@ pub fn desktop_entry(app: &AppInfo, selection: &AssociationSelection) -> String 
     push_key(&mut out, "Icon", &app.icon);
     out.push_str("Terminal=false\n");
     out.push_str("StartupNotify=true\n");
-    out.push_str("Categories=Utility;TextEditor;\n");
+    out.push_str("Categories=");
+    for category in CATEGORIES {
+        out.push_str(&escape_list_item(category));
+        out.push(';');
+    }
+    out.push('\n');
     out.push_str("Keywords=text;editor;notes;markdown;log;\n");
     let mimes = selection.mime_types();
     if !mimes.is_empty() {
@@ -145,6 +222,159 @@ pub fn mime_package(selection: &AssociationSelection) -> Option<String> {
     }
     out.push_str("</mime-info>\n");
     Some(out)
+}
+
+/// [`desktop_entry`], marked as written by a per-user registration.
+///
+/// The marker is a comment, which the Desktop Entry Specification allows
+/// before the first group, so the file a desktop reads is exactly
+/// [`desktop_entry`]'s. See [`PER_USER_MARKER`] for why it is there.
+#[must_use]
+pub fn per_user_desktop_entry(app: &AppInfo, selection: &AssociationSelection) -> String {
+    format!("# {PER_USER_MARKER}\n{}", desktop_entry(app, selection))
+}
+
+/// [`mime_package`], marked as written by a per-user registration.
+///
+/// The comment goes after the XML declaration, which must be the first thing
+/// in the file.
+#[must_use]
+pub fn per_user_mime_package(selection: &AssociationSelection) -> Option<String> {
+    let package = mime_package(selection)?;
+    let (declaration, rest) = package.split_once('\n')?;
+    Some(format!("{declaration}\n<!-- {PER_USER_MARKER} -->\n{rest}"))
+}
+
+/// Whether `contents` is a file a per-user registration wrote.
+///
+/// Only the first two lines are looked at -- that is where both writers put
+/// the marker -- so a file that merely *mentions* the sentence somewhere,
+/// say in a `Comment`, does not qualify.
+#[must_use]
+pub fn is_per_user_registration(contents: &str) -> bool {
+    contents
+        .lines()
+        .take(2)
+        .any(|line| line.contains(PER_USER_MARKER))
+}
+
+/// AppStream metadata for `app`, providing `selection`'s MIME types.
+///
+/// Generated rather than hand-written for the same reason as the other two
+/// files: `<provides><mediatype>` has to list exactly what the `.desktop`
+/// entry's `MimeType=` claims, and two hand-kept lists of MIME types drift the
+/// first time somebody adds a file type. The licences are the metadata's own
+/// (CC0, as AppStream asks, so catalogues may copy it) and the project's.
+#[must_use]
+pub fn metainfo(app: &AppInfo, selection: &AssociationSelection) -> String {
+    let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    out.push_str("<component type=\"desktop-application\">\n");
+    push_element(&mut out, "id", &app.app_id);
+    push_element(&mut out, "metadata_license", "CC0-1.0");
+    push_element(&mut out, "project_license", "MIT OR Apache-2.0");
+    push_element(&mut out, "name", &app.display_name);
+    push_element(&mut out, "summary", &app.description);
+    out.push_str("  <description>\n");
+    for paragraph in [
+        "BachelorPad+ is a plain-text editor that starts as fast as Notepad and stays out \
+         of the way: open a file, change it, save it.",
+        "It reads plain text, logs, Markdown, JSON, YAML, TOML, CSV and XML, keeps a \
+         recovery journal so unsaved work survives a crash, and can save a document \
+         encrypted with a passphrase in its own .bpadx format.",
+    ] {
+        out.push_str(&format!("    <p>{}</p>\n", escape_xml(paragraph)));
+    }
+    out.push_str("  </description>\n");
+    out.push_str("  <developer id=\"io.github.dboles99\">\n");
+    out.push_str("    <name>Daniel Boles</name>\n");
+    out.push_str("  </developer>\n");
+    out.push_str(&format!(
+        "  <url type=\"homepage\">{}</url>\n",
+        escape_xml(HOMEPAGE)
+    ));
+    out.push_str(&format!(
+        "  <launchable type=\"desktop-id\">{}</launchable>\n",
+        escape_xml(&desktop_file_name(app))
+    ));
+    out.push_str(&format!(
+        "  <icon type=\"stock\">{}</icon>\n",
+        escape_xml(&app.icon)
+    ));
+    // Repeated from the `.desktop` entry because a catalogue validating the
+    // metainfo on its own -- `appstreamcli validate`, Flathub -- does not
+    // merge the two, and reports an application with no category.
+    out.push_str("  <categories>\n");
+    for category in CATEGORIES {
+        push_indented_element(&mut out, 4, "category", category);
+    }
+    out.push_str("  </categories>\n");
+    // No attributes under the rating: the product has no violence, no
+    // in-app purchases, no social features and no advertising, and an
+    // `oars-1.1` rating with nothing in it says exactly that.
+    out.push_str("  <content_rating type=\"oars-1.1\"/>\n");
+    let mimes = selection.mime_types();
+    if !mimes.is_empty() {
+        out.push_str("  <provides>\n");
+        for mime in mimes {
+            push_indented_element(&mut out, 4, "mediatype", mime);
+        }
+        out.push_str("  </provides>\n");
+    }
+    out.push_str("  <releases>\n");
+    for release in RELEASES {
+        out.push_str(&format!(
+            "    <release version=\"{}\" date=\"{}\"/>\n",
+            escape_xml(release.version),
+            escape_xml(release.date)
+        ));
+    }
+    out.push_str("  </releases>\n");
+    out.push_str("</component>\n");
+    out
+}
+
+/// Every file `packaging/linux/` ships, generated.
+///
+/// The single source for the package's static assets: a test asserts the
+/// shipped files equal this byte for byte, and
+/// `cargo run -p bp-platform --example regenerate_linux_assets` rewrites them
+/// from it. Built from [`AppInfo::packaged`](super::AppInfo::packaged) and
+/// [`PACKAGED_PRESET`], and without the per-user marker -- a package owns
+/// its files outright and removes them itself.
+#[must_use]
+pub fn packaged_assets() -> Vec<PackagedAsset> {
+    let app = AppInfo::packaged();
+    let selection = AssociationSelection::preset(PACKAGED_PRESET);
+    let mut assets = vec![PackagedAsset {
+        file_name: desktop_file_name(&app),
+        contents: desktop_entry(&app, &selection),
+    }];
+    if let Some(package) = mime_package(&selection) {
+        assets.push(PackagedAsset {
+            file_name: mime_package_file_name(&app),
+            contents: package,
+        });
+    }
+    assets.push(PackagedAsset {
+        file_name: metainfo_file_name(&app),
+        contents: metainfo(&app, &selection),
+    });
+    assets
+}
+
+/// Append `  <name>text</name>` with the text escaped.
+fn push_element(out: &mut String, name: &str, text: &str) {
+    push_indented_element(out, 2, name, text);
+}
+
+/// Append `<name>text</name>`, indented by `indent` spaces, with the text
+/// escaped.
+fn push_indented_element(out: &mut String, indent: usize, name: &str, text: &str) {
+    out.push_str(&format!(
+        "{:indent$}<{name}>{}</{name}>\n",
+        "",
+        escape_xml(text)
+    ));
 }
 
 /// Append `key=value` with the value escaped as a desktop-entry string.

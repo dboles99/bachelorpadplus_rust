@@ -5,9 +5,9 @@
 // anything outside it, and whatever opens this has to be able to put the caret
 // in the box it has just opened.
 //
-// Slint has no password field and `rfd` -- which every other dialog in this
-// shell uses -- has no text input at all, so this is the only route to a
-// passphrase that does not add a dependency.
+// A bar rather than a question on the in-app sheet (`dialog.slint`), which
+// only ever reports a button: a passphrase needs a masked text box with the
+// caret in it, and this is the one place the shell has one.
 //
 // **The text is masked and never leaves this component except through
 // `submitted`.** It is not bound two-way to the window: a passphrase sitting
@@ -18,6 +18,8 @@ import { MenuLabel } from "menu.slint";
 import { Palette } from "types.slint";
 
 export component PassphraseBar inherits Rectangle {
+    accessible-role: form;
+    accessible-label: "Passphrase";
     in property <bool> open;
     /// What this is asking for -- unlocking an existing document, setting a
     /// new passphrase, or confirming one just typed. The caller words it,

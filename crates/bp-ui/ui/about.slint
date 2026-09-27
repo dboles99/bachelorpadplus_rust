@@ -1,0 +1,124 @@
+// Help ▸ About (release plan M1-02).
+//
+// A sheet of its own rather than a question on `dialog.slint`, because it
+// hosts Slint's `AboutSlint` element: BachelorPad+ uses Slint under the
+// Royalty-free Licence 2.0, whose price is that attribution, in the
+// application (ADR-0031). Rust words the text; this draws it with the
+// attribution beneath and reports which button was chosen.
+
+import { AboutSlint, Palette as SlintPalette } from "std-widgets.slint";
+import { SheetButton } from "dialog.slint";
+import { Palette } from "types.slint";
+
+export component AboutSheet inherits Rectangle {
+    in property <bool> open;
+    in property <string> body;
+    /// Left to right. The last one closes the sheet, and Escape chooses it.
+    in property <[string]> buttons;
+    out property <int> highlighted;
+
+    callback chosen(int);
+
+    public function take-focus() {
+        root.highlighted = root.buttons.length - 1;
+        keys.focus();
+    }
+
+    visible: root.open;
+    background: Palette.shell.with-alpha(0.7);
+
+    TouchArea { }
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                root.chosen(root.buttons.length - 1);
+                return accept;
+            }
+            if (event.text == Key.Return || event.text == " ") {
+                root.chosen(root.highlighted);
+                return accept;
+            }
+            if (event.text == Key.Tab || event.text == Key.RightArrow) {
+                root.highlighted = Math.mod(root.highlighted + 1, max(1, root.buttons.length));
+                return accept;
+            }
+            if (event.text == Key.Backtab || event.text == Key.LeftArrow) {
+                root.highlighted = Math.mod(root.highlighted + root.buttons.length - 1, max(1, root.buttons.length));
+                return accept;
+            }
+            accept
+        }
+    }
+
+    panel := Rectangle {
+        width: min(560px, root.width - 32px);
+        height: min(layout.preferred-height, root.height - 32px);
+        x: (root.width - self.width) / 2;
+        y: max(16px, (root.height - self.height) / 3);
+        background: Palette.panel;
+        border-color: Palette.edge;
+        border-width: 1px;
+        border-radius: 4px;
+
+        accessible-role: groupbox;
+        accessible-label: "About BachelorPad+";
+
+        TouchArea { }
+
+        layout := VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+
+            Text {
+                text: "BachelorPad+";
+                color: Palette.ink;
+                font-size: 18px;
+                font-weight: 700;
+            }
+            Text {
+                text: "Notepad when you want it. More when you need it.";
+                color: Palette.ink-dim;
+                font-size: 12px;
+            }
+            Text {
+                text: root.body;
+                color: Palette.ink;
+                font-family: "DejaVu Sans Mono";
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+
+            // The attribution the licence asks for. It draws its text in
+            // Slint's own palette rather than ours, so it sits on a backing
+            // from that same palette: on one of our dark themes its version
+            // line was dark text on a dark panel.
+            HorizontalLayout {
+                alignment: center;
+                Rectangle {
+                    background: SlintPalette.background;
+                    border-radius: 6px;
+                    HorizontalLayout {
+                        padding: 8px;
+                        AboutSlint {
+                            max-height: 140px;
+                        }
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                alignment: end;
+                spacing: 8px;
+
+                for label[i] in root.buttons: SheetButton {
+                    label: label;
+                    highlighted: i == root.highlighted;
+                    clicked => {
+                        root.chosen(i);
+                    }
+                }
+            }
+        }
+    }
+}

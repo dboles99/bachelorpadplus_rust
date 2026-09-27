@@ -1,9 +1,13 @@
 //! The recently-opened list.
 //!
 //! State rather than configuration -- the user never edits it by hand -- so
-//! it lives in its own file beside `config.toml` and a corrupt or missing one
-//! is simply an empty list. Losing a convenience list is not worth a message,
-//! let alone a failure to start.
+//! it lives in the state directory, not beside `config.toml`, and a corrupt
+//! or missing one is simply an empty list. Losing a convenience list is not
+//! worth a message, let alone a failure to start.
+//!
+//! It used to live beside `config.toml`, which on Windows roams, and a list of
+//! one machine's absolute paths is exactly what a roaming directory must not
+//! carry. [`crate::locations`] moves an old one across.
 //!
 //! Paths only. This file records *which* documents were opened, never
 //! anything about their contents (ADR-0011).
@@ -12,13 +16,15 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use bp_platform::dirs::DirKind;
+
 use crate::{EnvSnapshot, Platform};
 
 /// How many entries to keep. Long enough to be useful, short enough that the
 /// File menu stays a menu.
 pub const MAX_RECENT: usize = 10;
 
-const FILE_NAME: &str = "recent.toml";
+pub(crate) const FILE_NAME: &str = "recent.toml";
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Recent {
@@ -68,47 +74,52 @@ impl Recent {
     }
 }
 
-/// Where the recent list is stored, beside the config file.
-///
-/// The edge, like [`crate::config_path`]: it reads the environment once and
-/// hands it to [`recent_path_in`], which carries the rule.
-#[must_use]
-pub fn recent_path() -> Option<PathBuf> {
-    recent_path_in(Platform::HOST, &EnvSnapshot::from_environment())
-}
-
 /// Where the recent list is stored, given a platform and an environment.
 ///
-/// Beside the config file by construction rather than by `with_file_name` on
-/// whatever `config_path` returned, so the two cannot drift apart, and so the
-/// promise is assertable on both platforms from either leg of CI.
+/// The state directory: per-machine, and never the roaming one. The edge that
+/// resolves it for this machine is [`crate::Locations::for_host`], which also
+/// moves a list an older build left beside `config.toml`.
 #[must_use]
 pub fn recent_path_in(platform: Platform, env: &EnvSnapshot) -> Option<PathBuf> {
-    crate::beside_the_config_file(platform, env, FILE_NAME)
+    crate::locations::inside(platform, DirKind::State, env, FILE_NAME)
 }
 
-/// Read the recent list, pruning entries that have gone away.
-pub fn load_recent() -> Recent {
-    let mut recent = recent_path()
-        .and_then(|p| std::fs::read_to_string(p).ok())
+/// Read the recent list from `path`, pruning entries that have gone away.
+///
+/// A path rather than a lookup, so the caller decides where the list lives
+/// and a test can hand it a temporary one. Resolving it here meant every
+/// test that opened a file wrote into the developer's real list.
+pub fn load_recent(path: &Path) -> Recent {
+    let mut recent = std::fs::read_to_string(path)
         .map(|text| Recent::parse(&text))
         .unwrap_or_default();
     recent.prune_missing();
     recent
 }
 
-/// Write the recent list, creating its directory if needed.
+/// Write the recent list to `path`, creating its directory if needed.
 ///
 /// Failures are ignored: not remembering a filename is not worth an error in
 /// front of someone who is trying to write.
-pub fn save_recent(recent: &Recent) {
-    let Some(path) = recent_path() else {
-        return;
-    };
+///
+/// Written beside the target and renamed over it, so a crash or a full disk
+/// mid-write leaves the previous list rather than half of one. A torn file
+/// would parse as empty -- `Recent::parse` forgives it -- and the user's whole
+/// list would be gone for the sake of one entry. `std::fs::rename` replaces
+/// the target on both platforms. Not `bp_files::atomic_write`: this crate
+/// sits below `bp-files` and the list needs no read-back verification.
+pub fn save_recent(path: &Path, recent: &Recent) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let _ = std::fs::write(path, recent.to_toml());
+    let mut temporary = path.as_os_str().to_owned();
+    temporary.push(".tmp");
+    let temporary = PathBuf::from(temporary);
+    if std::fs::write(&temporary, recent.to_toml()).is_err()
+        || std::fs::rename(&temporary, path).is_err()
+    {
+        let _ = std::fs::remove_file(&temporary);
+    }
 }
 
 #[cfg(test)]
@@ -219,38 +230,84 @@ mod tests {
     }
 
     #[test]
-    fn the_list_sits_beside_the_config_file_on_every_platform() {
+    fn the_list_sits_in_the_state_directory_and_not_beside_the_config_file() {
+        // Beside `config.toml` was where it used to be, and on Windows that
+        // directory roams: a list of one machine's absolute paths arrived on
+        // every other machine the user signed into.
         let env = crate::tests::whole_env();
         for &platform in Platform::ALL {
             let recent = crate::tests::text(recent_path_in(platform, &env));
             let config = crate::tests::text(crate::config_path_in(platform, &env));
             let (recent_dir, recent_name) = split(platform, &recent);
-            let (config_dir, config_name) = split(platform, &config);
+            let (config_dir, _) = split(platform, &config);
 
-            assert_eq!(
-                recent_dir, config_dir,
-                "{platform:?}: the two must share a directory"
-            );
             assert_ne!(
-                recent_name, config_name,
-                "{platform:?}: state must not overwrite settings"
+                recent_dir, config_dir,
+                "{platform:?}: the list must not sit beside the settings"
+            );
+            assert_eq!(
+                recent_dir,
+                crate::tests::text(bp_platform::dirs::directory(platform, DirKind::State, &env)),
             );
             assert_eq!(recent_name, FILE_NAME);
         }
     }
 
     #[test]
-    fn a_relative_xdg_config_home_does_not_move_the_list_either() {
-        // Same defect, same fix: the recent list must not end up beside the
-        // directory the editor happened to be launched from.
+    fn a_list_round_trips_through_the_path_it_is_given() {
+        let dir = tempfile::tempdir().unwrap();
+        let existing = dir.path().join("a.txt");
+        std::fs::write(&existing, b"").unwrap();
+        let path = dir.path().join("state").join(FILE_NAME);
+
+        let mut recent = Recent::new();
+        recent.push(&existing);
+        save_recent(&path, &recent);
+
+        assert_eq!(load_recent(&path), recent);
+    }
+
+    #[test]
+    fn saving_replaces_the_list_and_leaves_no_temporary_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let existing = dir.path().join("a.txt");
+        std::fs::write(&existing, b"").unwrap();
+        let path = dir.path().join(FILE_NAME);
+        std::fs::write(&path, b"paths = []\n").unwrap();
+
+        let mut recent = Recent::new();
+        recent.push(&existing);
+        save_recent(&path, &recent);
+
+        assert_eq!(load_recent(&path), recent);
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert!(
+            names.iter().all(|n| !n.to_string_lossy().ends_with(".tmp")),
+            "{names:?}"
+        );
+    }
+
+    #[test]
+    fn a_missing_list_is_an_empty_one() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(load_recent(&dir.path().join("absent.toml")).is_empty());
+    }
+
+    #[test]
+    fn a_relative_xdg_state_home_does_not_move_the_list_either() {
+        // The same defect `config_path_in` once had: the list must not end up
+        // beside the directory the editor happened to be launched from.
         for unusable in crate::tests::UNUSABLE_XDG {
             let env = EnvSnapshot {
-                xdg_config_home: Some((*unusable).to_owned()),
+                xdg_state_home: Some((*unusable).to_owned()),
                 ..crate::tests::whole_env()
             };
             assert_eq!(
                 crate::tests::text(recent_path_in(Platform::Linux, &env)),
-                "/home/me/.config/bachelorpad/recent.toml",
+                "/home/me/.local/state/bachelorpad/recent.toml",
                 "{unusable:?} must be ignored"
             );
         }

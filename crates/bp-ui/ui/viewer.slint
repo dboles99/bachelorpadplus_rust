@@ -1,0 +1,147 @@
+// The large-file viewer's pane (release plan M1-06, owner decision U3).
+//
+// A banner saying why the document is read-only, the visible lines, and a
+// scrollbar for the whole file. The lines are drawn by `EditorSurface` --
+// the same rows, gutter, highlight and caret as the custom editor view --
+// because Rust hands over only what is on screen either way; this adds the
+// banner and the scrollbar, and turns clicks and keys into viewer terms.
+//
+// Every decision is Rust's (`src/viewer.rs`): which lines, where the thumb
+// sits, what a key does. Nothing here knows how large the file is.
+
+import { EditorSurface } from "editor_surface.slint";
+import { EditorRow, Palette, SelectionBox } from "types.slint";
+
+export component ViewerPane inherits Rectangle {
+    in property <string> banner;
+    in property <[EditorRow]> rows;
+    in property <[SelectionBox]> highlight;
+    in property <int> caret-row: -1;
+    in property <int> caret-column;
+    in property <bool> show-gutter: true;
+    /// Digits in the largest line number, so a gutter numbering lines in the
+    /// millions does not clip them.
+    in property <int> gutter-columns;
+    in property <length> font-size: 14px;
+    /// Where the thumb is, 0 at the top of the track and 1 at the bottom.
+    in property <float> thumb-position;
+    /// How much of the track it covers, 0 to 1.
+    in property <float> thumb-size: 1;
+
+    /// text, control, shift, alt. Returns whether the viewer claimed it.
+    callback key(string, bool, bool, bool) -> bool;
+    /// A row was clicked.
+    callback pressed(int);
+    /// Lines to scroll; positive is toward the end of the file.
+    callback scrolled(int);
+    /// How many rows and characters now fit.
+    callback resized(int, int);
+    /// The scrollbar was pressed or dragged: how far down, 0 to 1.
+    callback scrubbed(float);
+
+    public function focus-view() {
+        surface.focus();
+    }
+
+    background: Palette.panel;
+    forward-focus: surface;
+
+    VerticalLayout {
+        Rectangle {
+            height: 28px;
+            background: Palette.shell;
+            accessible-role: text;
+            accessible-label: root.banner;
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 10px;
+                Text {
+                    text: root.banner;
+                    color: Palette.ink;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+        }
+
+        Rectangle { height: 1px; background: Palette.edge; }
+
+        HorizontalLayout {
+            surface := EditorSurface {
+                horizontal-stretch: 1;
+                accessible-role: text;
+                accessible-label: "Document, read-only";
+                rows: root.rows;
+                selection: root.highlight;
+                caret-row: root.caret-row;
+                caret-column: root.caret-column;
+                show-gutter: root.show-gutter;
+                gutter-columns: root.gutter-columns;
+                font-size: root.font-size;
+
+                key(text, control, shift, alt) => {
+                    return root.key(text, control, shift, alt);
+                }
+                // A click puts the caret's line where it was. Double and
+                // triple clicks do the same: there is nothing to select.
+                pressed(row, column, extend) => {
+                    root.pressed(row);
+                }
+                selected-word(row, column) => {
+                    root.pressed(row);
+                }
+                selected-line(row, column) => {
+                    root.pressed(row);
+                }
+                scrolled(lines) => {
+                    root.scrolled(lines);
+                }
+                resized(rows, columns) => {
+                    root.resized(rows, columns);
+                }
+            }
+
+            track := Rectangle {
+                width: 14px;
+                background: Palette.shell;
+                accessible-role: slider;
+                accessible-label: "Position in the file";
+
+                property <length> thumb-height: max(20px, self.height * root.thumb-size);
+
+                Rectangle {
+                    x: 3px;
+                    width: parent.width - 6px;
+                    height: track.thumb-height;
+                    y: (track.height - track.thumb-height) * root.thumb-position;
+                    border-radius: 3px;
+                    background: Palette.ink-dim;
+                }
+
+                // Clicking or dragging on the track puts the middle of the
+                // thumb under the pointer.
+                function fraction(at: length) -> float {
+                    return max(0, min(1, (at - self.thumb-height / 2) / max(1px, self.height - self.thumb-height)));
+                }
+
+                TouchArea {
+                    pointer-event(event) => {
+                        if (event.kind == PointerEventKind.down) {
+                            surface.focus();
+                            root.scrubbed(track.fraction(self.mouse-y));
+                        }
+                    }
+                    moved => {
+                        if (self.pressed) {
+                            root.scrubbed(track.fraction(self.mouse-y));
+                        }
+                    }
+                    scroll-event(event) => {
+                        root.scrolled(-round(event.delta-y / (root.font-size * 1.286)));
+                        return EventResult.accept;
+                    }
+                }
+            }
+        }
+    }
+}

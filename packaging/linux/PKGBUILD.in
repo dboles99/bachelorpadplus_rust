@@ -1,0 +1,46 @@
+# Maintainer: Daniel Boles
+#
+# bachelorpad-bin for the AUR: repackages the release tarball rather than
+# building from source. Rendered by packaging/linux/build-packages.sh, which
+# fills in the version and the tarball's checksum; this template is not a
+# PKGBUILD by itself. Run `makepkg --printsrcinfo > .SRCINFO` beside the
+# rendered file before pushing it to the AUR.
+
+pkgname=bachelorpad-bin
+# pacman's version may not contain a hyphen, so a pre-release such as
+# 1.0.0-rc.1 becomes 1.0.0_rc.1, which vercmp sorts before 1.0.0.
+_upstreamver=@VERSION@
+pkgver=@PKGVER@
+pkgrel=@RELEASE@
+pkgdesc='Text editor for notes, data and logs'
+arch=('x86_64')
+url='https://github.com/dboles99/bachelorpadplus_rust'
+license=('MIT OR Apache-2.0')
+provides=('bachelorpad')
+conflicts=('bachelorpad')
+# What the binary links, then what it loads with dlopen when the window
+# opens (packaging/linux/README.md has how each was found). pacman's
+# desktop-file-utils, shared-mime-info and gtk-update-icon-cache hooks
+# refresh the caches, so there is no install script.
+depends=('glibc' 'gcc-libs' 'fontconfig'
+         'libxkbcommon' 'libxkbcommon-x11'
+         'libx11' 'libxcb' 'libxcursor' 'libxi'
+         'wayland' 'dbus')
+optdepends=('xdg-desktop-portal-gtk: file dialogs (or another portal backend)'
+            'xdg-desktop-portal-kde: file dialogs on KDE Plasma'
+            'libglvnd: the GPU renderer, --renderer platform')
+options=('!strip' '!debug')
+source=("https://github.com/dboles99/bachelorpadplus_rust/releases/download/v${_upstreamver}/bachelorpad-${_upstreamver}-x86_64-linux.tar.gz")
+sha256sums=('@SHA256@')
+
+package() {
+    cd "bachelorpad-${_upstreamver}-x86_64-linux"
+    install -d "${pkgdir}/usr"
+    cp -a bin share "${pkgdir}/usr/"
+    # Arch keeps licences under /usr/share/licenses/<pkgname>.
+    install -d "${pkgdir}/usr/share/licenses/${pkgname}"
+    mv "${pkgdir}/usr/share/doc/bachelorpad/"LICENSE-* "${pkgdir}/usr/share/licenses/${pkgname}/"
+    if [[ -f "${pkgdir}/usr/share/doc/bachelorpad/THIRD-PARTY-NOTICES.txt" ]]; then
+        mv "${pkgdir}/usr/share/doc/bachelorpad/THIRD-PARTY-NOTICES.txt" "${pkgdir}/usr/share/licenses/${pkgname}/"
+    fi
+}
