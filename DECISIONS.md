@@ -34,58 +34,46 @@ Adding a decision means adding both.
 | BP-ADR-0026 | 2026-08-19 | A `.sig` sidecar appends to the whole file name and records the signer's key; Windows enforces no key-file permission | Accepted | [ADR-0026](docs/decisions/ADR-0026.md) |
 | BP-ADR-0027 | 2026-08-19 | Large-file thresholds are measured; the line index is sparse; memory mapping is declined with reasons | Accepted | [ADR-0027](docs/decisions/ADR-0027.md) |
 | BP-ADR-0028 | 2026-08-19 | Redaction merges overlapping and adjacent spans, resolves every offset against the original, and states what verification cannot prove | Accepted | [ADR-0028](docs/decisions/ADR-0028.md) |
+| BP-ADR-0029 | 2026-09-25 | The recent list, recovery journal and security history leave the roaming directory, and an old location is adopted -- or kept -- rather than abandoned | Accepted | [ADR-0029](docs/decisions/ADR-0029.md) |
+| BP-ADR-0030 | 2026-09-25 | RC1 scope: notebook execution, semantic organisation, personality modes and highlighting deferred; mmap declined for good; Sign ships with a sealed seed | Accepted | [ADR-0030](docs/decisions/ADR-0030.md) |
+| BP-ADR-0031 | 2026-09-25 | Slint is used under its Royalty-free Licence 2.0, with `AboutSlint` in the About window | Accepted | [ADR-0031](docs/decisions/ADR-0031.md) |
+| BP-ADR-0032 | 2026-09-25 | App id `io.github.dboles99.BachelorPad`; the installer owns Windows registration; DejaVu Sans Mono is bundled | Accepted | [ADR-0032](docs/decisions/ADR-0032.md) |
+| BP-ADR-0033 | 2026-09-25 | `bp-platform-windows` is the one crate allowed `windows-sys` and confined `unsafe` | Accepted | [ADR-0033](docs/decisions/ADR-0033.md) |
+| BP-ADR-0034 | 2026-09-26 | Nothing leaves the machine in v1; `Network::Allowed` means "not forbidden, and no consumer exists" | Accepted | [ADR-0034](docs/decisions/ADR-0034.md) |
 
 ## Decisions needed before the work they block
 
-- **Where a signing key lives** (phase 16). `bp-crypto` signs and verifies,
-  and both are tested; Verify Signature is reachable and Sign Document is
-  greyed, because an Ed25519 signing key has to be kept somewhere and this
-  product has no key store, no platform-keyring integration (Windows DPAPI,
-  Linux Secret Service -- phase 18) and no decision on file permissions for a
-  key sitting on disk. specs.md section 15 asks for all three. The row states
-  the gap rather than a key appearing in the config directory because a menu
-  row needed one.
-- **What may leave the machine** (phase 8 layer three, phase 10). Generative
-  providers and embeddings both imply sending document content somewhere.
-  ADR-0006 keeps them optional; ADR-0011 governs what is permitted. Neither
-  says which providers are acceptable.
-- **Whether `bp-storage` may record extracted titles before phase 14 exists**
-  (phase 9). ADR-0019 currently says no, and that is why the crate is built
-  and unreachable. Everything phase 9 wants -- related notes, duplicate
-  detection -- needs something recorded about each document, so this decision
-  gates the phase rather than merely delaying it. Reversing it is allowed;
-  doing so by accident is not.
-- **specs.md section 22's warm-start target** (75 ms) is still unverified —
-  the software renderer's time to first interaction cannot be measured, so
-  half of ADR-0017's target has no number behind it.
+The one list of open questions is
+[`project/DECISIONS_NEEDED.md`](project/DECISIONS_NEEDED.md). It is kept
+current as work happens, and an answered row moves from there into an ADR and
+the table above. This section used to carry its own subset, which went stale
+the moment the queue moved; it no longer duplicates it.
+[`project/RELEASE_PLAN.md`](project/RELEASE_PLAN.md) §4 orders the same
+questions by the milestone each one blocks. Of that list, decisions 1, 2, 4,
+5, 6, 7 and 16 were answered on 2026-09-25 (ADR-0030 to ADR-0033), which
+settles D5, D8, D9 and U2. On 2026-09-26 the owner answered 17 (nothing
+leaves the machine, ADR-0034, settling D1), 18 (package formats), 19
+(releases built by a local script), 20 (RC1 ships saying the encryption
+envelope is unreviewed, settling D4 for RC1) and decision 2's copyright
+holder (Daniel Boles). Decision 3, the signing identity, is being applied
+for by the owner.
+
+specs.md section 22's warm-start target (75 ms) is a measurement still owed,
+not a decision; it is under *Open items* below with the rest of ADR-0017's
+unmeasured half.
 
 ## Open items
 
-- **`bp-files` never applies the `\\?\` extended-length prefix**, so a name
-  `bp-naming` is willing to generate can be unwritable. A filename at
-  `SemanticName::to_filename`'s own documented 255-byte maximum fails inside
-  any directory whose path pushes the total past 259 -- the system temp
-  directory alone does it. `bp-platform` has both the diagnosis
-  (`paths::needs_extended_length_prefix`, `path_problems`) and the fix
-  (`paths::to_extended_length`). `bp-files` depends on `bp-platform` now --
-  it asks the same crate whether a name the user typed is a device -- so what
-  was two problems is one: the edge exists and the call does not.
-  The error compounds it: `SaveError` blames a read-only file or another
-  program for what is `os error 3`, sending the user to look at the wrong
-  thing.
-- **`bp-notebook` silently runs unidentified code through the wrong
-  interpreter, and ADR-0025 says the opposite.** `ipynb.rs::infer_kind`
-  computes `stated.or(notebook_language)`, which conflates "the cell said
-  nothing about its language", where falling back to the kernelspec is right,
-  with "the cell named a language we cannot map", where it is a guess. No
-  warning distinguishes them. A cell another tool tagged
-  `vscode.languageId: "brainfuck"` imports as Python and appears in
-  `request_run_all` with the user told nothing. ADR-0025 states that such a
-  cell "becomes `CellKind::Raw` and an `ImportWarning::UnknownCodeLanguage`
-  says so" -- and that holds only for notebooks carrying no kernelspec, which
-  almost no real `.ipynb` is. `CellKind::from_language_name`'s own doc gives
-  the stakes: guessing wrong means offering to run someone's text through the
-  wrong interpreter.
+- **Fixed in the sixth session, and worth knowing how.** Two of the
+  cross-crate tests' defects: `bp-notebook` ran a cell whose stated language
+  it could not map through the kernel's interpreter (it now falls to `Raw`
+  with a warning, as ADR-0025 said all along), and `bp-files` never applied
+  `\\?\`. The second is the instructive one. `std::fs` *does* lengthen a
+  long path on Windows by itself, which is why creating and reading such a
+  file always worked; `tempfile`'s `persist` calls `MoveFileExW` with the path
+  as given, so only the rename -- the step that makes a save atomic -- failed.
+  A dependency that bypasses `std` for one call inherits none of `std`'s
+  platform fixes for that call.
 - **"A flipped bit anywhere in a `.sig` never verifies" is false, correctly.**
   `Sidecar::parse` tolerates trailing whitespace so a signature survives being
   mailed and pasted, so flipping bit 0 of the closing newline yields a
@@ -96,17 +84,11 @@ Adding a decision means adding both.
   signature. Recorded because the naive version is the one somebody will
   write next.
 
-- **The recent-files list roams on Windows, and it is full of absolute
-  paths.** `recent.toml` sits beside `config.toml` in the config directory,
-  which on Windows is `%APPDATA%` and therefore roams between machines --
-  and a recent list is machine-specific absolute paths, which is exactly what
-  `bp_platform::DirKind::roams` warns against. `bp-platform` names the
-  recent-files list as `DirKind::State` for this reason. It was not moved
-  when `bp-config` started delegating, deliberately: it is a product decision
-  with a user-visible effect rather than a deduplication, and `bp-ui`'s
-  `recovery_dir` derives its own path from `config_path`, so moving one
-  without the other would scatter the product's files. Both want doing
-  together, by something that owns both crates.
+- **~~The recent-files list roams on Windows~~ -- settled by ADR-0029.**
+  The list, the recovery journal and the security history all leave the
+  configuration directory together, and an old location is adopted rather
+  than abandoned. The journal went to `Data`, not `State`, which is what
+  `bp-platform`'s own docs said.
 - **Neither `bp-platform-windows` nor `bp-platform-linux` was created**, and
   that is a decision rather than an omission. specs §20 and the crate map
   name them. Everything they would hold is either already a parameterised
@@ -114,25 +96,28 @@ Adding a decision means adding both.
   the signing-key question. ADR-0001's own warning about `cfg`-gated code
   argues against two crates whose contents each CI leg never compiles.
   Revisit when something genuinely platform-specific has to be linked.
+  Since then D8 and the signing-key question are answered, and ADR-0033
+  (2026-09-25) names `bp-platform-windows` as the one crate allowed
+  `windows-sys` and confined `unsafe`, for when Win32 calls are needed. It
+  has not been created yet.
 
-- **`bp-search` and `bp-buffer` do not agree what a line is, and this is
-  now a decision rather than a bug report.** `bp_search::Offsets` counts
-  `'
-'`. `bp_buffer::Buffer` is a `ropey::Rope` built with ropey's default
-  features, which include `unicode_lines`, so ropey also breaks on a bare
-  `
-`, ``, ``, U+0085, U+2028 and U+2029. For `"one
-two
-needle"`
-  search reports line 1 and the buffer reports line 3, so a find-in-files
-  result scrolls the editor to the wrong line in any file carrying a bare CR.
-  The same split exists inside `bp-buffer` — the free `line_count` counts
-  newlines, `Buffer::len_lines` asks the rope — and `bp-ui` uses one for the
-  `TextInput` status bar and the other for the `EditorSurface` one, so the
-  same document reports two line counts depending on which view draws.
-  Either `bp-search` adopts ropey's break set or `bp-buffer` builds its rope
-  without `unicode_lines`; one line definition has to win, and that is an
-  ADR. Found by the cross-crate tests, pinned as an ignored test naming it.
+- **What a line is: answered (D6, 2026-09-26), and the pinned test runs.**
+  `bp-search` used to count `'\n'` while `bp-buffer`'s rope, built with
+  ropey's default `unicode_lines`, also broke on a bare `\r`, `\x0B`,
+  `\x0C`, U+0085, U+2028 and U+2029, so a find-in-files result scrolled the
+  editor to the wrong line in any file carrying one. The owner chose the
+  Notepad rule: a line ends at LF, CRLF or a bare CR, and nothing else,
+  everywhere. The rope is built with `cr_lines`; `bp_buffer::breaks` states
+  the rule for the rope, `line_count`, the large-file index and viewer and
+  the stream windows; and `bp-search`, `bp-secrets`, `bp-semantic` and
+  `bp-redaction`, which do not depend on `bp-buffer`, restate it and are
+  held to it by `tests/integration/tests/search_over_buffer.rs`. Three
+  places still see lines their own way, each deliberately: the default
+  `TextInput` view draws breaks as Slint does (it may draw a form feed or
+  U+2028 as a new line); `bp-files` converts line endings without touching
+  a bare `\r`, because `LineEnding` cannot name a classic Mac file and a
+  conversion that rewrote one would rewrite a `\r` that was data; and the
+  JSON, YAML, TOML and CSV parsers report line numbers by their own rules.
 - **Time to first interaction is unmeasurable under the software renderer.**
   Slint exposes no rendering notifier there, so half of the ADR-0017 startup
   target has no measurement behind it. A hole, not a pass.
@@ -160,28 +145,41 @@ needle"`
   ships and ADR-0022 seals the journal with the document's own passphrase.
   The remaining hole is narrower, and is the next item: a *plaintext*
   document under those profiles has no key, so it gets no journal at all.
-- **The custom editor view has never been typed into.** Its rules are covered
-  by 147 tests in `bp-editor`; the widget has been verified to exactly one
-  standard, that it renders a frame with a real file open without panicking.
-  Whether keys arrive, whether the caret lands under the pointer and which
-  way the wheel scrolls are all open. `project/NEXT_SESSION.md` has the
-  checklist.
+- **The custom editor view has been driven end to end, but not by a
+  person.** Its rules are covered by some 200 tests in `bp-editor`. The sixth
+  session drove the binary under `--editor-view` on a virtual X display with
+  synthetic input: keys arrive, Ctrl+S saves every edit, Home/End/Page
+  Up/Page Down land where they should, and Ln/Col tracks the caret. The Linux
+  caret drift it found (a proportional fallback for "Consolas") was fixed by
+  bundling DejaVu Sans Mono (ADR-0032, M0-03). Whether the caret lands under
+  the pointer since that fix, and which way the wheel scrolls, are **not yet
+  verified**: the headless window tests send keys, not pointer placement, and
+  no person has run the checklist in `project/NEXT_SESSION.md`.
 
-  This used to carry "nothing depends on the answers yet". **That is no
-  longer true.** Duplicate Line and Move Line Up/Down are enabled only under
-  `--editor-view`, and Go to Line will be, so features now inherit whatever
-  that caret does. The default is still `TextInput`, so nothing is *broken*
-  by the answer being bad -- but a growing set of the product is unusable
-  until somebody gives it.
-- **A clipboard menu row can act on a different entry than the one it
-  names.** Row ids are decoded against the clipboard history as it is at the
-  moment of the click, not as it was when the menu was built, and a 1.2 s
-  poll timer can add an entry in between. Predates the paste-transformation
-  rows and applies equally to plain paste. Fixing it properly means freezing
-  a snapshot of the history while a menu is open, which is a design question
-  rather than a patch.
-- **Most of the product has not been used.** 542 tests cover the pieces in
-  isolation. One manual pass found two defects no test caught: a menu bar
-  where twelve of fourteen menus swallowed clicks, and Save As defaulting to
-  the process working directory, which wrote real documents into a git
-  checkout. Integrated behaviour needs exercising, not more unit tests.
+  This used to say that caret features depended on the custom view's answer.
+  **That is no longer true.** Go to Line shipped (W5), and since release-plan
+  item M1-04 it, Duplicate Line, Move Line Up/Down, Insert Date/Time and
+  Ln/Col all work in the default `TextInput` view too, which reads the
+  widget's caret. The default is still `TextInput`, so a bad answer here
+  affects only those who opt in.
+- **A clipboard menu row could act on a different entry than the one it
+  named. Fixed** (release-plan item M1-18, U5 answered "snapshot on open").
+  Row ids were decoded against the history as it stood at the click, and the
+  1.2 s poll could add an entry between the menu being built and the click.
+  Now opening Edit or the editor context menu freezes a snapshot of the
+  history as one fingerprint per entry (`bp_clipboard::Snapshot`, hashes
+  only, so it keeps no text the history has forgotten). A row's id is a slot
+  in that snapshot, and a click finds the entry the slot names wherever the
+  history has moved it; if it has gone, the status bar says so and nothing is
+  pasted, pinned or cleared. A copy made while a menu is open appears the
+  next time one opens. What is left: an entry *removed* while a menu is open
+  (a stricter profile clearing the history) takes its row with it, so the
+  rows below move up. That is deliberate -- the alternative is keeping a
+  preview of forgotten text on screen -- and every row still acts on the
+  entry it shows.
+- **Most of the product has not been used.** Over 2,000 tests cover the
+  pieces and, since the window tests, some of the seams. One manual pass
+  found two defects no test caught: a menu bar where twelve of fourteen menus
+  swallowed clicks, and Save As defaulting to the process working directory,
+  which wrote real documents into a git checkout. Integrated behaviour needs
+  exercising, not more unit tests.

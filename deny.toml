@@ -1,0 +1,52 @@
+# cargo-deny: licences, advisories, bans and sources (release plan M1-14).
+# Run by the gate (`scripts/Invoke-LocalCI.ps1`, the `deny` stage) and by the
+# release script. Everything here is a claim about what ships, so it is
+# checked for both targets the product builds for.
+
+[graph]
+targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+all-features = false
+
+[advisories]
+version = 2
+# An unmaintained crate is a warning to act on, not a reason the product
+# cannot build; a vulnerability is.
+unmaintained = "workspace"
+ignore = []
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+# Permissive licences only, plus Slint's royalty-free licence, which the
+# owner chose (decision 2, ADR-0031) over its GPL and commercial options.
+# Slint offers all three as alternatives, so allowing the royalty-free one
+# is what makes its expression pass; GPL-3.0 is deliberately absent.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "BSL-1.0",
+    "LicenseRef-Slint-Royalty-free-2.0",
+]
+
+[bans]
+# Two versions of one crate cost binary size, not correctness; the release
+# script reports them, the gate does not fail on them.
+multiple-versions = "allow"
+wildcards = "deny"
+# The workspace's own crates depend on each other by path, which cargo-deny
+# counts as a wildcard version. They are never published, so there is no
+# registry version for them to drift from; a wildcard on a crates.io
+# dependency is still refused.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

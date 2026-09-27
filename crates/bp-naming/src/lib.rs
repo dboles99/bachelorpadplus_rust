@@ -15,11 +15,13 @@
 
 #![forbid(unsafe_code)]
 
+mod created;
 mod date;
 mod name;
 mod sanitize;
 mod stamp;
 
+pub use created::creation_date_for;
 pub use date::{DATE_LEN, format_date, parse_date};
 pub use name::{FIRST_COLLISION, FIRST_REVISION, SemanticName};
 pub use sanitize::{

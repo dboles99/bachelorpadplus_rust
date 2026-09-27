@@ -1,0 +1,111 @@
+# syntax=docker/dockerfile:1
+#
+# The Linux release build environment (release plan M3-02, decision 19).
+#
+# Debian 12 because its glibc, 2.36, is the oldest the packages promise to
+# run on (exit criterion L2): a binary links against the symbol versions of
+# the glibc it was built with, so building on a newer distribution -- the
+# Ubuntu 24.04 of a developer machine needs 2.39 -- would lock out Debian 12
+# and Ubuntu 22.04 users with a "GLIBC_2.39 not found" at start-up.
+# `check-glibc.sh` proves the ceiling on every build.
+#
+# Everything that decides the output is pinned: the base image by digest,
+# rustup by version and checksum, the compiler by `rust-toolchain.toml`
+# (read from the mounted repository, so the pin stays in one place), and the
+# packaging tools by exact version.
+#
+# Build and run it through `build-in-container.sh`, which mounts the
+# repository read-only and the output directory writable:
+#
+#   packaging/linux/build-in-container.sh --out artifacts/releases/v1.0.0/linux
+#
+# The base image is an argument only so a builder can prove the Dockerfile
+# on a mirror they can reach; a release is built from the default.
+ARG BASE_IMAGE=debian:12.15@sha256:f37a335e82bca302e955fa39f9dfe28f1be618f016f8a2b56318e5a5111afc26
+FROM ${BASE_IMAGE}
+
+# Some build hosts reach the internet only through a TLS-intercepting proxy
+# that tunnels HTTPS and nothing else. For those: `--secret id=extra-ca,src=
+# <bundle>` adds the proxy's CA to the image's trust store, and
+# `--build-arg APT_HTTPS=1` switches apt's sources to https so they go
+# through the tunnel. The standard HTTP(S)_PROXY build arguments are passed
+# through by docker itself. None of this is needed on an open network.
+ARG APT_HTTPS=0
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8 \
+    RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# The build headers are those of docs/governance/LOCAL_CI.md ("Native
+# Linux"); the rest is what packaging needs:
+#   dpkg-dev    -- dpkg-shlibdeps, which cargo-deb's `$auto` depends uses
+#   rpm         -- rpmbuild, for the .rpm (see packaging/linux/README.md for
+#                  why not cargo-generate-rpm)
+#   binutils    -- objcopy and objdump, for the debuginfo split and the
+#                  glibc check (also pulled in by build-essential)
+#   git         -- the commit time, for SOURCE_DATE_EPOCH
+#   desktop-file-utils, appstream -- validate the shipped desktop files
+RUN --mount=type=secret,id=extra-ca,required=false \
+    set -eu; \
+    apt_opts=""; \
+    if [ -s /run/secrets/extra-ca ]; then \
+        # A world-readable copy: apt fetches as the unprivileged _apt user, \
+        # which cannot read the secret itself. \
+        install -D -m 0644 /run/secrets/extra-ca /usr/local/share/ca-certificates/build-extra-ca.crt; \
+        apt_opts="-o Acquire::https::CAInfo=/usr/local/share/ca-certificates/build-extra-ca.crt"; \
+    fi; \
+    if [ "$APT_HTTPS" = 1 ]; then \
+        sed -i 's#http://#https://#g' /etc/apt/sources.list.d/*.sources /etc/apt/sources.list 2>/dev/null || true; \
+    fi; \
+    apt-get $apt_opts update; \
+    apt-get $apt_opts install -y --no-install-recommends \
+        ca-certificates curl git file xz-utils \
+        build-essential pkg-config \
+        libfontconfig1-dev libxkbcommon-dev libxcb1-dev libgl1-mesa-dev \
+        libwayland-dev libssl-dev \
+        dpkg-dev rpm binutils \
+        desktop-file-utils appstream; \
+    if [ -n "$apt_opts" ]; then update-ca-certificates; fi; \
+    rm -rf /var/lib/apt/lists/*
+
+# rustup itself, by version and checksum. The toolchain it installs is
+# verified by rustup against the channel manifest's own hashes.
+ARG RUSTUP_VERSION=1.29.1
+ARG RUSTUP_SHA256=dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71
+# Keep in step with rust-toolchain.toml. Installing it here, rather than
+# letting rustup fetch it on first use, keeps the build step off the network
+# for the toolchain and makes the image the unit that is pinned.
+ARG RUST_TOOLCHAIN=1.94.1
+RUN set -eu; \
+    curl --proto '=https' --tlsv1.2 -sSf -o /tmp/rustup-init \
+        "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/x86_64-unknown-linux-gnu/rustup-init"; \
+    echo "${RUSTUP_SHA256}  /tmp/rustup-init" | sha256sum -c -; \
+    chmod +x /tmp/rustup-init; \
+    /tmp/rustup-init -y --no-modify-path --profile minimal \
+        --default-toolchain "${RUST_TOOLCHAIN}" -c rustfmt -c clippy; \
+    rm /tmp/rustup-init; \
+    rustc --version; cargo --version
+
+# cargo-deb builds the .deb. `--locked` so the tool is built from the
+# dependency set its authors released, not whatever resolves today.
+ARG CARGO_DEB_VERSION=3.8.0
+# cargo-auditable embeds the resolved dependency list in the binary, so the
+# shipped executable itself says what it was built from (release plan M3-03).
+ARG CARGO_AUDITABLE_VERSION=0.7.6
+RUN set -eu; \
+    cargo install --locked "cargo-deb@${CARGO_DEB_VERSION}"; \
+    cargo install --locked "cargo-auditable@${CARGO_AUDITABLE_VERSION}"; \
+    rm -rf "${CARGO_HOME}/registry" "${CARGO_HOME}/git"; \
+    cargo deb --version
+
+# The repository is mounted read-only at /src and the output directory
+# writable at /out; the target directory is a separate writable mount (or
+# the container's own filesystem) so the read-only mount is never written.
+# The entrypoint is run from the mounted repository, not copied into the
+# image, so the script that builds a commit is always that commit's own.
+WORKDIR /src
+ENV CARGO_TARGET_DIR=/build/target \
+    CARGO_INCREMENTAL=0
+ENTRYPOINT ["/src/packaging/linux/release-entrypoint.sh"]

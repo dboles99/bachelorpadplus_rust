@@ -229,12 +229,26 @@ fn the_host_wrapper_agrees_with_the_parameterised_function() {
 
 /// An absolute root for each platform, so the properties below feed
 /// `directory` inputs it is meant to accept.
+///
+/// A Windows root never has a reserved device name for a component. The
+/// regex alone produced `C:\\aux` about once in a hundred runs, and
+/// `a_resolved_directory_is_a_legal_path` then failed -- rightly, since that
+/// is not a directory Windows can create, and not an input this is meant to
+/// accept.
 fn root(platform: Platform) -> impl Strategy<Value = String> {
     match platform {
         Platform::Windows => prop::string::string_regex(r"[A-Z]:\\[a-z]{1,8}(\\[a-z]{1,8}){0,3}"),
         Platform::Linux => prop::string::string_regex("(/[a-z]{1,8}){1,4}"),
     }
     .expect("the regex is a literal and compiles")
+    .prop_filter("a reserved Windows name is not a directory", move |root| {
+        platform != Platform::Windows
+            || !root.split('\\').any(|part| {
+                crate::paths::WINDOWS_RESERVED_NAMES
+                    .iter()
+                    .any(|name| name.eq_ignore_ascii_case(part))
+            })
+    })
 }
 
 fn env_for(platform: Platform) -> impl Strategy<Value = (Platform, EnvSnapshot)> {

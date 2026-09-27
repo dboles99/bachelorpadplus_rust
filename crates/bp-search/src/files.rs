@@ -77,6 +77,10 @@ pub struct FileSearchReport {
     /// results" mean different things to someone deciding whether to refine
     /// their query.
     pub truncated: bool,
+    /// True when the caller stopped the walk before it finished
+    /// ([`search_dir_until`]). The hits so far are real; the list is not
+    /// complete, and says so.
+    pub stopped: bool,
 }
 
 impl FileSearchReport {
@@ -86,23 +90,46 @@ impl FileSearchReport {
         } else {
             format!("{} matches", self.hits.len())
         };
-        format!("{count} in {} files searched", self.files_searched)
+        if self.stopped {
+            format!(
+                "stopped: {count} in the {} files searched before then",
+                self.files_searched
+            )
+        } else {
+            format!("{count} in {} files searched", self.files_searched)
+        }
     }
 }
 
 /// Search every text file under `root`.
 pub fn search_dir(root: &Path, query: &Query) -> Result<FileSearchReport, SearchError> {
+    search_dir_until(root, query, &|| false)
+}
+
+/// [`search_dir`], checking `stop` before each file and giving up, with what
+/// it has, as soon as it says so.
+///
+/// For a search running off the UI thread: a walk of a large tree takes
+/// seconds, and the user who started it must be able to end it -- by
+/// closing the results, or by starting another. Checked per file rather
+/// than per directory, so a stop lands within one file's read.
+pub fn search_dir_until(
+    root: &Path,
+    query: &Query,
+    stop: &dyn Fn() -> bool,
+) -> Result<FileSearchReport, SearchError> {
     let mut report = FileSearchReport {
         hits: Vec::new(),
         files_searched: 0,
         files_skipped: 0,
         truncated: false,
+        stopped: false,
     };
     if query.is_empty() {
         return Ok(report);
     }
 
-    walk(root, 0, query, &mut report)?;
+    walk(root, 0, query, &mut report, stop)?;
     Ok(report)
 }
 
@@ -111,8 +138,9 @@ fn walk(
     depth: usize,
     query: &Query,
     report: &mut FileSearchReport,
+    stop: &dyn Fn() -> bool,
 ) -> Result<(), SearchError> {
-    if depth > MAX_DEPTH || report.truncated {
+    if depth > MAX_DEPTH || report.truncated || report.stopped {
         return Ok(());
     }
     // An unreadable directory is skipped, not fatal: one permission error
@@ -122,7 +150,11 @@ fn walk(
     };
 
     for entry in entries.filter_map(Result::ok) {
-        if report.truncated {
+        if report.truncated || report.stopped {
+            return Ok(());
+        }
+        if stop() {
+            report.stopped = true;
             return Ok(());
         }
         let path = entry.path();
@@ -136,7 +168,7 @@ fn walk(
                 .and_then(|n| n.to_str())
                 .is_some_and(|name| SKIP_DIRS.contains(&name) || name.starts_with('.'));
             if !skip {
-                walk(&path, depth + 1, query, report)?;
+                walk(&path, depth + 1, query, report, stop)?;
             }
             continue;
         }
@@ -184,8 +216,9 @@ fn search_file(
             report.truncated = true;
             return Ok(true);
         }
-        let preview = text
-            .lines()
+        // The same lines the number counts, or a bare-CR file previews the
+        // wrong one.
+        let preview = crate::lines(&text)
             .nth(m.line - 1)
             .unwrap_or_default()
             .trim()
@@ -213,6 +246,42 @@ fn is_binary(bytes: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stopped_search_keeps_what_it_found_and_says_it_is_incomplete() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..20 {
+            std::fs::write(dir.path().join(format!("f{i:02}.txt")), "needle\n").unwrap();
+        }
+        let query = Query::literal("needle");
+        let asked = std::cell::Cell::new(0);
+        let report = search_dir_until(dir.path(), &query, &|| {
+            asked.set(asked.get() + 1);
+            asked.get() > 5
+        })
+        .unwrap();
+
+        assert!(report.stopped);
+        assert_eq!(
+            report.hits.len(),
+            5,
+            "the files before the stop were searched"
+        );
+        assert!(
+            report.summary().starts_with("stopped"),
+            "{}",
+            report.summary()
+        );
+    }
+
+    #[test]
+    fn a_search_nobody_stops_is_not_marked_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "needle\n").unwrap();
+        let report = search_dir(dir.path(), &Query::literal("needle")).unwrap();
+        assert!(!report.stopped);
+        assert_eq!(report.hits.len(), 1);
+    }
     use tempfile::TempDir;
 
     fn write(dir: &Path, name: &str, contents: &str) {
@@ -245,6 +314,22 @@ mod tests {
 
         assert_eq!(report.hits[0].line, 3);
         assert_eq!(report.hits[0].preview, "needle here", "trimmed for display");
+    }
+
+    #[test]
+    fn a_file_with_bare_cr_endings_reports_the_line_the_editor_shows() {
+        // Decision D6: a classic Mac file is four lines, not one.
+        let dir = TempDir::new().unwrap();
+        write(
+            dir.path(),
+            "mac.txt",
+            "one\rtwo\r\x0Cnot a break\rneedle here\r",
+        );
+
+        let report = search_dir(dir.path(), &Query::literal("needle")).unwrap();
+
+        assert_eq!(report.hits[0].line, 4);
+        assert_eq!(report.hits[0].preview, "needle here");
     }
 
     #[test]

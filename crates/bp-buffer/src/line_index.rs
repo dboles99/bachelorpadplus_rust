@@ -19,10 +19,12 @@
 //! one, and every question can be answered against the prefix indexed so far.
 //!
 //! Chunk boundaries are the defect to hunt here, and one fact makes this half
-//! safe: `\n` is `0x0A`, and no byte of a multi-byte UTF-8 sequence is ever
-//! below `0x80`. A newline therefore cannot hide inside a character, and
-//! counting newlines over raw bytes cannot be confused by a chunk that splits
-//! one. Decoding is a different matter -- see [`crate::stream`].
+//! safe: `\n` is `0x0A` and `\r` is `0x0D`, and no byte of a multi-byte UTF-8
+//! sequence is ever below `0x80`. A line break therefore cannot hide inside a
+//! character, and counting breaks over raw bytes cannot be confused by a
+//! chunk that splits one. The one pair a chunk *can* split is a CRLF, which
+//! [`crate::breaks`] holds back until it knows. Decoding is a different
+//! matter -- see [`crate::stream`].
 
 use std::ops::Range;
 
@@ -84,6 +86,9 @@ pub struct LineIndex {
     lines: usize,
     indexed_bytes: u64,
     complete: bool,
+    /// Line breaks are LF, CRLF or a bare CR (decision D6). The scanner is
+    /// what keeps a CRLF split between two chunks one break.
+    breaks: crate::breaks::Scanner,
 }
 
 impl Default for LineIndex {
@@ -115,6 +120,7 @@ impl LineIndex {
             lines: 1,
             indexed_bytes: 0,
             complete: false,
+            breaks: crate::breaks::Scanner::default(),
         }
     }
 
@@ -133,20 +139,25 @@ impl LineIndex {
         if self.complete {
             return;
         }
-        for (offset, byte) in chunk.iter().enumerate() {
-            if *byte == b'\n' {
-                let start = self.indexed_bytes + offset as u64 + 1;
-                self.record(start);
-            }
-        }
+        let mut breaks = self.breaks;
+        breaks.feed(chunk, self.indexed_bytes, |start| self.record(start));
+        self.breaks = breaks;
         self.indexed_bytes += chunk.len() as u64;
     }
 
     /// Declare that the whole file has been pushed.
     ///
     /// Until this is called the index refuses to say a line does not exist,
-    /// because it cannot tell "past the end" from "not read yet".
+    /// because it cannot tell "past the end" from "not read yet". A file
+    /// ending in a bare CR gains its last, empty line here: until the end is
+    /// known, that CR might have been the first half of a CRLF.
     pub fn finish(&mut self) {
+        if self.complete {
+            return;
+        }
+        let mut breaks = self.breaks;
+        breaks.finish(self.indexed_bytes, |start| self.record(start));
+        self.breaks = breaks;
         self.complete = true;
     }
 
@@ -276,9 +287,12 @@ mod tests {
     /// against a clever reference tests two implementations of the same bug.
     fn full_scan(text: &[u8]) -> Vec<u64> {
         let mut starts = vec![0u64];
-        for (i, b) in text.iter().enumerate() {
-            if *b == b'\n' {
-                starts.push(i as u64 + 1);
+        let mut at = 0;
+        while at < text.len() {
+            let len = crate::breaks::break_len(text, at);
+            at += len.max(1);
+            if len > 0 {
+                starts.push(at as u64);
             }
         }
         starts
@@ -328,6 +342,13 @@ mod tests {
             "crlf\r\nlines\r\nhere\r\n",
             "日本語\nと\r\nemoji 🙂 mixed\n",
             "no trailing newline at all, just one very long single line here",
+            // Decision D6: a bare CR ends a line, a CRLF is one break however
+            // the chunks cut it, and nothing else ends one.
+            "\r",
+            "classic\rmac\rlines\r",
+            "a\r\r\nb\n\rc",
+            "\r\n\r\r\n",
+            "form\x0Cfeed\u{2028}and separators\u{0085}stay put",
         ];
         for text in corpus {
             let bytes = text.as_bytes();
@@ -385,6 +406,18 @@ mod tests {
             LineLocation::At(2),
             "the empty last line starts at EOF"
         );
+    }
+
+    #[test]
+    fn a_trailing_bare_cr_makes_its_line_at_finish_not_before() {
+        // Until the end is known the CR may be the first half of a CRLF, so
+        // counting it early would count a CRLF twice.
+        let mut index = LineIndex::new();
+        index.push(b"a\r");
+        assert_eq!(index.line_count(), 1);
+        index.finish();
+        assert_eq!(index.line_count(), 2);
+        assert_eq!(index.locate(1), LineLocation::At(2));
     }
 
     #[test]

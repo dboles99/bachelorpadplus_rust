@@ -35,13 +35,24 @@ impl<'a> Shape<'a> {
     /// to converge on one answer, and converging on the Windows one is right
     /// far more often than the reverse: a `\n` inside a CRLF file is usually
     /// damage, whereas a `\r\n` inside an LF file is usually the whole file.
+    /// A document whose only breaks are bare CRs keeps them (decision D6: a
+    /// bare CR ends a line), rather than being rewritten to LF by a sort.
     fn of(text: &'a str) -> Self {
+        let separator = if text.contains("\r\n") {
+            "\r\n"
+        } else if text.contains('\n') || !text.contains('\r') {
+            "\n"
+        } else {
+            "\r"
+        };
         Self {
-            separator: if text.contains("\r\n") { "\r\n" } else { "\n" },
+            separator,
             trailing: if text.ends_with("\r\n") {
                 "\r\n"
             } else if text.ends_with('\n') {
                 "\n"
+            } else if text.ends_with('\r') {
+                "\r"
             } else {
                 ""
             },
@@ -57,12 +68,13 @@ impl<'a> Shape<'a> {
 
 /// Apply `transform` to the document's lines and put them back together.
 ///
-/// `str::lines` strips the `\r` of a CRLF pair, so the transform sees line
-/// content rather than line content plus punctuation -- which is what makes
-/// `"a\r"` and `"a"` compare equal in a mixed-ending file.
+/// Split on the editor's rule (decision D6): LF, CRLF or a bare CR, each
+/// stripped, so the transform sees line content rather than line content
+/// plus punctuation -- which is what makes `"a\r\n"` and `"a\n"` compare
+/// equal in a mixed-ending file, and a classic Mac file more than one line.
 fn on_lines(text: &str, transform: impl FnOnce(&mut Vec<&str>)) -> String {
     let shape = Shape::of(text);
-    let mut lines: Vec<&str> = text.lines().collect();
+    let mut lines: Vec<&str> = bp_buffer::breaks::lines(text).collect();
     transform(&mut lines);
     shape.rejoin(&lines)
 }
@@ -110,6 +122,22 @@ pub fn trim_trailing_whitespace(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bare_cr_document_sorts_as_lines_and_keeps_its_endings() {
+        // Decision D6: a classic Mac file is three lines, not one.
+        assert_eq!(
+            sort("cherry\rapple\rbanana\r", Order::Ascending),
+            "apple\rbanana\rcherry\r"
+        );
+        assert_eq!(reverse("a\rb"), "b\ra");
+    }
+
+    #[test]
+    fn a_form_feed_or_line_separator_is_not_a_line_to_sort() {
+        assert_eq!(sort("b\x0Ca\nA", Order::Ascending), "A\nb\x0Ca");
+        assert_eq!(sort("b\u{2028}a\nA", Order::Ascending), "A\nb\u{2028}a");
+    }
 
     #[test]
     fn sorting_is_case_insensitive() {

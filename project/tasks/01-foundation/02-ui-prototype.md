@@ -1,7 +1,7 @@
 # Task: ui-prototype
 
 **Phase:** 01-foundation
-**Status:** Shell running on both platforms; keyboard shortcuts and buffer outstanding
+**Status:** Done, except comparative Linux timing (release-plan M4-01). Checked 2026-09-25
 
 ## Objective
 
@@ -24,7 +24,7 @@ window, menu bar, tab strip, editor pane, status bar and four themes.
       renderer adopted as the default.
 - [x] Linux viability confirmed — builds, links and runs.
 - [ ] Comparative Linux *timing*. WSLg is not representative; needs a native
-      machine.
+      machine. Still open on 2026-09-25: release-plan item M4-01.
 
 ### Part B — the real shell
 
@@ -72,13 +72,24 @@ window, menu bar, tab strip, editor pane, status bar and four themes.
       at 1 MB against a 16 ms frame budget.
 - [x] **Gutter no longer rebuilt on every keystroke** — only when the line
       count changes.
-- [ ] **Real cursor position.** The status bar reports a line count, not
-      Ln/Col. Needs editor state from `bp-editor`.
-- [ ] **Rope buffer.** Text lives in a `HashMap<DocumentId, String>`, and
-      Slint hands the whole buffer back on every edit, so a keystroke copies
+- [x] **Real cursor position.** The status bar reported a line count, not
+      Ln/Col. Done: first under `--editor-view` (ADR-0018), then in the
+      default view too (release-plan M1-04).
+- [x] **Rope buffer.** Text lived in a `HashMap<DocumentId, String>`, and
+      Slint hands the whole buffer back on every edit, so a keystroke copied
       the document. Measured: linear, reaching the frame budget near 40 MB.
-      That makes `bp-buffer` a phase-4 large-file concern rather than a
-      phase-1 correctness one.
+      Done: each document is now a `bp_editor::Editor` over a `bp-buffer`
+      rope (`editors` in `bp-ui/src/state.rs`).
+
+## Changed since
+
+Two ticked items above describe the shell as it was, not as it is:
+
+- the menu bar has fourteen menus, but since release-plan M1-05 a release
+  build shows ten; Notebook, Organize, Research and Run are hidden behind
+  `show_planned_menus`, and no planned row is shown;
+- every question, including Save / Don't Save / Cancel on close, is asked
+  inside the window rather than through a native dialog (M1-01).
 
 ## Artifacts
 

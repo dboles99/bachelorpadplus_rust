@@ -25,18 +25,25 @@ is not how fast code gets written, it is how long a question sits.
 
 | # | Question | Blocks | Why it cannot be defaulted |
 | --- | --- | --- | --- |
-| D1 | **What may leave the machine?** Which providers, if any, are acceptable destinations for document content or embeddings. | Phases 8 and 10; `Network::Allowed` currently means only "this profile does not forbid it" | Baking in a provider list would be an answer nobody gave, about data leaving the user's computer |
-| D2 | **Is `--editor-view`'s two-view fork worth keeping indefinitely?** IME cannot work on Slint 1.17.1, so parity is unreachable until Slint changes. | Every future wiring item pays a small tax; five features work in only one view | Answered once already (keep opt-in). Re-ask only if the tax becomes visible, or Slint ships composition support |
-| D4 | **Should `bp-crypto`'s envelope get an outside review before anything real is encrypted with it?** Every primitive is composed from RustCrypto and nothing is reimplemented, but the envelope design is mine, and envelope design is where composed-primitive formats usually fail. | Trusting `.bpadx` with real documents | Not something the author of the design can answer by looking harder at it |
-| D3 | **May `bp-storage` be wired into the application?** ADR-0020 permits `Metadata::Summary` under Standard, so the security half is settled. What remains is a product decision plus a design pass. | Phase 9, `bp-organize` | ADR-0019 explicitly says not to "just wire it up" |
-| D5 | **Where does a signing key live?** A key store, the platform keyring (Windows DPAPI / Linux Secret Service, phase 18), or a key file — and if a file, what permissions on Windows, where narrowing a DACL needs Win32 and `unsafe`. | Security ▸ Sign Document, which is greyed and otherwise finished; `bp-integrity`'s key half | specs.md §15 asks for all three routes. Picking one quietly means a signing key appears somewhere because a menu row needed it |
-| D6 | **What is a line?** `bp-search` counts `
+| D2 | **Is `--editor-view`'s two-view fork worth keeping indefinitely?** IME cannot work on Slint 1.17.1, so parity is unreachable until Slint changes. | Every future wiring item pays a small tax. Since M1-04 the caret features (Ln/Col, Go to Line, Insert Date/Time, the line moves) work in both views, so none is confined to the custom one | Answered once already (keep opt-in). Re-ask only if the tax becomes visible, or Slint ships composition support |
+| D4 | **Should `bp-crypto`'s envelope get an outside review before anything real is encrypted with it?** Every primitive is composed from RustCrypto and nothing is reimplemented, but the envelope design is mine, and envelope design is where composed-primitive formats usually fail. | Trusting `.bpadx` with real documents | Not something the author of the design can answer by looking harder at it. **For RC1 answered (decision 20, 2026-09-26):** RC1 ships saying the envelope is unreviewed, in SECURITY.md and in the Encrypt prompt; whether and when to commission a review before 1.0 GA is still the owner's |
+| D3 | **May `bp-storage` be wired into the application?** ADR-0020 permits `Metadata::Summary` under Standard, so the security half is settled. What remains is a product decision plus a design pass. | Phase 9 (related notes, duplicates; the `bp-organize` crate that `ARCHITECTURE.md` plans and nobody has created) | ADR-0019 explicitly says not to "just wire it up". For RC1 it is settled: ADR-0030 keeps `bp-storage` unwired. The question stands for 1.2 |
 | D7 | **Should `bp-crypto` expose a derive-once API?** Today `derive` and `Key` are private, so every `seal` call pays a full Argon2id derivation. `bp-audit` seals one `.bpadx` envelope per line, so *reading* a sealed audit history costs ~45 ms per line — a few hundred lines is several seconds, and it grows over a document's life. | The security inspector staying usable on a long-lived document | Splitting `derive` from `seal_with_key` changes ADR-0021's surface, and the alternative — a cheaper KDF in `bp-audit` — would weaken every line against an offline attacker, which ADR-0020 forbids. Not an implementation detail |
-| D8 | **Applying Windows default-editor registration needs a Win32 call or a dependency.** `bp-platform` generates the correct `HKCU\Software\Classes` shape and renders it as a `.reg` artefact, and stops there. Writing the keys means `winreg` or `unsafe` Win32; the crate forbids both. | specs §19's Windows half; the Set as Default row | ADR-0012 insists the user keeps control, so "hand the user a `.reg` file and `ms-settings:defaultapps`" is arguably the right answer rather than a limitation — but it should be decided, not defaulted into |
-| D9 | **Is the application id `bachelorpad` or reverse-DNS?** It is this product's identity in every `mimeapps.list` and every desktop database on the machine. | Nothing today; everything after the first release | Changing it later orphans every association a user has made. Modern convention is `com.example.BachelorPad`; the current value is `bachelorpad`. Cheap now, expensive after anyone installs it |
-| D10 | **A `.bpadx` header dictates its own Argon2id cost before anything is authenticated.** Unavoidable in principle — a tag check needs a key — but it means an attacker's header chooses the work. Measured in release: 8 KiB → 46 µs, 1 GiB → 2.1 s, 64 MiB at 64 passes → 4.7 s, so `validate`'s ceiling is roughly **75 s and a gigabyte resident per attempt** before the user is told the file is damaged. | Opening a hostile or corrupt `.bpadx` | ADR-0021's bound works as intended (4 GiB is refused in microseconds) so this is a question of where the ceiling sits, not whether one exists. Lowering it rejects legitimate documents sealed by a future stronger default |
-`; `bp-buffer`'s rope also breaks on bare `
-`, ``, ``, U+0085, U+2028 and U+2029, because `ropey`'s `unicode_lines` is on by default. `bp-ui` uses both, in different views, so one document reports two line counts. | Find-in-files scrolling to the right line; the status bar agreeing with itself | Either answer is defensible and each changes observable behaviour in the other direction. Found by the cross-crate tests; pinned as an ignored test |
+| U4 | **How is Markdown previewed?** Slint has no HTML view. | View ▸ Split / Preview, Markdown TOC | Drawing styled text in-app, handing off to a browser and deferring are all defensible; the plan recommends deferring past RC1 |
+
+`project/RELEASE_PLAN.md` §4 orders these by the milestone each blocks, and
+also carries the release-only questions not repeated here: the signing
+identity (decision 3, being applied for by the owner) and the Windows 10
+support statement (decision 21). Answered 2026-09-26 and removed from here:
+D1 (ADR-0034, nothing leaves the machine), the copyright holder (Daniel
+Boles), packaging formats (decision 18) and how release builds are made
+(decision 19, a local script). Also answered that day, as the plan
+recommended: D6 (a line ends at LF, CRLF or a bare CR, everywhere), D10
+(decision 15: ask above 4x the default Argon2 cost, refuse above 256 MiB or
+8 passes), U3 (a read-only viewer tab for files over the editable limit), U5
+(clipboard menus snapshot the history when they open), decision 21 (the
+Windows 10 statement) and decision 3's route (Azure Trusted Signing, being
+applied for by the owner). The icon (M2-01) is approved.
 
 ## Answered, for context
 
@@ -53,3 +60,10 @@ ADRs.
 | Security profiles | All of them; profile model first | ADR-0020 |
 | YAML parser | `saphyr` | Phase 6, when it is taken |
 | Parity vs retiring the custom editor view | Keep it opt-in, revisit on a Slint upgrade | ROADMAP, WORK_QUEUE |
+| RC1 scope (S1-S6), including U1: memory-map large files? | Defer notebook execution, semantic organisation, personality modes, highlighting; mmap declined for good (ADR-0027's decline stands, chunked reads) | ADR-0030 |
+| D5: where a signing key lives | A seed sealed in a passphrase `.bpadx` envelope | ADR-0030 |
+| Slint licence | Royalty-free 2.0, `AboutSlint` in the About window | ADR-0031 |
+| D9: application id | `io.github.dboles99.BachelorPad` | ADR-0032 |
+| D8: Windows registration | The per-user installer writes and removes it; the app deep-links to Settings | ADR-0032 |
+| U2: monospace font on Linux | Bundle DejaVu Sans Mono everywhere | ADR-0032 |
+| Win32 calls | Only `bp-platform-windows`, via `windows-sys`, confined `unsafe` | ADR-0033 |

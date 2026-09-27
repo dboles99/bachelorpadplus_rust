@@ -16,7 +16,86 @@
 
 #![forbid(unsafe_code)]
 
-use bp_security::Clipboard;
+use bp_security::{Clipboard, Network, Policy};
+
+/// Where a clipboard change came from, as far as the editor can tell.
+///
+/// The history is filled by polling the OS clipboard, and a poll sees text,
+/// not who put it there. The editor can say one thing reliably: whether the
+/// text is in the document the user is working in. That is what this
+/// records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    /// The text is in the active document: copied out of it, almost always.
+    OpenDocument,
+    /// Anything else -- a browser, a terminal, a password manager.
+    Elsewhere,
+}
+
+/// Whether text copied out of a document under `policy` must stay out of the
+/// operating system's own clipboard history and cloud clipboard sync.
+///
+/// Windows keeps a Win+V history and can sync it to every device the user
+/// signs into; KDE's Klipper keeps one too. Cloud sync is text leaving the
+/// machine, which is what `Network::Denied` forbids, and any OS history is a
+/// record `Clipboard::Disabled` forbids. So Private, Confidential and
+/// Maximum all ask for the exclusion, and Standard does not.
+#[must_use]
+pub fn keep_out_of_os_history(policy: &Policy) -> bool {
+    policy.network == Network::Denied || policy.clipboard == Clipboard::Disabled
+}
+
+/// How long a private copy stays on the operating system's clipboard.
+///
+/// Long enough to paste it somewhere, short enough that it is not still
+/// sitting there when the user has moved on -- the window password managers
+/// use. Only for copies [`keep_out_of_os_history`] marks private: a
+/// Private or stricter profile says what is copied from it should not
+/// linger, and the clipboard is the longest-lived place it can. Standard
+/// copies stay until something replaces them, as every other program's do.
+/// The timer is the shell's; see [`PendingClear`] for what it checks first.
+pub const PRIVATE_CLEAR_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// A private copy waiting to be cleared off the operating system's clipboard.
+///
+/// Holds a fingerprint of the text, not the text: the point of the exercise
+/// is that the words stop lingering, and a copy kept here to compare against
+/// would be one more place they linger.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingClear {
+    fingerprint: u64,
+}
+
+impl PendingClear {
+    /// Remember that `text` was just put on the clipboard privately.
+    #[must_use]
+    pub fn new(text: &str) -> Self {
+        Self {
+            fingerprint: fingerprint(text),
+        }
+    }
+
+    /// Whether the clipboard, now holding `current`, should be cleared.
+    ///
+    /// Only if it still holds what was copied. Anything the user has copied
+    /// since -- from this editor or any other program -- is theirs, and
+    /// wiping it a minute later would be losing their work, not protecting
+    /// it. A clipboard that cannot be read, or holds no text, is left alone
+    /// for the same reason.
+    #[must_use]
+    pub fn should_clear(&self, current: Option<&str>) -> bool {
+        current.is_some_and(|text| fingerprint(text) == self.fingerprint)
+    }
+}
+
+/// A 64-bit hash of `text`, stable for the life of the process -- which is
+/// as long as a [`PendingClear`] or a [`Snapshot`] lives.
+fn fingerprint(text: &str) -> u64 {
+    use std::hash::{Hash as _, Hasher as _};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    hasher.finish()
+}
 
 /// Crate identity used by workspace smoke tests and diagnostics.
 pub const CRATE_NAME: &str = "bp-clipboard";
@@ -369,6 +448,10 @@ pub struct Entry {
     pub kind: ClipKind,
     /// Kept across trims and deduplication.
     pub pinned: bool,
+    /// [`fingerprint`] of `text`, worked out once. A menu resolves every
+    /// row against every entry each time it is rebuilt, which is on every
+    /// keystroke, and an entry can be 100,000 characters long.
+    name: u64,
 }
 
 impl Entry {
@@ -380,9 +463,25 @@ impl Entry {
         };
         Self {
             kind: detect_kind(&text),
+            name: fingerprint(&text),
             text,
             pinned: false,
         }
+    }
+
+    /// A hash of the text, which is what names an entry in a [`Snapshot`].
+    ///
+    /// The text rather than the position, because the position is what
+    /// changes under an open menu: a new copy puts itself first and moves
+    /// everything else down one. The history never holds two entries with
+    /// the same text, so the text is an identity for as long as it is kept.
+    ///
+    /// Taken when the entry was made: nothing in the history edits an
+    /// entry's text afterwards, and anything that did would be making a new
+    /// entry, which is what [`Entry::new`] is for.
+    #[must_use]
+    pub fn fingerprint(&self) -> u64 {
+        self.name
     }
 
     /// A single-line label for a menu row.
@@ -450,6 +549,27 @@ impl History {
         true
     }
 
+    /// Record a clipboard change the poll observed, if its origin allows it.
+    ///
+    /// **Other applications' copies are not recorded unless the user asked
+    /// for that** (`record_elsewhere`, off by default). The poll used to add
+    /// everything any program put on the clipboard -- a password copied from
+    /// a password manager went straight into this history and into the Edit
+    /// menu's previews. Text from the open document is the history's point;
+    /// text from elsewhere is someone else's.
+    pub fn observe(
+        &mut self,
+        text: &str,
+        policy: Clipboard,
+        origin: Origin,
+        record_elsewhere: bool,
+    ) -> bool {
+        if origin == Origin::Elsewhere && !record_elsewhere {
+            return false;
+        }
+        self.push(text, policy)
+    }
+
     /// Drop the oldest unpinned entries down to capacity.
     ///
     /// Pinned entries survive: pinning is a promise, and a history that
@@ -512,10 +632,131 @@ impl History {
     pub fn clear_all(&mut self) {
         self.entries.clear();
     }
+
+    /// Which entry each row of a menu built now will name.
+    #[must_use]
+    pub fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            names: self.entries.iter().map(Entry::fingerprint).collect(),
+        }
+    }
+
+    /// Where the entry `snapshot` shows at `slot` is now, or `None` if it has
+    /// left the history since.
+    fn locate(&self, snapshot: &Snapshot, slot: usize) -> Option<usize> {
+        let name = *snapshot.names.get(slot)?;
+        self.entries.iter().position(|e| e.fingerprint() == name)
+    }
+
+    /// Pin or unpin the entry `snapshot` shows at `slot`. Returns whether it
+    /// is pinned now, or `None` -- changing nothing -- if it has gone.
+    pub fn toggle_pin_shown(&mut self, snapshot: &Snapshot, slot: usize) -> Option<bool> {
+        let index = self.locate(snapshot, slot)?;
+        self.toggle_pin(index);
+        Some(self.entries[index].pinned)
+    }
+
+    /// Forget the unpinned entries `snapshot` shows, and nothing else.
+    /// Returns how many went.
+    ///
+    /// Not [`clear`](Self::clear): anything copied after the menu opened was
+    /// never on screen, and clearing it would be acting on an entry the user
+    /// did not see. Pinned entries stay, for the reason they do in `clear`.
+    pub fn clear_shown(&mut self, snapshot: &Snapshot) -> usize {
+        let before = self.entries.len();
+        self.entries
+            .retain(|e| e.pinned || !snapshot.names.contains(&e.fingerprint()));
+        before - self.entries.len()
+    }
+}
+
+/// The history as a menu showed it: which entry each of its rows names
+/// (U5 in `project/DECISIONS_NEEDED.md`).
+///
+/// The history is polled every 1.2 seconds, so it can change between a menu
+/// opening and a row being clicked. A row that meant "the entry at position
+/// 2" then acted on whatever had moved into position 2. A row means "slot 2
+/// of this snapshot" instead, the slot holds the entry's
+/// [`fingerprint`](Entry::fingerprint), and the click finds that entry
+/// wherever it now is -- or finds it gone, and does nothing.
+///
+/// Holds hashes and nothing else, so no copied text outlives the history
+/// here: an entry the history forgets can no longer be reached through a
+/// snapshot either.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Snapshot {
+    names: Vec<u64>,
+}
+
+impl Snapshot {
+    /// The entry shown at `slot`, as it is in `history` now, or `None` if it
+    /// has left the history since the snapshot was taken.
+    #[must_use]
+    pub fn resolve<'h>(&self, history: &'h History, slot: usize) -> Option<&'h Entry> {
+        history
+            .locate(self, slot)
+            .map(|index| &history.entries[index])
+    }
+
+    /// The entries shown that are still in `history`, each with its slot, in
+    /// the order the menu showed them.
+    pub fn shown<'h>(&self, history: &'h History) -> impl Iterator<Item = (usize, &'h Entry)> {
+        (0..self.names.len()).filter_map(|slot| Some((slot, self.resolve(history, slot)?)))
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_private_copy_is_cleared_only_while_the_clipboard_still_holds_it() {
+        use super::PendingClear;
+        let pending = PendingClear::new("hunter2");
+        assert!(pending.should_clear(Some("hunter2")));
+        // Copied over since, here or anywhere: theirs, not ours to wipe.
+        assert!(!pending.should_clear(Some("something else")));
+        assert!(!pending.should_clear(Some("")));
+        // Unreadable, or holding an image: left alone.
+        assert!(!pending.should_clear(None));
+    }
+
+    #[test]
+    fn another_programs_copy_is_not_recorded_unless_asked_for() {
+        let mut history = History::new();
+        assert!(!history.observe("hunter2", Clipboard::InMemory, Origin::Elsewhere, false));
+        assert!(
+            history.is_empty(),
+            "a password manager's copy reached the history"
+        );
+        assert!(history.observe("hunter2", Clipboard::InMemory, Origin::Elsewhere, true));
+    }
+
+    #[test]
+    fn text_from_the_open_document_is_recorded_as_before() {
+        let mut history = History::new();
+        assert!(history.observe("a line", Clipboard::InMemory, Origin::OpenDocument, false));
+        // And the profile still decides whether there is a history at all.
+        let mut forbidden = History::new();
+        assert!(!forbidden.observe("a line", Clipboard::Disabled, Origin::OpenDocument, true));
+    }
+
+    #[test]
+    fn every_profile_that_denies_the_network_keeps_copies_out_of_os_history() {
+        use bp_security::{Privacy, Profile, Security};
+        for profile in Profile::all() {
+            let policy = Security::Named(*profile).policy_under(Privacy::Off);
+            assert_eq!(
+                keep_out_of_os_history(&policy),
+                *profile != Profile::Standard,
+                "{profile:?}"
+            );
+        }
+        let clamped = Security::default().policy_under(Privacy::On);
+        assert!(
+            keep_out_of_os_history(&clamped),
+            "Privacy Mode must exclude too"
+        );
+    }
+
     use super::*;
 
     #[test]
@@ -596,6 +837,98 @@ mod tests {
 
         h.clear_all();
         assert!(h.is_empty());
+    }
+
+    /// A history of `texts`, newest last, and a snapshot of it.
+    fn shown(texts: &[&str]) -> (History, Snapshot) {
+        let mut h = History::new();
+        for text in texts {
+            h.push(text, Clipboard::InMemory);
+        }
+        let snapshot = h.snapshot();
+        (h, snapshot)
+    }
+
+    #[test]
+    fn a_row_still_names_its_entry_after_a_copy_arrives_behind_the_menu() {
+        // The U5 race: slot 0 was "newest" when the menu opened. The poll
+        // then put "later" at position 0, which is what a positional row
+        // would have pasted.
+        let (mut h, snapshot) = shown(&["older", "newest"]);
+        h.push("later", Clipboard::InMemory);
+
+        assert_eq!(h.entries()[0].text, "later");
+        assert_eq!(snapshot.resolve(&h, 0).unwrap().text, "newest");
+        assert_eq!(snapshot.resolve(&h, 1).unwrap().text, "older");
+        assert!(snapshot.resolve(&h, 2).is_none(), "no row names a third");
+    }
+
+    #[test]
+    fn a_row_whose_entry_has_left_the_history_names_nothing() {
+        let (mut h, snapshot) = shown(&["older", "newest"]);
+        h.clear();
+        assert!(snapshot.resolve(&h, 0).is_none());
+        assert_eq!(snapshot.shown(&h).count(), 0);
+
+        // Copying the same text again brings back the same entry, which is
+        // the one the row names -- it is the text the user saw.
+        h.push("newest", Clipboard::InMemory);
+        assert_eq!(snapshot.resolve(&h, 0).unwrap().text, "newest");
+    }
+
+    #[test]
+    fn pinning_from_a_row_pins_the_entry_it_names_and_nothing_else() {
+        let (mut h, snapshot) = shown(&["older", "newest"]);
+        h.push("later", Clipboard::InMemory);
+
+        assert_eq!(h.toggle_pin_shown(&snapshot, 0), Some(true));
+        let pinned: Vec<&str> = h
+            .entries()
+            .iter()
+            .filter(|e| e.pinned)
+            .map(|e| e.text.as_str())
+            .collect();
+        assert_eq!(pinned, ["newest"]);
+
+        assert_eq!(h.toggle_pin_shown(&snapshot, 0), Some(false));
+        assert!(h.entries().iter().all(|e| !e.pinned));
+    }
+
+    #[test]
+    fn pinning_an_entry_that_has_gone_changes_nothing() {
+        let (mut h, snapshot) = shown(&["gone"]);
+        h.clear();
+        h.push("other", Clipboard::InMemory);
+        assert_eq!(h.toggle_pin_shown(&snapshot, 0), None);
+        assert!(!h.entries()[0].pinned);
+    }
+
+    #[test]
+    fn clearing_from_a_menu_forgets_only_the_unpinned_entries_it_showed() {
+        let (mut h, _) = shown(&["kept", "shown"]);
+        let kept = h.entries().iter().position(|e| e.text == "kept").unwrap();
+        h.toggle_pin(kept);
+        let snapshot = h.snapshot();
+        h.push("copied since", Clipboard::InMemory);
+
+        assert_eq!(h.clear_shown(&snapshot), 1);
+        let left: Vec<&str> = h.entries().iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(left, ["copied since", "kept"]);
+    }
+
+    #[test]
+    fn the_rows_a_snapshot_shows_keep_their_slots_when_one_goes() {
+        // Newest first, so the menu showed c, b, a. With b gone, a is still
+        // slot 2: a row's id is its slot, and it must not start meaning
+        // whatever moved up into it.
+        let (mut h, snapshot) = shown(&["a", "b", "c"]);
+        h.entries.retain(|e| e.text != "b");
+
+        let slots: Vec<(usize, &str)> = snapshot
+            .shown(&h)
+            .map(|(slot, e)| (slot, e.text.as_str()))
+            .collect();
+        assert_eq!(slots, [(0, "c"), (2, "a")]);
     }
 
     #[test]

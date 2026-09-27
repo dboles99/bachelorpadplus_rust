@@ -2,7 +2,9 @@
 name = "bp-ui"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
+publish = false
 
 [lints]
 workspace = true
@@ -31,6 +33,10 @@ bp-integrity = { path = "../bp-integrity" }
 # a directory the desktop environment reads -- and only with an explicit
 # `Consent` and an explicit root.
 bp-platform = { path = "../bp-platform" }
+# Registry reads and the Settings deep link for Set as Default on Windows
+# (ADR-0033: the one crate allowed Win32). Everything in it answers "no" on
+# other platforms, so the shell calls it without a `cfg`.
+bp-platform-windows = { path = "../bp-platform-windows" }
 bp-security = { path = "../bp-security" }
 # Security ▸ Scan for Secrets. Pure, no dependencies of its own, and it
 # deliberately reports where a credential is without ever carrying it.
@@ -44,20 +50,56 @@ bp-semantic = { path = "../bp-semantic" }
 bp-files = { path = "../bp-files" }
 bp-naming = { path = "../bp-naming" }
 bp-theme = { path = "../bp-theme" }
-arboard = "3"
+# Text only: the editor reads and writes plain text and never an image.
+# `image-data` (a default) would pull in the `image` crate and, on Windows,
+# GDI bindings for a feature nothing here calls. `wayland-data-control`
+# (release plan M2-08) talks to a Wayland compositor's clipboard directly
+# rather than through XWayland, which some sessions run without and which
+# syncs with the Wayland side late or not at all. arboard tries it first when
+# WAYLAND_DISPLAY is set and falls back to X11 by itself on a compositor
+# without the data-control protocol, so turning it on costs no session the
+# clipboard it had before.
+arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 # Passphrases and decrypted document bytes are wiped rather than dropped.
 zeroize.workspace = true
-slint = "1.17"
-# Native file dialogs. xdg-portal rather than gtk3 on Linux, so the app does
-# not need a specific desktop environment installed just to open a file
-# (BP-ADR-0001). `pollster` supplies the executor the blocking API needs,
+# Exactly what the shell uses, so nothing ships that nothing calls. Slint's
+# defaults add `system-tray` -- a tray icon this editor does not have, and on
+# Linux a D-Bus StatusNotifier stack behind it.
+#
+# * `std`, `compat-1-2` -- the baseline; Slint refuses to build without
+#   `compat-1-2`.
+# * `backend-winit` -- the windowing backend on Windows and Linux (X11 and
+#   Wayland both). It is what `backend-default` resolves to on these targets,
+#   named directly so a change to Slint's default is not a silent change here.
+# * `renderer-software` -- the default renderer (ADR-0017, `Renderer::Software`
+#   in `run_with`), and what `window_tests.rs` draws with.
+# * `renderer-femtovg` -- `Renderer::Platform` (`--renderer platform`), the
+#   GPU path Slint picks when not told otherwise. Kept so that option, and the
+#   fallback when the software renderer cannot be selected, still work.
+# * `accessibility` -- AccessKit, so screen readers can read the window.
+slint = { version = "1.17", default-features = false, features = [
+    "std",
+    "compat-1-2",
+    "backend-winit",
+    "renderer-software",
+    "renderer-femtovg",
+    "accessibility",
+] }
+# Native file dialogs -- and only those. Every message dialog is drawn in the
+# window instead (`ui/dialog.slint`, release plan M1-01): on Linux rfd shows
+# one by running zenity, which many desktops do not have. xdg-portal rather
+# than gtk3 on Linux, so the app does not need a specific desktop environment
+# installed just to open a file (BP-ADR-0001). `pollster` supplies the executor the blocking API needs,
 # since the portal backend is async underneath.
 #
-# `common-controls-v6` is deliberately NOT enabled. It embeds a side-by-side
-# manifest dependency on ComCtl32 v6 for prettier task dialogs, and with it the
-# binary failed to start at all here -- STATUS_ENTRYPOINT_NOT_FOUND
-# (0xC0000139) before `main`. A nicer-looking dialog is not worth an
-# application that will not launch.
+# `common-controls-v6` is not enabled, and is not needed: it only changes
+# rfd's *message* dialogs to call `TaskDialogIndirect`, and every message
+# dialog is drawn in the window now. It embeds no manifest. When it was once
+# tried, the binary failed before `main` with STATUS_ENTRYPOINT_NOT_FOUND
+# (0xC0000139) because nothing declared ComCtl32 v6, so the loader looked for
+# `TaskDialogIndirect` in v5.82, which lacks it. `apps/bachelorpad/app.manifest`
+# declares v6 now (release plan M2-02), so the feature would load -- there is
+# simply nothing left for it to do.
 rfd = { version = "0.17", default-features = false, features = [
     "xdg-portal",
     "pollster",

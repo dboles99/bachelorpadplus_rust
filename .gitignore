@@ -24,6 +24,9 @@ Thumbs.db
 # Per-run local CI records. Benchmark results under artifacts/benchmarks/ are
 # deliberately NOT ignored -- they are the evidence behind ADR-0015.
 artifacts/test-evidence/*.json
+# Release binaries go to the GitHub release, not into git. The manifest and
+# SHA256SUMS beside them are committed as the record (ADR-0016 amendment).
+artifacts/releases/*/*/files/
 
 # Documents saved into the checkout by accident. Save As used to default to
 # the process working directory, so testing the app from this directory wrote
@@ -37,6 +40,13 @@ artifacts/test-evidence/*.json
 !/PROJECT_MEMORY.md
 !/ROADMAP.md
 !/specs.md
+# Release documents that belong at the root, where users and packagers look
+# for them. Without these lines a CHANGELOG or SECURITY.md would be ignored
+# silently -- `git add` would do nothing and say nothing.
+!/CHANGELOG.md
+!/SECURITY.md
+!/CONTRIBUTING.md
+!/THIRD-PARTY-NOTICES.txt
 
 # Agent worktrees. A subagent working in isolation gets a git worktree here,
 # which is a repository inside this one -- `git add -A` sweeps it into a

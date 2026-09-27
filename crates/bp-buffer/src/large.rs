@@ -302,6 +302,46 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
+/// Decode `bytes`, showing each byte that is not part of a valid UTF-8
+/// sequence as [`INVALID_BYTE_DISPLAY`].
+///
+/// An incomplete sequence at the very end of a `truncated` line is dropped
+/// instead: the cut made it, not the file, as [`LargeFile::display_lines`]
+/// explains for the strict decode.
+fn decode_substituting(bytes: &[u8], truncated: bool) -> String {
+    let mut out = String::with_capacity(bytes.len());
+    let mut rest = bytes;
+    loop {
+        match std::str::from_utf8(rest) {
+            Ok(text) => {
+                out.push_str(text);
+                return out;
+            }
+            Err(error) => {
+                let (valid, after) = rest.split_at(error.valid_up_to());
+                // Checked just above, so this cannot fail; falling back to
+                // nothing rather than panicking keeps the viewer drawing.
+                out.push_str(std::str::from_utf8(valid).unwrap_or_default());
+                match error.error_len() {
+                    Some(bad) => {
+                        for _ in 0..bad {
+                            out.push(INVALID_BYTE_DISPLAY);
+                        }
+                        rest = &after[bad..];
+                    }
+                    None if truncated => return out,
+                    None => {
+                        for _ in 0..after.len() {
+                            out.push(INVALID_BYTE_DISPLAY);
+                        }
+                        return out;
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// What went wrong reading a file in chunks.
 #[derive(Debug, Error)]
 pub enum LargeFileError {
@@ -394,7 +434,15 @@ pub struct LargeFile {
     access: Access,
     index: LineIndex,
     scratch: Vec<u8>,
+    /// Show bytes that are not UTF-8 as U+FFFD rather than refusing the line.
+    /// See [`Self::substituting_invalid`].
+    substitute: bool,
 }
+
+/// What a byte that is not UTF-8 is shown as when a [`LargeFile`] is
+/// [substituting](LargeFile::substituting_invalid): one replacement character
+/// per byte, so a line's columns count the same whether or not it holds one.
+pub const INVALID_BYTE_DISPLAY: char = '\u{FFFD}';
 
 impl LargeFile {
     /// Open a file for chunked reading.
@@ -416,7 +464,41 @@ impl LargeFile {
             access: Access::of(len, metadata.permissions().readonly()),
             index: LineIndex::new(),
             scratch: Vec::new(),
+            substitute: false,
         })
+    }
+
+    /// Show each byte that is not UTF-8 as [`INVALID_BYTE_DISPLAY`] instead
+    /// of failing the line with [`LargeFileError::InvalidUtf8`].
+    ///
+    /// For a read-only viewer only. The refusal exists because a lossy
+    /// decode in an *editor* lets someone save the damage back over their
+    /// original; a viewer has no save, and a multi-gigabyte log with one
+    /// stray byte in it is still worth reading. One character per byte,
+    /// rather than `String::from_utf8_lossy`'s one per run, so that columns
+    /// agree with [`crate::WindowReader::substituting_invalid`], which does
+    /// the same for a search.
+    pub fn substituting_invalid(mut self) -> Self {
+        self.substitute = true;
+        self
+    }
+
+    /// Take over an index built elsewhere -- by a second `LargeFile` over the
+    /// same file, on a background thread -- if it has got further than this
+    /// one's own.
+    ///
+    /// This is how a viewer indexes a 2 GB file without blocking the thread
+    /// that draws it: the worker walks the file with its own handle, and the
+    /// finished index is handed across and adopted in one move. Returns
+    /// whether it was adopted. An index that knows less is ignored rather
+    /// than trusted, so a late result cannot make the file shorter.
+    pub fn adopt_index(&mut self, index: LineIndex) -> bool {
+        let further = index.indexed_bytes() > self.index.indexed_bytes()
+            || (index.is_complete() && !self.index.is_complete());
+        if further {
+            self.index = index;
+        }
+        further
     }
 
     /// The file being read.
@@ -590,6 +672,9 @@ impl LargeFile {
         let mut pos = start;
         let mut truncated = false;
         let mut returned_bytes = 0usize;
+        // The last line ended in a CR that was the last byte of a chunk, so
+        // an LF opening the next chunk is the rest of that CRLF, not a line.
+        let mut lf_owed = false;
 
         loop {
             let read = self.read_chunk()?;
@@ -605,7 +690,13 @@ impl LargeFile {
             let mut consumed = 0usize;
             while consumed < read {
                 let rest = &chunk[consumed..read];
-                match rest.iter().position(|b| *b == b'\n') {
+                if std::mem::take(&mut lf_owed) && rest.first() == Some(&b'\n') {
+                    consumed += 1;
+                    line_start += 1;
+                    continue;
+                }
+                // LF, CRLF or a bare CR (decision D6, `crate::breaks`).
+                match rest.iter().position(|b| *b == b'\n' || *b == b'\r') {
                     Some(at) => {
                         Self::extend_capped(&mut current, &rest[..at], &mut truncated);
                         let done = self.finish_line(line, &current, line_start, truncated)?;
@@ -613,7 +704,9 @@ impl LargeFile {
                         out.push(done);
                         current.clear();
                         truncated = false;
-                        consumed += at + 1;
+                        let break_len = crate::breaks::break_len(rest, at);
+                        lf_owed = rest[at] == b'\r' && at + 1 == rest.len();
+                        consumed += at + break_len;
                         line_start = pos + consumed as u64;
                         line += 1;
                         if out.len() == count || returned_bytes >= MAX_DISPLAY_BYTES {
@@ -629,6 +722,34 @@ impl LargeFile {
             }
             pos += read as u64;
             self.scratch = chunk;
+
+            // A line already cut for display has nothing more to show, and
+            // walking the rest of it is the whole cost when a file is one
+            // 400 MB line. Where the index already knows where the next line
+            // starts -- or that there is none -- jump rather than read.
+            if truncated {
+                match self.index.locate(line + 1) {
+                    LineLocation::At(next) if next > pos => {
+                        let done = self.finish_line(line, &current, line_start, truncated)?;
+                        returned_bytes += done.text.len();
+                        out.push(done);
+                        current.clear();
+                        truncated = false;
+                        line += 1;
+                        line_start = next;
+                        pos = next;
+                        if out.len() == count || returned_bytes >= MAX_DISPLAY_BYTES {
+                            return Ok(out);
+                        }
+                        self.seek(next)?;
+                    }
+                    LineLocation::PastEnd => {
+                        out.push(self.finish_line(line, &current, line_start, truncated)?);
+                        return Ok(out);
+                    }
+                    _ => {}
+                }
+            }
         }
         Ok(out)
     }
@@ -688,6 +809,14 @@ impl LargeFile {
         line_start: u64,
         truncated: bool,
     ) -> Result<DisplayLine, LargeFileError> {
+        if self.substitute {
+            let text = decode_substituting(bytes, truncated);
+            return Ok(DisplayLine {
+                line,
+                text: text.strip_suffix('\r').map(str::to_owned).unwrap_or(text),
+                truncated,
+            });
+        }
         let body = match std::str::from_utf8(bytes) {
             Ok(text) => text,
             Err(error) => {
@@ -703,13 +832,19 @@ impl LargeFile {
         };
         Ok(DisplayLine {
             line,
-            text: body.strip_suffix('\r').unwrap_or(body).to_owned(),
+            // The break was never collected: `display_lines` splits on it.
+            text: body.to_owned(),
             truncated,
         })
     }
 
     /// From `from`, skip forward past `newlines` line breaks and return the
     /// offset just after the last of them.
+    ///
+    /// Breaks on the same rule as the index (decision D6), with the same
+    /// scanner, so the line this lands on is the line the index counted.
+    /// `from` is always a line start, so no CR before it can be waiting for
+    /// an LF here.
     fn scan_past_newlines(
         &mut self,
         from: u64,
@@ -717,24 +852,26 @@ impl LargeFile {
     ) -> Result<Option<u64>, LargeFileError> {
         self.seek(from)?;
         let mut at = from;
-        let mut remaining = newlines;
+        let mut seen = 0usize;
+        let mut found = None;
+        let mut breaks = crate::breaks::Scanner::default();
         loop {
             let read = self.read_chunk()?;
-            if read == 0 {
-                return Ok(None);
-            }
-            let chunk = std::mem::take(&mut self.scratch);
-            for (offset, byte) in chunk[..read].iter().enumerate() {
-                if *byte == b'\n' {
-                    remaining -= 1;
-                    if remaining == 0 {
-                        self.scratch = chunk;
-                        return Ok(Some(at + offset as u64 + 1));
-                    }
+            let mut count = |start: u64| {
+                seen += 1;
+                if seen == newlines {
+                    found.get_or_insert(start);
                 }
+            };
+            if read == 0 {
+                breaks.finish(at, &mut count);
+                return Ok(found);
+            }
+            breaks.feed(&self.scratch[..read], at, &mut count);
+            if found.is_some() {
+                return Ok(found);
             }
             at += read as u64;
-            self.scratch = chunk;
         }
     }
 
@@ -774,11 +911,7 @@ mod tests {
     fn reference_lines(text: &str) -> Vec<String> {
         let buffer = crate::Buffer::from_text(text);
         (0..buffer.len_lines())
-            .map(|i| {
-                let line = buffer.line(i);
-                let line = line.strip_suffix('\n').unwrap_or(&line);
-                line.strip_suffix('\r').unwrap_or(line).to_owned()
-            })
+            .map(|i| crate::breaks::strip(&buffer.line(i)).to_owned())
             .collect()
     }
 
@@ -894,6 +1027,9 @@ mod tests {
             "crlf\r\nlines\r\nhere\r\n",
             "日本語\nと🙂\r\nmixed\n",
             "trailing spaces   \nand\ttabs\n",
+            "classic\rmac\rlines\r",
+            "a\r\r\nb\n\rc",
+            "form\x0Cfeed\u{2028}stays\u{0085}one line",
         ];
         for (n, text) in corpus.iter().enumerate() {
             let path = write(&dir, &format!("c{n}.txt"), text.as_bytes());
@@ -934,6 +1070,77 @@ mod tests {
             assert_eq!(file.line_start(line).unwrap(), Some(*offset), "line {line}");
         }
         assert_eq!(file.line_start(expected.len()).unwrap(), None);
+    }
+
+    #[test]
+    fn a_crlf_split_by_a_chunk_boundary_is_one_break_and_a_bare_cr_there_is_one_too() {
+        // Decision D6. The CR is the last byte of one read and the LF the
+        // first of the next: seen one chunk at a time, the CR looks bare.
+        // Short lines up to each boundary, so nothing is truncated for
+        // display and the lines compare whole.
+        let dir = TempDir::new().unwrap();
+        let before_crlf = (CHUNK_BYTES - 2) / 2;
+        let mut text = "a\n".repeat(before_crlf);
+        text.push('b');
+        assert_eq!(text.len(), CHUNK_BYTES - 1);
+        text.push_str("\r\n");
+        let before_cr = (CHUNK_BYTES - 4) / 2;
+        text.push_str(&"c\n".repeat(before_cr));
+        text.push_str("dd");
+        assert_eq!(text.len(), 2 * CHUNK_BYTES - 1);
+        text.push_str("\rthird\r");
+        let path = write(&dir, "split.txt", text.as_bytes());
+        let expected = reference_lines(&text);
+
+        let mut file = LargeFile::open(&path).unwrap();
+        let mut read = |first: usize, count: usize| -> Vec<String> {
+            file.display_lines(first, count)
+                .unwrap()
+                .into_iter()
+                .map(|l| l.text)
+                .collect()
+        };
+        let b = before_crlf;
+        assert_eq!(read(b, 2), ["b", "c"], "the CRLF made one break");
+        let dd = b + 1 + before_cr;
+        assert_eq!(read(dd, 3), ["dd", "third", ""], "the bare CR made one");
+        assert_eq!(read(dd, 3), expected[dd..]);
+
+        assert_eq!(file.index_fully().unwrap().lines, expected.len());
+        assert_eq!(
+            file.line_start(b + 1).unwrap(),
+            Some(CHUNK_BYTES as u64 + 1)
+        );
+        assert_eq!(
+            file.line_start(dd + 1).unwrap(),
+            Some(2 * CHUNK_BYTES as u64)
+        );
+    }
+
+    #[test]
+    fn scanning_forward_from_an_anchor_counts_bare_crs_as_the_index_does() {
+        // Enough lines that the index halves, so most lines are reached by
+        // the forward scan rather than an anchor.
+        let dir = TempDir::new().unwrap();
+        let mut text = String::new();
+        let mut expected = vec![0u64];
+        for i in 0..140_000 {
+            text.push_str(&format!("{i}"));
+            text.push_str(["\r", "\n", "\r\n"][i % 3]);
+            expected.push(text.len() as u64);
+        }
+        let path = write(&dir, "mixed.txt", text.as_bytes());
+
+        let mut file = LargeFile::open(&path).unwrap();
+        file.index_fully().unwrap();
+        assert!(file.index().stride() > 1, "the forward scan must be used");
+        for line in (0..expected.len()).step_by(997).chain([expected.len() - 1]) {
+            assert_eq!(
+                file.line_start(line).unwrap(),
+                Some(expected[line]),
+                "line {line}"
+            );
+        }
     }
 
     #[test]
@@ -1194,5 +1401,114 @@ mod tests {
             windows += 1;
         }
         assert!(windows > 10, "only {windows} windows");
+    }
+
+    #[test]
+    fn a_substituting_file_shows_each_bad_byte_as_one_replacement_character() {
+        let dir = TempDir::new().unwrap();
+        let path = write(&dir, "log.txt", b"fine\nbro\xFF\xFEken\r\ncut \xE2\x82\n");
+        let mut file = LargeFile::open(&path).unwrap().substituting_invalid();
+        let lines: Vec<String> = file
+            .display_lines(0, 10)
+            .unwrap()
+            .into_iter()
+            .map(|l| l.text)
+            .collect();
+        assert_eq!(
+            lines,
+            ["fine", "bro\u{FFFD}\u{FFFD}ken", "cut \u{FFFD}\u{FFFD}", ""],
+            "one character per byte, and the CRLF still stripped"
+        );
+    }
+
+    #[test]
+    fn a_substituting_file_still_drops_a_character_the_display_cap_cut_in_half() {
+        let dir = TempDir::new().unwrap();
+        let text = "日".repeat(MAX_DISPLAY_LINE_BYTES);
+        let path = write(&dir, "cjk.txt", text.as_bytes());
+        let mut file = LargeFile::open(&path).unwrap().substituting_invalid();
+        let line = &file.display_lines(0, 1).unwrap()[0];
+        assert!(line.truncated);
+        assert!(
+            line.text.chars().all(|c| c == '日'),
+            "the cut is not the file's fault and must not show as damage"
+        );
+    }
+
+    #[test]
+    fn an_index_built_by_another_reader_is_adopted_only_if_it_knows_more() {
+        let dir = TempDir::new().unwrap();
+        let text: String = (0..50_000).map(|i| format!("row {i}\n")).collect();
+        let path = write(&dir, "adopt.txt", text.as_bytes());
+
+        let mut worker = LargeFile::open(&path).unwrap();
+        worker.index_fully().unwrap();
+        let mut viewer = LargeFile::open(&path).unwrap();
+        viewer.display_lines(0, 5).unwrap();
+        let partial = viewer.index().clone();
+
+        assert!(viewer.adopt_index(worker.index().clone()));
+        assert!(viewer.progress().complete);
+        assert_eq!(viewer.progress().lines, 50_001);
+        assert!(
+            !viewer.adopt_index(partial),
+            "a stale index must not make the file shorter"
+        );
+        assert_eq!(
+            viewer.display_lines(49_999, 1).unwrap()[0].text,
+            "row 49999"
+        );
+    }
+
+    #[test]
+    fn a_cut_line_is_jumped_over_once_the_index_knows_where_the_next_one_starts() {
+        let dir = TempDir::new().unwrap();
+        let giant = "g".repeat(MAX_DISPLAY_LINE_BYTES * 8);
+        let text = format!("{giant}\nafter\n");
+        let path = write(&dir, "giant.txt", text.as_bytes());
+        let mut file = LargeFile::open(&path).unwrap();
+        file.index_fully().unwrap();
+
+        // Put a newline in the middle of the giant line behind the index's
+        // back. A display that still walked the whole line would find it and
+        // split the line there; one that jumps by the index never sees it.
+        let mut bytes = text.into_bytes();
+        bytes[MAX_DISPLAY_LINE_BYTES * 4] = b'\n';
+        std::fs::write(&path, &bytes).unwrap();
+
+        let lines = file.display_lines(0, 3).unwrap();
+        assert_eq!(
+            lines.len(),
+            3,
+            "{:?}",
+            lines.iter().map(|l| l.line).collect::<Vec<_>>()
+        );
+        assert!(lines[0].truncated);
+        assert_eq!(
+            lines[1].text, "after",
+            "the second line is where the index says"
+        );
+        assert_eq!(lines[2].text, "");
+    }
+
+    #[test]
+    fn a_file_that_is_one_cut_line_stops_reading_at_the_cut_once_indexed() {
+        let dir = TempDir::new().unwrap();
+        let giant = "h".repeat(MAX_DISPLAY_LINE_BYTES * 8);
+        let path = write(&dir, "one.txt", giant.as_bytes());
+        let mut file = LargeFile::open(&path).unwrap();
+        file.index_fully().unwrap();
+
+        // Invalid UTF-8 past the cut: a walk to the end would still not
+        // decode it, so make the tail a newline instead, which a walk would
+        // report as a second line.
+        let mut bytes = giant.into_bytes();
+        let last = bytes.len() - 10;
+        bytes[last] = b'\n';
+        std::fs::write(&path, &bytes).unwrap();
+
+        let lines = file.display_lines(0, 5).unwrap();
+        assert_eq!(lines.len(), 1, "the index says there is one line");
+        assert!(lines[0].truncated);
     }
 }

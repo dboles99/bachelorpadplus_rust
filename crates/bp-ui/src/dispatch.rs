@@ -4,6 +4,7 @@
 //! that the action arms and find/replace share.
 
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -12,8 +13,8 @@ use bp_platform::editor::{Consent, InstallRefusal, RegistrationPlan};
 use bp_theme::ThemeId;
 
 use crate::menus::{self, action};
-use crate::state::{AppState, NoteOutcome, PushText, SaveResult, secret_scan_report};
-use crate::{AppWindow, set_os_clipboard};
+use crate::state::{AppState, NoteOutcome, Opening, PushText, secret_scan_report};
+use crate::{AppWindow, dialog, set_os_clipboard};
 
 const SHORTCUTS: &str = "\
 Ctrl+N          New
@@ -27,41 +28,164 @@ Ctrl+X/C/V      Cut / Copy / Paste
 Ctrl+A          Select all
 Ctrl+= / Ctrl+- Zoom in / out
 Ctrl+0          Reset zoom
+Ctrl+G          Go to line
 Ctrl+D          Duplicate line
-Alt+Up / Down   Move line up / down";
+Alt+Up / Down   Move line up / down
+Insert          Overwrite on / off
+Ctrl+,          Settings
+F10             Open the menu bar (arrows, Enter, Esc)
+Shift+F10, Menu The editor's context menu, at the caret
+Alt+F E V I O   File, Edit, View, Insert, Format
+Alt+D N S T H   Data, Note, Security, Tools, Help";
 
-/// Static information, shown in a native dialog rather than built as a
-/// bespoke window.
-fn show_info(title: &str, body: &str) {
-    rfd::MessageDialog::new()
-        .set_level(rfd::MessageLevel::Info)
-        .set_title(title)
-        .set_description(body)
-        .set_buttons(rfd::MessageButtons::Ok)
-        .show();
+/// Run `operation` at the caret, in either view.
+///
+/// The operations are `bp-editor`'s and act on its caret. Under the custom
+/// surface that is the caret on screen. Under `TextInput` it is copied in
+/// from the widget first, and after the new text is pushed -- which puts the
+/// widget's caret back at the start -- the editor's caret is put back into
+/// the widget, so a moved line stays under the caret that moved it.
+fn at_the_caret(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    operation: impl FnOnce(&mut AppState),
+) {
+    {
+        let mut s = state.borrow_mut();
+        s.follow_widget_caret(ui.get_editor_anchor(), ui.get_editor_cursor());
+        operation(&mut s);
+    }
+    crate::refresh(ui, &mut state.borrow_mut(), PushText::Yes);
+    let caret = state.borrow().caret_range();
+    if let Some(caret) = caret {
+        select(ui, &mut state.borrow_mut(), &caret);
+    }
 }
 
-/// Ask about unsaved work before discarding it.
+/// Paste `text` at the caret, in either view: a clipboard row, a paste
+/// transformation, Paste Special.
 ///
-/// Blocking and native. The three-way answer matters: "Cancel" has to be
-/// distinguishable from "Discard", or the safe choice becomes the
-/// destructive one.
-pub(crate) fn ask_about_unsaved(name: &str) -> rfd::MessageDialogResult {
-    rfd::MessageDialog::new()
-        .set_level(rfd::MessageLevel::Warning)
-        .set_title("Unsaved changes")
-        .set_description(format!(
-            "{name} has unsaved changes.\n\nSave before closing?"
-        ))
-        .set_buttons(rfd::MessageButtons::YesNoCancel)
-        .show()
+/// Two paths, because the caret is reached differently under each view,
+/// and missing one is how a feature works for whoever tested it and does
+/// nothing for whoever did not.
+fn paste_at_caret(ui: &AppWindow, state: &Rc<RefCell<AppState>>, text: &str) {
+    set_os_clipboard(text, state.borrow().keep_clipboard_private());
+
+    let owns_caret = state.borrow().editor_view;
+    if owns_caret {
+        {
+            let mut s = state.borrow_mut();
+            if let Some(editor) = s.active_editor_mut() {
+                editor.insert(text);
+            }
+            s.mark_edited();
+        }
+        crate::refresh(ui, &mut state.borrow_mut(), PushText::No);
+        ui.invoke_focus_editor();
+    } else {
+        // The OS clipboard now holds the text, so the widget's own paste
+        // puts it at the caret -- the one way to insert there without caret
+        // access.
+        ui.invoke_paste_from_clipboard();
+    }
+}
+
+/// Edit ▸ Paste Special...: what is on the clipboard now, pasted as it is
+/// or through one of the transformations its kind offers.
+///
+/// A question rather than a submenu, because the choices depend on the
+/// clipboard's contents, which a menu built earlier cannot know -- and
+/// reading the clipboard every time a menu is built would be reading it for
+/// nothing almost every time.
+fn paste_special(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    let Some(text) = crate::read_os_clipboard().filter(|t| !t.trim().is_empty()) else {
+        state.borrow_mut().error = Some("Paste Special: the clipboard holds no text".to_owned());
+        crate::refresh(ui, &mut state.borrow_mut(), PushText::No);
+        return;
+    };
+    let offer = menus::paste_special(&text);
+    let mut buttons: Vec<String> = offer
+        .choices
+        .iter()
+        .map(|(label, _)| (*label).to_owned())
+        .collect();
+    let cancel = buttons.len();
+    buttons.push("Cancel".to_owned());
+    let cell = Rc::clone(state);
+    dialog::ask(
+        ui,
+        dialog::Dialog {
+            title: "Paste Special".to_owned(),
+            body: offer.body,
+            buttons,
+            default: 0,
+            cancel,
+        },
+        move |ui, chosen| {
+            if let Some((_, text)) = offer.choices.into_iter().nth(chosen) {
+                paste_at_caret(ui, &cell, &text);
+            }
+        },
+    );
+}
+
+/// Tools ▸ Open Log Folder: the folder the binary really logs to. A failure
+/// is a status line.
+pub(crate) fn open_log_folder(state: &mut AppState) {
+    let outcome = match state.log_dir.clone() {
+        Some(dir) => reveal(&dir),
+        None => Err("this system names no folder for logs".to_owned()),
+    };
+    state.error = outcome.err();
+}
+
+/// Tools ▸ Open Config Folder: where config.toml is, or would be.
+pub(crate) fn open_config_folder(state: &mut AppState) {
+    let file = state
+        .settings
+        .as_ref()
+        .map(|s| s.path.clone())
+        .or_else(bp_config::config_path);
+    let outcome = match file.as_deref().and_then(std::path::Path::parent) {
+        Some(dir) => reveal(dir),
+        None => Err("this system names no folder for configuration".to_owned()),
+    };
+    state.error = outcome.err();
+}
+
+/// Show `dir` in the desktop's file manager.
+///
+/// Made first if it is missing: a user sent to the configuration folder
+/// before ever saving a setting would otherwise be told it does not exist,
+/// which is true and no help. Launched and not waited for -- the file
+/// manager is the user's, and its exit status says nothing about us -- but
+/// reaped on a thread of its own, so it leaves no zombie behind on Unix.
+fn reveal(dir: &std::path::Path) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("could not make {}: {e}", dir.display()))?;
+    let opener = if cfg!(windows) {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    let mut child = std::process::Command::new(opener)
+        .arg(dir)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("could not open {} with {opener}: {e}", dir.display()))?;
+    std::thread::spawn(move || child.wait());
+    Ok(())
 }
 
 /// Open a file, starting in a sensible directory.
-pub(crate) fn pick_file(state: &crate::state::AppState) -> Option<PathBuf> {
+pub(crate) fn pick_files(state: &crate::state::AppState) -> Vec<PathBuf> {
     rfd::FileDialog::new()
         .set_directory(state.dialog_directory())
-        .pick_file()
+        .pick_files()
+        .unwrap_or_default()
 }
 
 /// Choose a save location, starting in a sensible directory with the
@@ -102,41 +226,82 @@ fn pick_verifying_key(state: &AppState) -> Option<PathBuf> {
         .pick_file()
 }
 
-/// Choose where to put the registry script Windows registration needs.
+/// Choose where to put the registry scripts Windows registration needs.
 ///
 /// The file name comes from `bp-platform`'s own artefact, so what the user
-/// saves is what the plan names. Where it goes is entirely their choice --
-/// ADR-0012's whole position is that the user reads this file and applies it
-/// themselves, and a location chosen for them is one step back towards an
-/// installer writing the same keys invisibly.
+/// saves is what the plan names; its remove twin goes beside it. Where they
+/// go is entirely the user's choice -- ADR-0032's position is that a
+/// portable build's user reads these files and applies them themselves.
 fn pick_registry_script(state: &AppState, plan: &RegistrationPlan) -> Option<PathBuf> {
     rfd::FileDialog::new()
-        .set_title("Save the registry script")
+        .set_title("Save the registry scripts")
         .set_directory(state.dialog_directory())
         .set_file_name(crate::default_editor::registry_script_name(plan))
         .add_filter("Registry script", &["reg"])
         .save_file()
 }
 
-/// Show what registration would do, and ask before doing any of it.
-///
-/// The body is built in `default_editor`, which puts the current
-/// associations above the plan: ADR-0012 is about the user keeping control,
-/// and a user cannot keep control of a change they were not shown the
-/// starting point of. The answer becomes the `Consent` value
-/// `bp_platform::editor::install` refuses to act without.
-fn confirm_registration(body: &str) -> Consent {
-    if rfd::MessageDialog::new()
-        .set_level(rfd::MessageLevel::Warning)
-        .set_title("Set as default editor")
-        .set_description(body)
-        .set_buttons(rfd::MessageButtons::OkCancel)
-        .show()
-        == rfd::MessageDialogResult::Ok
-    {
-        Consent::Granted
-    } else {
-        Consent::Withheld
+/// Act on the answer to the Set as Default dialog, and say what happened.
+fn register(
+    ui: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    offer: &crate::default_editor::Offer,
+) -> String {
+    use crate::default_editor::{Route, linux_outcome, run_all, run_command};
+    const TITLE: &str = "Set as default editor";
+    match &offer.route {
+        // The only call in this application that writes into a directory
+        // the desktop environment reads, then the commands the dialog
+        // listed, line for line. Run on this thread: they are short, and a
+        // default half-set while the user carries on typing is worse than
+        // a second's wait.
+        Route::Install { root, commands } => {
+            match bp_platform::editor::install(&offer.plan, root, Consent::Granted) {
+                Err(refusal) => refusal.describe(),
+                Ok(installed) => {
+                    let ran = run_all(commands, run_command);
+                    // Read again rather than assumed: what the desktop now
+                    // says is the evidence the commands did what they said.
+                    let after = crate::default_editor::report_now(&offer.plan.selection);
+                    let (status, body) = linux_outcome(
+                        &installed,
+                        root,
+                        &ran,
+                        offer.plan.selection.extensions().count(),
+                        &after,
+                    );
+                    dialog::inform(ui, TITLE, &body);
+                    status
+                }
+            }
+        }
+        Route::OpenSettings { uri } => match bp_platform_windows::open_uri(uri) {
+            Ok(()) => {
+                "opened Default apps in Windows Settings — choose BachelorPad+ there".to_owned()
+            }
+            Err(error) => format!("could not open Windows Settings ({error}) — the page is {uri}"),
+        },
+        // ADR-0032: a portable build saves the `.reg` pair where the user
+        // chooses, to read before running.
+        Route::SaveFiles => {
+            let chosen = pick_registry_script(&state.borrow(), &offer.plan);
+            let Some(path) = chosen else {
+                return "nothing was written — no location was chosen for the registry scripts"
+                    .to_owned();
+            };
+            match crate::default_editor::save_registry_scripts(&offer.plan, &path) {
+                Ok(status) => {
+                    let note = crate::default_editor::handoff_note(&offer.plan.handoff);
+                    dialog::inform(
+                        ui,
+                        TITLE,
+                        &format!("{status}\n\nRun the first file, then:\n\n{note}"),
+                    );
+                    status
+                }
+                Err(refusal) => refusal,
+            }
+        }
     }
 }
 
@@ -144,18 +309,21 @@ fn confirm_registration(body: &str) -> Consent {
 ///
 /// The listing is not bounded the way `confirm_replace`'s is. A scan that
 /// found four hundred credentials is a document nobody should redact without
-/// reading the list, and a truncated list is one nobody read.
-fn confirm_redaction(plan: &crate::state::RedactionPlan) -> bool {
-    rfd::MessageDialog::new()
-        .set_level(rfd::MessageLevel::Warning)
-        .set_title("Redact")
-        .set_description(plan.consent_body())
-        .set_buttons(rfd::MessageButtons::OkCancel)
-        .show()
-        == rfd::MessageDialogResult::Ok
+/// reading the list, and a truncated list is one nobody read -- the sheet
+/// scrolls instead.
+fn confirm_redaction(
+    ui: &AppWindow,
+    plan: crate::state::RedactionPlan,
+    then: impl FnOnce(&AppWindow, crate::state::RedactionPlan, bool) + 'static,
+) {
+    let body = plan.consent_body();
+    dialog::confirm(ui, "Redact", body, "Redact", move |ui, go| {
+        then(ui, plan, go)
+    });
 }
 
-/// Show what Replace All would do, and ask before doing it.
+/// Show what Replace All would do, and ask before doing it. `then` gets the
+/// plan back only if the user chose to go ahead.
 ///
 /// specs.md section 6 wants the changes visible before they are applied.
 /// Replace All is the one search operation that rewrites the document in
@@ -163,25 +331,65 @@ fn confirm_redaction(plan: &crate::state::RedactionPlan) -> bool {
 /// undo covers a mistake, but only if you notice you made one.
 ///
 /// The listing is bounded: a preview of forty thousand replacements is not a
-/// preview, and a dialog taller than the screen has no buttons on it.
-pub(crate) fn confirm_replace(plan: &bp_search::ReplacePlan) -> bool {
+/// preview.
+pub(crate) fn confirm_replace(
+    ui: &AppWindow,
+    plan: bp_search::ReplacePlan,
+    then: impl FnOnce(&AppWindow, Option<bp_search::ReplacePlan>) + 'static,
+) {
     const SHOWN: usize = 12;
 
-    rfd::MessageDialog::new()
-        .set_level(rfd::MessageLevel::Warning)
-        .set_title("Replace All")
-        .set_description(format!("{}\n\n{}", plan.summary(), plan.preview(SHOWN)))
-        .set_buttons(rfd::MessageButtons::OkCancel)
-        .show()
-        == rfd::MessageDialogResult::Ok
+    let body = format!("{}\n\n{}", plan.summary(), plan.preview(SHOWN));
+    dialog::confirm(ui, "Replace All", body, "Replace All", move |ui, go| {
+        then(ui, go.then_some(plan));
+    });
+}
+
+/// Put up whatever question opening an encrypted file needs.
+///
+/// An ordinary one goes straight to the passphrase bar. One whose header asks
+/// for an unusually expensive unlock asks first, in the sheet, as every other
+/// consent does (decision 15); the bar comes up only on a yes, so nobody types
+/// a passphrase for a file they then decline to pay for.
+pub(crate) fn ask_to_unlock(ui: &AppWindow, state: &Rc<RefCell<AppState>>, opening: Opening) {
+    use crate::refresh;
+
+    match opening {
+        Opening::Done => refresh(ui, &mut state.borrow_mut(), PushText::Yes),
+        Opening::Passphrase => {
+            // Refreshed first, so the bar shows this question's prompt.
+            refresh(ui, &mut state.borrow_mut(), PushText::Yes);
+            ui.invoke_focus_passphrase();
+        }
+        Opening::Expensive { path, question } => {
+            // Whatever the other files reported shows behind the question.
+            refresh(ui, &mut state.borrow_mut(), PushText::Yes);
+            let cell = Rc::clone(state);
+            dialog::confirm(
+                ui,
+                "Expensive unlock",
+                question,
+                "Open Anyway",
+                move |ui, go| {
+                    cell.borrow_mut().answer_unlock_cost(path, go);
+                    refresh(ui, &mut cell.borrow_mut(), PushText::No);
+                    if go {
+                        ui.invoke_focus_passphrase();
+                    }
+                },
+            );
+        }
+    }
 }
 
 /// Select a character range in the editor.
 ///
 /// Under the custom surface we own the selection, so this sets it and asks
-/// only for the focus back. Under `TextInput` the widget owns it, and the
-/// offsets are clamped into `i32` because that is what its API takes -- a
-/// document long enough to overflow one would have other problems first.
+/// only for the focus back. Under `TextInput` the widget owns it and counts
+/// UTF-8 bytes, so the range is converted -- passing the characters straight
+/// through put Find's selection a few places off after every accented
+/// letter. Clamped into `i32` because that is what its API takes; a document
+/// long enough to overflow one would have other problems first.
 pub(crate) fn select(ui: &AppWindow, state: &mut AppState, range: &std::ops::Range<usize>) {
     use crate::editor_view::draw_editor_view;
 
@@ -194,9 +402,8 @@ pub(crate) fn select(ui: &AppWindow, state: &mut AppState, range: &std::ops::Ran
         ui.invoke_focus_editor();
         return;
     }
-    let start = i32::try_from(range.start).unwrap_or(i32::MAX);
-    let end = i32::try_from(range.end).unwrap_or(i32::MAX);
-    ui.invoke_select_range(start, end);
+    let byte = |char_idx: usize| i32::try_from(state.char_to_byte(char_idx)).unwrap_or(i32::MAX);
+    ui.invoke_select_range(byte(range.start), byte(range.end));
 }
 
 /// Handle a menu action id from the UI.
@@ -211,49 +418,84 @@ pub fn handle_menu_action(
     id: i32,
 ) -> Option<PushText> {
     use crate::editor_view::apply_editor_command;
-    use crate::{close_with_prompt, refresh, save_with_prompt};
+    use crate::{
+        close_each, close_with_prompt, refresh, refresh_after, save_each, save_with_prompt,
+    };
+
+    // A viewer tab has no text to act on, and some of these would write
+    // an empty document over its file. The menus grey the same rows; this
+    // catches the shortcuts and a menu built before the tab changed.
+    let refusal = state
+        .borrow()
+        .viewer_active()
+        .then(|| menus::viewer_refusal(id))
+        .flatten();
+    if let Some(why) = refusal {
+        {
+            let mut s = state.borrow_mut();
+            let name = s
+                .workspace
+                .active_id()
+                .map(|doc| s.display_name(doc))
+                .unwrap_or_default();
+            s.error = Some(if why == "read-only" {
+                format!("Read-only: {name} is open in the viewer, so it cannot be changed or saved")
+            } else {
+                format!("Not in the viewer: that would read all of {name} into memory")
+            });
+        }
+        refresh(ui, &mut state.borrow_mut(), PushText::No);
+        return None;
+    }
 
     let mut push = PushText::Yes;
     match id {
         action::NEW => state.borrow_mut().new_document(),
         action::OPEN => {
-            let chosen = pick_file(&state.borrow());
-            if let Some(path) = chosen {
-                // An encrypted file does not become a tab until it is
-                // unlocked: a tab nobody can read looks like an empty
-                // document, and saving it would write emptiness over the
-                // real one.
-                if state.borrow_mut().open_maybe_encrypted(path) {
-                    ui.invoke_focus_passphrase();
-                    return None;
-                }
+            let chosen = pick_files(&state.borrow());
+            // An encrypted file does not become a tab until it is unlocked:
+            // a tab nobody can read looks like an empty document, and saving
+            // it would write emptiness over the real one.
+            let opening = state.borrow_mut().open_many(chosen);
+            if opening != Opening::Done {
+                ask_to_unlock(ui, state, opening);
+                return None;
             }
         }
         action::SAVE => {
             let id = state.borrow().workspace.active_id();
             if let Some(id) = id {
-                save_with_prompt(&mut state.borrow_mut(), id);
+                save_with_prompt(ui, state, id, refresh_after(state));
+                return None;
             }
         }
         action::SAVE_AS => {
             let target = state.borrow().workspace.active_id();
             if let Some(id) = target {
-                let chosen = pick_save_path(&state.borrow(), id);
-                if let Some(path) = chosen {
-                    state.borrow_mut().save_document(id, Some(path));
+                crate::save_as(ui, state, id);
+                return None;
+            }
+        }
+        action::SAVE_REVISION => {
+            let target = state.borrow().workspace.active_id();
+            let path = target.and_then(|id| state.borrow().next_revision_path(id));
+            match (target, path) {
+                (Some(id), Some(path)) => {
+                    crate::save_to(ui, state, id, path);
+                    return None;
+                }
+                _ => {
+                    state.borrow_mut().error =
+                        Some("a new revision needs a saved file to be a revision of".to_owned());
+                    push = PushText::No;
                 }
             }
         }
         action::SAVE_ALL => {
-            let dirty: Vec<DocumentId> =
+            let dirty: VecDeque<DocumentId> =
                 state.borrow().workspace.dirty().map(Document::id).collect();
-            for id in dirty {
-                // Stop at the first refusal rather than firing a
-                // dialog per document at someone who just cancelled.
-                if save_with_prompt(&mut state.borrow_mut(), id) != SaveResult::Saved {
-                    break;
-                }
-            }
+            save_each(ui, state, dirty);
+            return None;
         }
         action::RELOAD => {
             let (dirty, name) = {
@@ -264,8 +506,17 @@ pub fn handle_menu_action(
                     id.map(|i| s.display_name(i)).unwrap_or_default(),
                 )
             };
-            // Reloading discards edits, so it asks like closing does.
-            if dirty && ask_about_unsaved(&name) != rfd::MessageDialogResult::No {
+            // Reloading discards edits, so it asks like closing does -- and
+            // goes ahead only on Don't Save, since Save followed by a reload
+            // is a reload of what was just written.
+            if dirty {
+                let cell = Rc::clone(state);
+                dialog::ask_about_unsaved(ui, &name, move |ui, answer| {
+                    if answer == dialog::Unsaved::Discard {
+                        cell.borrow_mut().reload();
+                        refresh(ui, &mut cell.borrow_mut(), PushText::Yes);
+                    }
+                });
                 return None;
             }
             state.borrow_mut().reload();
@@ -273,7 +524,8 @@ pub fn handle_menu_action(
         action::CLOSE_TAB => {
             let id = state.borrow().workspace.active_id();
             if let Some(id) = id {
-                close_with_prompt(state, id);
+                close_with_prompt(ui, state, id, refresh_after(state));
+                return None;
             }
         }
 
@@ -289,10 +541,13 @@ pub fn handle_menu_action(
                 _ => ThemeId::Green,
             };
             s.follow_system_theme = false;
+            let name = s.theme.name();
+            s.remember(|c| c.theme = Some(name.to_owned()));
         }
         action::THEME_SYSTEM => {
             let mut s = state.borrow_mut();
             s.follow_system_theme = true;
+            s.remember(|c| c.theme = Some(bp_theme::SYSTEM_THEME_NAME.to_owned()));
             match ThemeId::for_system(s.system_dark) {
                 Some(theme) => s.theme = theme,
                 // Not an error, and not a guess: a desktop that will not say
@@ -311,11 +566,15 @@ pub fn handle_menu_action(
         action::TOGGLE_GUTTER => {
             let mut s = state.borrow_mut();
             s.show_gutter = !s.show_gutter;
+            let on = s.show_gutter;
+            s.remember(|c| c.line_numbers = on);
             push = PushText::No;
         }
         action::TOGGLE_WRAP => {
             let mut s = state.borrow_mut();
             s.wrap_text = !s.wrap_text;
+            let on = s.wrap_text;
+            s.remember(|c| c.word_wrap = on);
             push = PushText::No;
         }
 
@@ -326,10 +585,14 @@ pub fn handle_menu_action(
             let mut s = state.borrow_mut();
             let steps = if id == action::ZOOM_IN { 1 } else { -1 };
             s.font_size = bp_config::zoom(s.font_size, steps);
+            let size = s.font_size;
+            s.remember(|c| c.font_size = size);
             push = PushText::No;
         }
         action::ZOOM_RESET => {
-            state.borrow_mut().font_size = bp_config::DEFAULT_FONT_SIZE;
+            let mut s = state.borrow_mut();
+            s.font_size = bp_config::DEFAULT_FONT_SIZE;
+            s.remember(|c| c.font_size = bp_config::DEFAULT_FONT_SIZE);
             push = PushText::No;
         }
 
@@ -342,6 +605,14 @@ pub fn handle_menu_action(
             if let Some(id) = target {
                 let chosen = pick_save_path(&state.borrow(), id);
                 if let Some(path) = chosen {
+                    // The copy of an encrypted document is sealed, so it gets
+                    // the name that says so, as Encrypt's target does.
+                    let encrypted = state.borrow().passphrases.contains_key(&id);
+                    let path = if encrypted {
+                        with_bpadx_extension(path)
+                    } else {
+                        path
+                    };
                     state.borrow_mut().save_copy(id, &path);
                 }
             }
@@ -363,19 +634,16 @@ pub fn handle_menu_action(
             let keep = (id == action::CLOSE_OTHER_TABS)
                 .then(|| state.borrow().tab_context_id())
                 .flatten();
-            let doomed: Vec<DocumentId> = state
+            let doomed: VecDeque<DocumentId> = state
                 .borrow()
                 .workspace
                 .iter()
                 .map(Document::id)
                 .filter(|id| Some(*id) != keep)
                 .collect();
-            // `close_with_prompt` for each, so unsaved work still asks --
-            // closing several tabs is exactly when losing one would hurt.
-            for id in doomed {
-                close_with_prompt(state, id);
-            }
-            refresh(ui, &mut state.borrow_mut(), PushText::Yes);
+            // Asking about each, so unsaved work still asks -- closing
+            // several tabs is exactly when losing one would hurt.
+            close_each(ui, state, doomed);
             return None;
         }
         action::COPY_TAB_PATH => {
@@ -388,7 +656,10 @@ pub fn handle_menu_action(
             };
             let mut s = state.borrow_mut();
             s.error = match path {
-                Some(path) if crate::set_os_clipboard(&path) => Some(format!("copied {path}")),
+                // A path, not document text, so the OS may keep it.
+                Some(path) if crate::set_os_clipboard(&path, false) => {
+                    Some(format!("copied {path}"))
+                }
                 Some(_) => Some("could not reach the clipboard".to_owned()),
                 None => Some("this document has never been saved".to_owned()),
             };
@@ -425,7 +696,10 @@ pub fn handle_menu_action(
                 let suggested = pick_save_path(&state.borrow(), id);
                 if let Some(path) = suggested {
                     let path = with_bpadx_extension(path);
-                    state.borrow_mut().ask = Some(crate::passphrase::Ask::Set { id, target: path });
+                    state.borrow_mut().begin_encrypting(id, path);
+                    // Refreshed first, so the bar shows this question's
+                    // prompt and note rather than whatever it last held.
+                    refresh(ui, &mut state.borrow_mut(), PushText::No);
                     ui.invoke_focus_passphrase();
                 }
             }
@@ -440,31 +714,33 @@ pub fn handle_menu_action(
             // reaching back into the document to quote it would undo the one
             // decision the crate is built around.
             if !findings.is_empty() {
-                show_info("Possible credentials", &secret_scan_report(&findings));
+                dialog::inform(ui, "Possible credentials", &secret_scan_report(&findings));
             }
             push = PushText::No;
         }
 
         action::HASH_DOCUMENT => {
-            // The borrow ends with the statement, before the dialog opens:
-            // `rfd` pumps events, and a re-entrant callback on a live borrow
-            // panics.
             let report = state.borrow_mut().hash_active_document();
             if let Some(report) = report {
-                show_info("Document hash", &report);
+                dialog::inform(ui, "Document hash", &report);
             }
             push = PushText::No;
         }
 
         action::SIGN_DOCUMENT => {
-            // The row is greyed, so this is only reachable by a keyboard
-            // route that does not exist yet -- but a silent no-op would be a
-            // bug report nobody could describe, the same reasoning as the
-            // stamp arm above.
-            state.borrow_mut().error = Some(
-                "signing needs a signing key, and there is nowhere to keep one yet".to_owned(),
-            );
-            push = PushText::No;
+            // The passphrase bar does the asking: the kept key's passphrase,
+            // or a new one twice when there is no key yet. Refusals (never
+            // saved, unsaved changes, nowhere to keep a key) are in the
+            // status bar and open nothing.
+            let asking = state.borrow_mut().begin_signing();
+            // Refreshed either way: the bar's prompt and note, or the
+            // refusal in the status bar, would otherwise wait for the next
+            // unrelated refresh.
+            refresh(ui, &mut state.borrow_mut(), PushText::No);
+            if asking {
+                ui.invoke_focus_passphrase();
+            }
+            return None;
         }
 
         action::VERIFY_SIGNATURE => {
@@ -492,73 +768,70 @@ pub fn handle_menu_action(
             }
         }
 
+        // Show what registration would do, with what opens these types
+        // today above it, and ask before doing any of it (ADR-0012). The
+        // button says what confirming does, which differs by platform.
         action::SET_DEFAULT_EDITOR => {
-            push = PushText::No;
-            // Nothing is borrowed while a dialog is up: `rfd` pumps events,
-            // and a re-entrant callback on a live `borrow_mut()` panics.
             match crate::default_editor::offer() {
                 Err(reason) => state.borrow_mut().error = Some(reason),
                 Ok(offer) => {
-                    let consent = confirm_registration(&offer.body);
-                    let message = match (consent, offer.root.as_deref()) {
-                        (Consent::Withheld, _) => InstallRefusal::ConsentWithheld.describe(),
-                        // The only call in this application that writes into
-                        // a directory the desktop environment reads. It takes
-                        // the root `bp-platform` named and the consent the
-                        // user just gave, and neither has a default.
-                        (Consent::Granted, Some(root)) => {
-                            let (status, body) = crate::default_editor::install_outcome(
-                                bp_platform::editor::install(&offer.plan, root, consent),
-                                &offer.plan.handoff,
-                                root,
-                            );
-                            if let Some(body) = body {
-                                show_info("Set as default editor", &body);
-                            }
-                            status
-                        }
-                        // No install root means this platform has no
-                        // supported install -- Windows. The `.reg` script is
-                        // what ADR-0012 leaves in its place: a file the user
-                        // chose the location of and can read before running.
-                        (Consent::Granted, None) => {
-                            let chosen = pick_registry_script(&state.borrow(), &offer.plan);
-                            match chosen {
-                                Some(path) => {
-                                    match crate::default_editor::save_registry_script(
-                                        &offer.plan,
-                                        &path,
-                                    ) {
-                                        Ok(status) => {
-                                            let note = crate::default_editor::handoff_note(
-                                                &offer.plan.handoff,
-                                            );
-                                            show_info(
-                                                "Set as default editor",
-                                                &format!("{status}\n\n{note}"),
-                                            );
-                                            status
-                                        }
-                                        Err(refusal) => refusal,
-                                    }
-                                }
-                                None => "nothing was written — no location was chosen for the \
-                                         registry script"
-                                    .to_owned(),
-                            }
-                        }
-                    };
-                    state.borrow_mut().error = Some(message);
+                    let cell = Rc::clone(state);
+                    let body = offer.body.clone();
+                    let button = offer.route.button();
+                    dialog::confirm(ui, "Set as default editor", body, button, move |ui, go| {
+                        let message = if go {
+                            register(ui, &cell, &offer)
+                        } else {
+                            InstallRefusal::ConsentWithheld.describe()
+                        };
+                        let mut s = cell.borrow_mut();
+                        s.integration = crate::default_editor::Rows::read();
+                        s.error = Some(message);
+                        refresh(ui, &mut s, PushText::No);
+                    });
+                    return None;
                 }
             }
+            push = PushText::No;
+        }
+
+        // The inverse, on Linux: only the files Set as Default wrote, and
+        // only after the user has seen the list.
+        action::REMOVE_REGISTRATION => {
+            match crate::default_editor::removal() {
+                Err(reason) => state.borrow_mut().error = Some(reason),
+                Ok(removal) => {
+                    let cell = Rc::clone(state);
+                    let body = removal.body.clone();
+                    dialog::confirm(ui, "Remove registration", body, "Remove", move |ui, go| {
+                        let consent = if go {
+                            Consent::Granted
+                        } else {
+                            Consent::Withheld
+                        };
+                        let (message, body) = crate::default_editor::removal_outcome(
+                            bp_platform::editor::uninstall(
+                                &removal.plan,
+                                &removal.plan.root,
+                                consent,
+                            ),
+                            crate::default_editor::run_command,
+                        );
+                        if let Some(body) = body {
+                            dialog::inform(ui, "Remove registration", &body);
+                        }
+                        let mut s = cell.borrow_mut();
+                        s.integration = crate::default_editor::Rows::read();
+                        s.error = Some(message);
+                        refresh(ui, &mut s, PushText::No);
+                    });
+                    return None;
+                }
+            }
+            push = PushText::No;
         }
 
         action::REDACT_SECRETS => {
-            // Three statements, each ending its borrow before the next, and
-            // the dialog in between opened while nothing is borrowed at all:
-            // `rfd` pumps events, and a re-entrant callback on a live
-            // `borrow_mut()` panics.
-            //
             // The consent is not ceremony. Redaction destroys text the user
             // wrote, in places on the screen they cannot all see at once, and
             // it is offered because a scanner *guessed* the text was a
@@ -567,36 +840,37 @@ pub fn handle_menu_action(
             let plan = state.borrow_mut().plan_redaction();
             push = PushText::No;
             if let Some(plan) = plan {
-                if confirm_redaction(&plan) {
-                    // The document changed, so its text has to be re-pushed
-                    // -- and only then, because re-pushing throws away
+                let cell = Rc::clone(state);
+                confirm_redaction(ui, plan, move |ui, plan, go| {
+                    // The document changed only if it was redacted, so only
+                    // then is its text re-pushed -- re-pushing throws away
                     // `TextInput`'s caret.
-                    if state.borrow_mut().apply_redaction(&plan) {
-                        push = PushText::Yes;
-                    }
-                } else {
-                    state.borrow_mut().decline_redaction(&plan);
-                }
+                    let push = if go && cell.borrow_mut().apply_redaction(&plan) {
+                        PushText::Yes
+                    } else {
+                        if !go {
+                            cell.borrow_mut().decline_redaction(&plan);
+                        }
+                        PushText::No
+                    };
+                    refresh(ui, &mut cell.borrow_mut(), push);
+                });
+                return None;
             }
         }
 
         action::SECURITY_HISTORY => {
-            // Same shape as Inspect Metadata: the borrow ends with the
-            // statement, before the dialog opens. `rfd` pumps events, and a
-            // re-entrant callback on a live `borrow_mut()` panics.
             let report = state.borrow_mut().security_history();
             if let Some(report) = report {
-                show_info("Security History", &report);
+                dialog::inform(ui, "Security History", &report);
             }
             push = PushText::No;
         }
 
         action::INSPECT_METADATA => {
-            // Same shape as Hash Document: the borrow ends with the
-            // statement, before the dialog opens.
             let report = state.borrow_mut().inspect_metadata();
             if let Some(report) = report {
-                show_info("Metadata", &report);
+                dialog::inform(ui, "Metadata", &report);
             }
             push = PushText::No;
         }
@@ -613,47 +887,65 @@ pub fn handle_menu_action(
         action::INDENT_TABS | action::INDENT_SPACES => {
             let mut s = state.borrow_mut();
             s.indent.spaces = id == action::INDENT_SPACES;
+            let spaces = s.indent.spaces;
+            s.remember(|c| c.indent_spaces = spaces);
             push = PushText::No;
         }
         action::TAB_WIDTH_2 | action::TAB_WIDTH_4 | action::TAB_WIDTH_8 => {
             let mut s = state.borrow_mut();
-            s.indent.width = match id {
+            let width: u8 = match id {
                 action::TAB_WIDTH_2 => 2,
                 action::TAB_WIDTH_8 => 8,
                 _ => 4,
             };
+            s.indent.width = usize::from(width);
+            s.remember(|c| c.tab_width = width);
             push = PushText::No;
         }
 
         id if (action::STAMP_BASE..menus::stamp_end()).contains(&id) => {
             let index = usize::try_from(id - action::STAMP_BASE).unwrap_or(0);
-            let mut s = state.borrow_mut();
-            if !s.insert_stamp(index) {
-                // The rows are disabled without the custom editor view, so
-                // this is only reachable by a keyboard route that does not
-                // exist yet -- but a silent no-op would be a bug report
-                // nobody could describe.
-                s.error = Some("date and time insertion needs --editor-view".to_owned());
-            }
-            // `PushText::Yes`, the default: the document changed, same as
-            // Duplicate Line beside it.
+            at_the_caret(ui, state, |s| {
+                if !s.insert_stamp(index) {
+                    s.error = Some("there is no document to insert into".to_owned());
+                }
+            });
+            return None;
         }
 
         action::LINE_ENDING_LF => state.borrow_mut().set_line_ending(LineEnding::Lf),
         action::LINE_ENDING_CRLF => state.borrow_mut().set_line_ending(LineEnding::CrLf),
         action::ENCODING_UTF8 => state.borrow_mut().set_encoding(Encoding::Utf8),
         action::ENCODING_UTF8_BOM => state.borrow_mut().set_encoding(Encoding::Utf8Bom),
+        action::ENCODING_WINDOWS_1252 => state.borrow_mut().set_encoding(Encoding::Windows1252),
 
-        action::SHORTCUTS => show_info("Keyboard shortcuts", SHORTCUTS),
-        action::ABOUT => show_info(
-            "About BachelorPad+",
-            &format!(
-                "BachelorPad+ {}\n\nNotepad when you want it. More when you need it.\n\n\
-                 Renderer: {}\nLicence: MIT OR Apache-2.0",
-                env!("CARGO_PKG_VERSION"),
-                std::env::var("SLINT_BACKEND").unwrap_or_else(|_| "software".to_owned()),
-            ),
-        ),
+        action::SETTINGS => {
+            let rows = {
+                let mut s = state.borrow_mut();
+                let sheet = crate::settings_sheet::Sheet::open(&s);
+                let rows = sheet.rows();
+                s.settings_sheet = Some(sheet);
+                rows
+            };
+            ui.set_setting_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
+            ui.set_settings_open(true);
+            ui.invoke_focus_settings();
+            return None;
+        }
+        action::OPEN_LOG_FOLDER => {
+            open_log_folder(&mut state.borrow_mut());
+            push = PushText::No;
+        }
+        action::OPEN_CONFIG_FOLDER => {
+            open_config_folder(&mut state.borrow_mut());
+            push = PushText::No;
+        }
+
+        action::SHORTCUTS => dialog::inform(ui, "Keyboard shortcuts", SHORTCUTS),
+        action::ABOUT => {
+            crate::about::open(ui, &state.borrow());
+            return None;
+        }
 
         // Only reachable with the custom surface. Under `TextInput`
         // Slint handles these on the widget itself and they never get
@@ -675,76 +967,61 @@ pub fn handle_menu_action(
         // what let the recent-files arm swallow everything up to 100 before
         // it had a real range, and the paste-transformation ids just below
         // would have fallen into this arm the same way.
+        //
+        // The offset is a slot in the snapshot the menu opened with, and
+        // the entry is found by what the slot names, wherever the history
+        // has moved it since (U5). One that has gone is reported, not
+        // swapped for whatever took its place.
         id if (action::CLIP_BASE..menus::clip_end()).contains(&id) => {
-            let index = usize::try_from(id - action::CLIP_BASE).unwrap_or(0);
-            let text = state.borrow().clips.get(index).map(|e| e.text.clone())?;
-            set_os_clipboard(&text);
-
-            let owns_caret = state.borrow().editor_view;
-            if owns_caret {
-                {
-                    let mut s = state.borrow_mut();
-                    if let Some(editor) = s.active_editor_mut() {
-                        editor.insert(&text);
-                    }
-                    s.mark_edited();
-                }
-                refresh(ui, &mut state.borrow_mut(), PushText::No);
-                ui.invoke_focus_editor();
-            } else {
-                // The OS clipboard now holds the entry, so the
-                // widget's own paste puts it at the caret -- the one
-                // way to insert there without caret access.
-                ui.invoke_paste_from_clipboard();
+            let slot = usize::try_from(id - action::CLIP_BASE).unwrap_or(usize::MAX);
+            let named = state.borrow_mut().clip_named(slot);
+            match named {
+                Some(entry) => paste_at_caret(ui, state, &entry.text),
+                None => refresh(ui, &mut state.borrow_mut(), PushText::No),
             }
             return None;
         }
 
-        // A paste transformation. Same two-path shape as the plain
-        // clipboard rows just above -- the caret is reached differently
-        // under each editor view, and missing one path is how a feature
-        // works for whoever tested it and does nothing for whoever did not.
+        // A paste transformation: the same entry lookup, then the same
+        // paste. A transform the entry's kind does not offer, or one that
+        // would change nothing, is a row that was never built.
         id if (action::CLIP_TRANSFORM_BASE..menus::clip_transform_end()).contains(&id) => {
-            let (entry_index, transform) = {
-                let s = state.borrow();
-                menus::decode_transform(id, s.clips.entries())?
-            };
-            let source = state
-                .borrow()
-                .clips
-                .get(entry_index)
-                .map(|e| e.text.clone())?;
-            let text = menus::apply_transform(transform, &source)?;
-            set_os_clipboard(&text);
-
-            let owns_caret = state.borrow().editor_view;
-            if owns_caret {
-                {
-                    let mut s = state.borrow_mut();
-                    if let Some(editor) = s.active_editor_mut() {
-                        editor.insert(&text);
-                    }
-                    s.mark_edited();
-                }
+            let (slot, index) = menus::decode_transform(id)?;
+            let named = state.borrow_mut().clip_named(slot);
+            let Some(entry) = named else {
                 refresh(ui, &mut state.borrow_mut(), PushText::No);
-                ui.invoke_focus_editor();
-            } else {
-                ui.invoke_paste_from_clipboard();
-            }
+                return None;
+            };
+            let transform = *bp_clipboard::transforms_for(entry.kind).get(index)?;
+            let text = menus::apply_transform(transform, &entry.text)?;
+            paste_at_caret(ui, state, &text);
+            return None;
+        }
+
+        // Pin and Clear change the history, not the document.
+        id if (action::CLIP_PIN_BASE..menus::clip_pin_end()).contains(&id) => {
+            let slot = usize::try_from(id - action::CLIP_PIN_BASE).unwrap_or(usize::MAX);
+            state.borrow_mut().toggle_clip_pin(slot);
+            push = PushText::No;
+        }
+        action::CLIP_CLEAR => {
+            state.borrow_mut().clear_shown_clips();
+            push = PushText::No;
+        }
+        action::PASTE_SPECIAL => {
+            paste_special(ui, state);
             return None;
         }
 
         id if (action::NOTE_TITLE..=action::NOTE_OUTLINE).contains(&id) => {
             let outcome = state.borrow().note_action(id);
             match outcome {
-                NoteOutcome::Show { title, body } => show_info(&title, &body),
+                NoteOutcome::Show { title, body } => dialog::inform(ui, &title, &body),
                 NoteOutcome::SaveAs => {
                     let target = state.borrow().workspace.active_id();
                     if let Some(doc_id) = target {
-                        let chosen = pick_save_path(&state.borrow(), doc_id);
-                        if let Some(path) = chosen {
-                            state.borrow_mut().save_document(doc_id, Some(path));
-                        }
+                        crate::save_as(ui, state, doc_id);
+                        return None;
                     }
                 }
                 NoteOutcome::Nothing => {}
@@ -755,7 +1032,7 @@ pub fn handle_menu_action(
         // single id left when YAML needed two. Both reach the same place; the
         // arm that decides which library function a click meant is
         // `run_data_action`, where the format is in scope.
-        id if (action::DATA_VALIDATE..=action::DATA_COLUMN_TYPES).contains(&id)
+        id if (action::DATA_VALIDATE..=action::DATA_SORT_KEYS).contains(&id)
             || (action::DATA_YAML_TO_JSON..=action::DATA_JSON_TO_YAML).contains(&id) =>
         {
             state.borrow_mut().run_data_action(id);
@@ -769,7 +1046,8 @@ pub fn handle_menu_action(
         // operations above: those replace the whole document, these need
         // the caret, and `run_line_edit` is where that distinction lives.
         id if (action::DUPLICATE_LINE..=action::MOVE_LINE_DOWN).contains(&id) => {
-            state.borrow_mut().run_line_edit(id);
+            at_the_caret(ui, state, |s| s.run_line_edit(id));
+            return None;
         }
 
         // Recently opened files. Bounded by the length of the list

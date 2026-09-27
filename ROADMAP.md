@@ -2,7 +2,7 @@
 
 This is not an MVP roadmap. Each phase contributes to the full v1 target.
 
-Status as of **2026-08-20**. Three words, meaning three different things:
+Status as of **2026-09-26**. Three words, meaning three different things:
 
 - **Done** — the phase's work is finished.
 - **Started** — a real, tested slice exists *and is reachable from the
@@ -16,7 +16,7 @@ Status as of **2026-08-20**. Three words, meaning three different things:
 | 1 | Foundation and workspace | **Done** | [01-foundation](project/tasks/01-foundation/) | `bp-core`, `bp-config`, `bp-theme`, `bp-ui` |
 | 2 | Core editor | **Started** | [02-core-editor](project/tasks/02-core-editor/) | `bp-buffer`, `bp-editor` |
 | 3 | File safety and recovery | **Done** | [03-file-safety](project/tasks/03-file-safety/) | `bp-files`, `bp-history` |
-| 4 | Large-file engine | **Built, unwired** | [04-large-files](project/tasks/04-large-files/) | `bp-buffer` |
+| 4 | Large-file engine | **Started** (read-only viewer tab, M1-06) | [04-large-files](project/tasks/04-large-files/) | `bp-buffer` |
 | 5 | Format registry and parser framework | **Started** | [05-formats](project/tasks/05-formats/) | `bp-formats` |
 | 6 | Structured formats | **Started** | [05-formats](project/tasks/05-formats/) | `bp-data` |
 | 7 | Search engine | **Started** | [06-search](project/tasks/06-search/) | `bp-search` |
@@ -37,7 +37,9 @@ Status as of **2026-08-20**. Three words, meaning three different things:
 ## Two numbering schemes, reconciled
 
 The phase numbers above are canonical — they are what `specs.md`, the ADRs and
-the application's own "not implemented yet (phase N)" menu rows refer to.
+the planned menus refer to. (A release no longer shows planned rows;
+`show_planned_menus = true` in `config.toml` brings the four planned menus
+back.)
 
 `project/tasks/` uses fourteen directories rather than twenty, because several
 roadmap phases share a task folder (all three security phases live under
@@ -53,19 +55,22 @@ each have a tested slice reachable in the product — phase 18 joined them when
 File ▸ Set as Default Editor shipped. Phases 4, 9, 12 and 13 are built and
 have no way in, which an audit put a number on: `bp-research`, `bp-notebook`
 and `bp-storage` have zero reverse dependencies anywhere in the application,
-and with `bp-buffer`'s large-file engine that is over ten thousand lines and
-237 unit tests behind code no user can reach.
+and with `bp-buffer`'s large-file engine that is over ten thousand lines,
+with their unit tests, behind code no user can reach.
 
 **The wiring backlog is real, and it shrank rather than grew.** Phase 6's
 YAML, phase 16's redaction and metadata inspector all have menu rows now, the
 audit log's sealed destination has an implementor instead of refusing every
 append, and phases 16 and 18 gained Verify Signature and Set as Default
 Editor. What is still built and unreachable is `bp-buffer`'s large-file
-engine, `bp-notebook`, `bp-research` and `bp-storage` -- so opening a 2 GB
-file still loads 2 GB. `bp-audit` came off that list when Security ▸ Security
+engine, `bp-notebook`, `bp-research` and `bp-storage` -- so a 2 GB file
+still cannot be viewed: the open path refuses anything past the 32 MiB
+editable limit before reading it (M0-04), and the read-only viewer that would
+take it over is release-plan item M1-06. `bp-audit` came off that list when
+Security ▸ Security
 History shipped: five capabilities write into it and one row reads it back.
 
-**Cross-crate tests have found seven defects, and five are fixed.** Until the
+**Cross-crate tests have found seven defects; six are fixed and one is a decision.** Until the
 fourth session every test in the repository tested one crate. Eleven files of
 cross-crate tests found that `bp-search` and `bp-buffer` disagree about what a
 line is, that `bp-formats` identified a pretty-printed JSON array as JSON
@@ -74,13 +79,15 @@ inside the shell where no library test could reach it, that YAML had no way
 in, that `bp-notebook` runs a cell whose language it could not map through the
 kernel's interpreter, that `bp-files` never applies the extended-length path
 prefix -- and, worst of the seven, that `bp-naming` would generate a filename
-Windows treats as a device. That last one is now fixed: the sanitiser tests
+Windows treats as a device. That last one was fixed in the fifth session: the sanitiser tests
 the stem before the first dot, the way Win32 does, so `con.txt` becomes
 `con File.txt` rather than a save that reports success while writing to the
 console -- and `bp-files` refuses such a name outright, which closes the
 route sanitising never covered, the name a user types into a Save dialog.
-Two defects and one decision remain, each pinned by an `#[ignore]`d test
-naming it. `DECISIONS.md` has the evidence.
+The sixth session fixed the notebook and extended-length-path defects.
+The seventh, which definition of a line wins, was decision D6: answered on
+2026-09-26 with the Notepad rule (LF, CRLF or a bare CR, everywhere), and
+its test runs again.
 
 **Phase 19's harnesses are inside the gate now, which they were not.**
 `fuzz/` declares its own `[workspace]`, so every `--workspace` command in
@@ -118,7 +125,11 @@ and records nothing under `Disabled`. The Security menu sets the profile and
 states what it permits; the status bar shows anything other than the default.
 
 Two limits are deliberate and visible. Profiles requiring an encrypted journal
-cannot be honoured until `bp-crypto` (phase 15), so recovery is refused rather
-than downgraded — the menu says "off until encryption ships". And `bp-storage`
-is still not called by the application: that is ADR-0019's product decision,
-which the profile model makes revisitable rather than reversible by hand.
+are honoured now that `bp-crypto` (phase 15) ships: ADR-0022 seals the journal
+with the document's own passphrase. A *plaintext* document under those
+profiles has no key, so its recovery is refused rather than downgraded — the
+Security menu says "off until the document is encrypted", and Encrypt
+Document is what fixes it. And `bp-storage` is still not called by the
+application: that is ADR-0019's product decision, confirmed for RC1 by
+ADR-0030, which the profile model makes revisitable rather than reversible by
+hand.

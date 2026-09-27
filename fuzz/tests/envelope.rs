@@ -57,6 +57,10 @@ fn exercise(bytes: &[u8]) {
     // whether a file is even a candidate.
     let _ = bp_crypto::is_bpadx(bytes);
     let _ = bp_crypto::stable_name(bytes);
+    // What the shell reads to decide whether to ask before unlocking
+    // (decision 15). Header only, so it must be total too.
+    let _ = bp_crypto::declared_cost(bytes);
+    let _ = bp_crypto::unlock_cost(bytes);
 }
 
 #[test]
@@ -226,7 +230,8 @@ fn arbitrary_bytes_behind_the_magic_are_survivable() {
 /// hide anything: the pre-authentication cost is written up in the README and
 /// walked deliberately by
 /// [`no_single_byte_flip_ever_produces_plaintext`]. It is pinned because a
-/// generator free to set a 1 GiB cost spends the whole run in Argon2 instead
+/// generator free to set the cost can ask for 76 MiB on every case (four times
+/// the default, which `open` still pays) and spends the run in Argon2 instead
 /// of in the parser this target is aimed at.
 #[test]
 fn a_damaged_real_document_is_survivable() {
@@ -267,11 +272,11 @@ fn a_damaged_real_document_is_survivable() {
 /// authenticated**. The header is authenticated -- as additional data on
 /// every chunk -- but only afterwards, by which time the work is done.
 ///
-/// The consequence: opening a hostile `.bpadx` and typing any passphrase at
-/// all costs whatever the file asked for, up to the ceiling
-/// `KdfParams::validate` sets (1 GiB, 64 iterations, 64 lanes), before it can
-/// report that the file is rubbish. A single flipped bit in the cost field of
-/// a real document is enough to do it.
+/// Since decision 15 (ADR-0021, amended 2026-09-26) that cost is paid only in
+/// two cases: it is within four times the default, or the user was asked and
+/// agreed. The ceiling is 256 MiB and 8 passes. What is measured below is
+/// therefore `open_confirmed`, the price of saying yes; `open` refuses
+/// anything above four times the default before deriving.
 ///
 /// `#[ignore]`d because it allocates hundreds of megabytes and takes seconds,
 /// which is not a thing to put on a gate. Run it deliberately:
@@ -288,14 +293,14 @@ fn the_declared_kdf_cost_is_paid_before_anything_is_authenticated() {
     // kdf id 1.
     const MEMORY_KIB_AT: usize = 10;
 
-    for memory_kib in [8u32, 1024, 64 * 1024, 512 * 1024, 1024 * 1024] {
+    for memory_kib in [8u32, 1024, 64 * 1024, bp_crypto::MAX_MEMORY_KIB] {
         let mut document = sealed.clone();
         document[MEMORY_KIB_AT..MEMORY_KIB_AT + 4].copy_from_slice(&memory_kib.to_le_bytes());
 
         let started = std::time::Instant::now();
         // The wrong passphrase, deliberately: this is the cost of *failing*
         // to open, which is what an attacker's file actually inflicts.
-        let result = bp_crypto::open(&document, "not the passphrase");
+        let result = bp_crypto::open_confirmed(&document, "not the passphrase");
         let elapsed = started.elapsed();
 
         println!(
@@ -309,39 +314,41 @@ fn the_declared_kdf_cost_is_paid_before_anything_is_authenticated() {
         );
     }
 
-    // Iterations, the other multiplier, measured at a memory cost small
-    // enough to keep this test tolerable. Argon2's time is linear in the
-    // pass count, so the ceiling -- 1 GiB at 64 passes -- is the product of
-    // the two worst rows printed here and is not measured directly, because
-    // measuring it means sitting through it.
-    for iterations in [1u32, 8, 64] {
+    // Iterations, the other multiplier, at a memory cost small enough to
+    // keep this test tolerable. Argon2's time is linear in the pass count,
+    // so the ceiling -- 256 MiB at 8 passes -- is the product of the two
+    // worst rows printed here.
+    for iterations in [1u32, bp_crypto::MAX_ITERATIONS] {
         let mut document = sealed.clone();
         document[MEMORY_KIB_AT..MEMORY_KIB_AT + 4].copy_from_slice(&(64u32 * 1024).to_le_bytes());
         document[MEMORY_KIB_AT + 4..MEMORY_KIB_AT + 8].copy_from_slice(&iterations.to_le_bytes());
 
         let started = std::time::Instant::now();
-        let _ = bp_crypto::open(&document, "not the passphrase");
+        let _ = bp_crypto::open_confirmed(&document, "not the passphrase");
         println!(
             "64 MiB at {iterations:>3} passes -> {:>8.1?} to refuse",
             started.elapsed()
         );
     }
 
-    // Past the ceiling, refused without doing the work. This is the half that
-    // is a control rather than an observation, so it is the half asserted.
-    let mut absurd = sealed;
-    absurd[MEMORY_KIB_AT..MEMORY_KIB_AT + 4].copy_from_slice(&(4u32 * 1024 * 1024).to_le_bytes());
-    let started = std::time::Instant::now();
-    let refused = bp_crypto::open(&absurd, PASSPHRASE).expect_err("4 GiB must be refused");
-    assert!(
-        matches!(refused, CryptoError::UnreasonableCost { .. }),
-        "got {refused}"
-    );
-    assert!(
-        started.elapsed() < Duration::from_millis(100),
-        "a cost past the ceiling must be refused without paying it"
-    );
-    println!("declared cost 4 GiB -> refused immediately: {refused}");
+    // Past the ceiling, refused without doing the work, whoever agreed. This
+    // is the half that is a control rather than an observation, so it is the
+    // half asserted.
+    for past in [bp_crypto::MAX_MEMORY_KIB + 1, 4 * 1024 * 1024] {
+        let mut absurd = sealed.clone();
+        absurd[MEMORY_KIB_AT..MEMORY_KIB_AT + 4].copy_from_slice(&past.to_le_bytes());
+        let started = std::time::Instant::now();
+        let refused = bp_crypto::open_confirmed(&absurd, PASSPHRASE).expect_err("past the ceiling");
+        assert!(
+            matches!(refused, CryptoError::UnreasonableCost { .. }),
+            "got {refused}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_millis(100),
+            "a cost past the ceiling must be refused without paying it"
+        );
+        println!("declared cost {past} KiB -> refused immediately: {refused}");
+    }
 }
 
 /// Arbitrary seal options round-tripped, so `seal` is not left untested while

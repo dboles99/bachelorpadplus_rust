@@ -1,0 +1,74 @@
+# RPM spec for BachelorPad+, rendered and built by build-packages.sh -- not
+# a source RPM recipe. It repackages the tree build-packages.sh staged
+# (passed as %{_stage}), which already holds the stripped binary, so nothing
+# is compiled here and rpm's own strip and debuginfo steps are switched off.
+# @VERSION@ and @RELEASE@ are filled in from the workspace version.
+
+%global debug_package %{nil}
+%global __os_install_post %{nil}
+# The binary is stripped by build-packages.sh, which keeps its debuginfo as
+# a separate release artefact; no build-id links, since no -debuginfo
+# package carries the other half of them.
+%global _build_id_links none
+
+Name:           bachelorpad
+Version:        @VERSION@
+Release:        @RELEASE@
+Summary:        Text editor for notes, data and logs
+License:        MIT OR Apache-2.0
+URL:            https://github.com/dboles99/bachelorpadplus_rust
+Packager:       Daniel Boles
+Vendor:         Daniel Boles
+
+# rpm's generator adds what the binary links (libc, libgcc_s, fontconfig,
+# freetype) with their GLIBC_x.y versions. These are what it loads with
+# dlopen when the window opens, which no generator can see; they are
+# sonames, so they resolve on Fedora and openSUSE alike. See
+# packaging/linux/README.md for how each was found.
+Requires:       libxkbcommon.so.0()(64bit)
+Requires:       libxkbcommon-x11.so.0()(64bit)
+Requires:       libX11.so.6()(64bit)
+Requires:       libX11-xcb.so.1()(64bit)
+Requires:       libxcb.so.1()(64bit)
+Requires:       libXcursor.so.1()(64bit)
+Requires:       libXi.so.6()(64bit)
+Requires:       libwayland-client.so.0()(64bit)
+# rfd's portal backend talks D-Bus through libdbus, loaded at run time.
+Requires:       libdbus-1.so.3()(64bit)
+# File pickers go through the XDG desktop portal (message dialogs are drawn
+# in the window, so nothing else needs a toolkit).
+Recommends:     (xdg-desktop-portal-gtk or xdg-desktop-portal-kde or xdg-desktop-portal-gnome)
+# Only for `--renderer platform` (the femtovg GPU path); the default
+# software renderer needs none of them.
+Recommends:     libEGL.so.1()(64bit)
+Recommends:     libGL.so.1()(64bit)
+Recommends:     libwayland-egl.so.1()(64bit)
+
+%description
+BachelorPad+ is a plain-text editor that starts as fast as Notepad and stays
+out of the way: open a file, change it, save it. It reads plain text, logs,
+Markdown, JSON, YAML, TOML, CSV and XML, keeps a recovery journal so unsaved
+work survives a crash, and can save a document encrypted with a passphrase in
+its own .bpadx format.
+
+%install
+cp -a %{_stage}/. %{buildroot}/
+mkdir -p %{buildroot}%{_datadir}/licenses/%{name}
+mv %{buildroot}%{_docdir}/%{name}/LICENSE-* %{buildroot}%{_datadir}/licenses/%{name}/
+mv %{buildroot}%{_docdir}/%{name}/THIRD-PARTY-NOTICES.txt %{buildroot}%{_datadir}/licenses/%{name}/
+
+# Fedora's desktop-file-utils, shared-mime-info and hicolor-icon-theme
+# update their caches from file triggers on these directories, so there
+# are no scriptlets here.
+
+%files
+%{_bindir}/bachelorpad
+%{_bindir}/bpad
+%{_datadir}/applications/io.github.dboles99.BachelorPad.desktop
+%{_datadir}/metainfo/io.github.dboles99.BachelorPad.metainfo.xml
+%{_datadir}/mime/packages/io.github.dboles99.BachelorPad.xml
+%{_datadir}/icons/hicolor/*/apps/io.github.dboles99.BachelorPad.*
+%doc %{_docdir}/%{name}/copyright
+%license %{_datadir}/licenses/%{name}/LICENSE-MIT
+%license %{_datadir}/licenses/%{name}/LICENSE-APACHE
+%license %{_datadir}/licenses/%{name}/THIRD-PARTY-NOTICES.txt

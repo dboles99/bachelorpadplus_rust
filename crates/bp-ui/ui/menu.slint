@@ -6,13 +6,37 @@
 
 import { MenuItem, Palette } from "types.slint";
 
+/// Keyboard movement through a menu's rows, answered in Rust
+/// (`menus::next_live_row`), where it is unit-tested.
+export global MenuNav {
+    /// The next row from `from` in direction `delta` that is enabled,
+    /// wrapping; `from` itself if none is, and -1 for an empty menu.
+    pure callback next([MenuItem], int, int) -> int;
+}
+
 export component MenuLabel inherits Rectangle {
     in property <string> label;
     in property <bool> open;
+    /// False takes the label off the bar. Zero wide rather than inside an
+    /// `if`, because each menu popup is placed from its label's `x`, and an
+    /// element inside an `if` cannot be named from outside it.
+    in property <bool> shown: true;
     callback clicked();
     height: 26px;
-    width: txt.preferred-width + 22px;
+    width: root.shown ? txt.preferred-width + 22px : 0px;
+    visible: root.shown;
     background: root.open || ta.has-hover ? Palette.edge : transparent;
+
+    // A screen reader hears "File, button, collapsed" rather than nothing:
+    // Slint 1.17 has no menu roles, and a button that expands is the
+    // nearest honest description (release plan M2-14).
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-expandable: true;
+    accessible-expanded: root.open;
+    accessible-action-default => {
+        root.clicked();
+    }
 
     txt := Text {
         text: root.label;
@@ -31,9 +55,23 @@ export component MenuLabel inherits Rectangle {
 
 export component MenuRow inherits Rectangle {
     in property <MenuItem> item;
+    /// Where the keyboard is. Drawn like the pointer's hover, so the two
+    /// never disagree about what Enter would choose.
+    in property <bool> highlighted;
     callback chosen(int);
     height: 28px;
-    background: root.item.enabled && ta.has-hover ? Palette.edge : Palette.panel;
+    background: root.item.enabled && (ta.has-hover || root.highlighted) ? Palette.edge : Palette.panel;
+
+    accessible-role: list-item;
+    accessible-label: root.item.label;
+    accessible-description: root.item.shortcut;
+    accessible-enabled: root.item.enabled;
+    accessible-item-selected: root.highlighted;
+    accessible-action-default => {
+        if (root.item.enabled) {
+            root.chosen(root.item.action);
+        }
+    }
 
     HorizontalLayout {
         padding-left: 14px;
@@ -85,15 +123,76 @@ export component MenuPopup inherits PopupWindow {
     /// Named like `menu-width` for the same reason: `max-height` is a builtin
     /// layout property and cannot be redeclared.
     in property <length> menu-max-height: 400px;
+    /// The row the keyboard is on, or -1 for none.
+    in-out property <int> highlighted: -1;
     callback chosen(int);
+    /// Left (-1) or Right (+1) asked for the neighbouring menu.
+    callback neighbour(int);
+    /// Escape closed the menu from the keyboard.
+    callback dismissed();
+
+    /// Move the highlight `delta` rows, skipping readouts and greyed rows,
+    /// and wrapping. Stays put if there is no live row at all. The search is
+    /// Rust's (`MenuNav.next`): Slint has no loops.
+    function step(delta: int) {
+        root.highlighted = MenuNav.next(root.items, root.highlighted, delta);
+    }
 
     width: root.menu-width;
     height: min(content.preferred-height, root.menu-max-height);
+
+    // A popup is built afresh each time it is shown, and nothing outside
+    // it can call into it (it is a window of its own), so it takes the
+    // keyboard itself: opened by F10, a mnemonic, Left/Right or a click,
+    // the arrows and Enter work straight away, starting from the first
+    // live row.
+    keys := FocusScope {
+        init => {
+            root.highlighted = -1;
+            root.step(1);
+            self.focus();
+        }
+        key-pressed(event) => {
+            if (event.text == Key.DownArrow) {
+                root.step(1);
+                return accept;
+            }
+            if (event.text == Key.UpArrow) {
+                root.step(-1);
+                return accept;
+            }
+            if (event.text == Key.Return || event.text == " ") {
+                if (root.highlighted >= 0 && root.highlighted < root.items.length
+                        && root.items[root.highlighted].enabled) {
+                    root.close();
+                    root.chosen(root.items[root.highlighted].action);
+                }
+                return accept;
+            }
+            if (event.text == Key.Escape) {
+                root.close();
+                root.dismissed();
+                return accept;
+            }
+            if (event.text == Key.LeftArrow) {
+                root.close();
+                root.neighbour(-1);
+                return accept;
+            }
+            if (event.text == Key.RightArrow) {
+                root.close();
+                root.neighbour(1);
+                return accept;
+            }
+            reject
+        }
+    }
 
     Rectangle {
         background: Palette.panel;
         border-color: Palette.edge;
         border-width: 1px;
+        accessible-role: list;
 
         Flickable {
             // Both viewport dimensions are set. Height is the point of the
@@ -110,9 +209,10 @@ export component MenuPopup inherits PopupWindow {
             content := VerticalLayout {
                 alignment: start;
                 padding: 4px;
-                for item in root.items: VerticalLayout {
+                for item[i] in root.items: VerticalLayout {
                     MenuRow {
                         item: item;
+                        highlighted: i == root.highlighted;
                         chosen(action) => {
                             root.chosen(action);
                         }

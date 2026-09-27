@@ -1,7 +1,7 @@
 # Task: workspace-scaffold
 
 **Phase:** 01-foundation
-**Status:** Done for the crates in use; most crates remain placeholders
+**Status:** Done (checked 2026-09-25)
 
 ## Objective
 
@@ -25,7 +25,9 @@ plugs into, without pulling in a UI toolkit or the semantic layer.
       failed save provably leaves the original intact (ADR-0007).
 - [x] Every error path names the file and says what the user can do.
 - [x] Unit tests for the above, plus property tests over the filename grammar.
-- [ ] The remaining placeholder crates either gain content or are removed.
+- [x] The remaining placeholder crates either gain content or are removed.
+      Removed: only crates with content are workspace members, and the
+      intended map lives in `docs/architecture/ARCHITECTURE.md`.
 
 ## Artifacts
 
@@ -33,7 +35,10 @@ plugs into, without pulling in a UI toolkit or the semantic layer.
 
 ## Notes
 
-24 of the 27 crates are still four-line placeholders. That is a deliberate
-scaffold of the intended shape, but each one is a real compile unit and a
-real merge surface for a structure nothing has exercised yet. Prefer creating
-a crate when there is something to put in it.
+When this task was written, 24 of the 27 crates were four-line placeholders.
+That was a deliberate scaffold of the intended shape, but each one was a real
+compile unit and a real merge surface for a structure nothing had exercised.
+They were removed, and the rule became the one in the workspace
+`Cargo.toml`: create a crate when there is something to put in it. On
+2026-09-25 the workspace has 24 crates under `crates/`, the smallest
+(`bp-theme`) about 300 lines.

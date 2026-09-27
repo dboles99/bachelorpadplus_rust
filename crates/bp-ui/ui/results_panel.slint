@@ -8,6 +8,8 @@ import { MenuLabel } from "menu.slint";
 import { SearchHit, Palette } from "types.slint";
 
 export component ResultsPanel inherits Rectangle {
+    accessible-role: region;
+    accessible-label: "Search results";
     in property <bool> open;
     in property <[SearchHit]> hits;
     in property <string> summary;
@@ -68,7 +70,7 @@ export component ResultsPanel inherits Rectangle {
                         Text {
                             text: hit.detail;
                             color: Palette.ink-dim;
-                            font-family: "Consolas";
+                            font-family: "DejaVu Sans Mono";
                             font-size: 12px;
                             vertical-alignment: center;
                             overflow: elide;

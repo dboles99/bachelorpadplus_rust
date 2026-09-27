@@ -195,9 +195,19 @@ impl Sealer for PassphraseSealer {
         // a closed vocabulary. There is no secret in it to leave behind — that
         // is the crate's central guarantee, and this is the one place that
         // guarantee is being cashed in rather than merely asserted.
-        bp_crypto::open(sealed, self.passphrase.as_str())
-            .map(|plain| plain.to_vec())
-            .map_err(refuse)
+        //
+        // A line may cost what this sealer pays to write one, and no more.
+        // A sealer built with a cost above four times the default (decision
+        // 15) was built that way by its caller, which is the agreement
+        // `open_confirmed` stands for; a line declaring any *other* cost is
+        // an edit, and `open` refuses it before deriving if it is expensive.
+        let own_cost = bp_crypto::declared_cost(sealed).is_ok_and(|kdf| kdf == self.options.kdf);
+        let opened = if own_cost {
+            bp_crypto::open_confirmed(sealed, self.passphrase.as_str())
+        } else {
+            bp_crypto::open(sealed, self.passphrase.as_str())
+        };
+        opened.map(|plain| plain.to_vec()).map_err(refuse)
     }
 }
 
@@ -244,7 +254,9 @@ fn refuse(error: CryptoError) -> SealFailed {
         CryptoError::Truncated | CryptoError::Corrupt => {
             "this line of the security history is incomplete or damaged"
         }
-        CryptoError::UnreasonableCost { .. } | CryptoError::UnreasonableChunkSize(_) => {
+        CryptoError::UnreasonableCost { .. }
+        | CryptoError::UnconfirmedCost { .. }
+        | CryptoError::UnreasonableChunkSize(_) => {
             "this line of the security history asks for an unreasonable amount of \
              work to open, and was refused"
         }
@@ -381,6 +393,42 @@ mod tests {
         // And it actually works at that cost, once.
         let sealed = keyed.seal(b"{\"seq\":1}").expect("a line seals");
         assert_eq!(keyed.unseal(&sealed).expect("and opens"), b"{\"seq\":1}");
+    }
+
+    #[test]
+    fn a_sealer_built_above_four_times_the_default_cost_reads_its_own_lines() {
+        // Its caller chose the cost, which is the agreement decision 15 asks
+        // for. The cheapest such cost: just over four times the default's
+        // memory, at one pass.
+        let costly = SealOptions {
+            kdf: KdfParams {
+                memory_kib: 4 * 19 * 1024 + 1,
+                iterations: 1,
+                lanes: 1,
+            },
+            ..SealOptions::default()
+        };
+        let keyed = PassphraseSealer::with_options(PASS, costly).expect("a passphrase");
+        let line = keyed.seal(b"a record").expect("seals");
+
+        assert_eq!(keyed.unseal(&line).expect("reads back"), b"a record");
+    }
+
+    #[test]
+    fn a_line_whose_cost_was_raised_past_the_sealers_own_is_refused_without_deriving() {
+        let keyed = sealer(PASS);
+        let mut line = keyed.seal(b"a record").expect("seals");
+        // magic 6 + version 2 + suite 1 + kdf id 1 = 10: memory, then passes.
+        line[10..14].copy_from_slice(&(256u32 * 1024).to_le_bytes());
+        line[14..18].copy_from_slice(&8u32.to_le_bytes());
+
+        let started = std::time::Instant::now();
+        let refused = keyed.unseal(&line).expect_err("an edited cost is refused");
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(50),
+            "256 MiB at 8 passes was derived before refusing"
+        );
+        assert!(refused.to_string().contains("unreasonable amount of work"));
     }
 
     #[test]

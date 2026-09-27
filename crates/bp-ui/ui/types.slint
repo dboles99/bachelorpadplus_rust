@@ -59,6 +59,15 @@ export struct SelectionBox {
     end: int,
 }
 
+/// One row of the Settings sheet. Rust words all three: the sheet draws
+/// them and reports which row was stepped which way, and nothing else.
+export struct SettingRow {
+    label: string,
+    value: string,
+    /// What the choice means, or when it takes effect. Empty for most rows.
+    note: string,
+}
+
 export global Palette {
     in property <color> shell;
     in property <color> panel;

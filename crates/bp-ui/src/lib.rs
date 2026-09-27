@@ -33,6 +33,7 @@
 #![deny(unsafe_code)]
 
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -62,12 +63,19 @@ pub use generated::*;
 
 mod menus;
 
+mod about;
 mod audit;
 mod default_editor;
+mod dialog;
 mod dispatch;
 mod editor_view;
 mod passphrase;
+mod settings_sheet;
 mod state;
+mod viewer;
+#[cfg(test)]
+mod window_tests;
+mod worker;
 
 /// Crate identity used by workspace smoke tests and diagnostics.
 pub const CRATE_NAME: &str = "bp-ui";
@@ -110,6 +118,16 @@ fn refresh(ui: &AppWindow, state: &mut state::AppState, push_text: state::PushTe
     if push_text == state::PushText::Yes {
         ui.set_doc_text(state.active_text().as_str().into());
     }
+    let viewing = state.viewer_active();
+    let switched = ui.get_viewer_active() != viewing;
+    ui.set_viewer_active(viewing);
+    if switched {
+        ui.invoke_follow_view();
+    }
+    if viewing {
+        viewer::draw(ui, state);
+    }
+    ui.set_viewer_busy(state.viewers_busy());
     if state.editor_view {
         editor_view::push_editor_view(ui, state);
     }
@@ -120,7 +138,14 @@ fn refresh(ui: &AppWindow, state: &mut state::AppState, push_text: state::PushTe
     let format = state.format();
 
     if let Some(doc) = state.workspace.active() {
-        ui.set_save_state(state::save_state_label(doc).into());
+        ui.set_save_state(
+            if viewing {
+                "Read-only".to_owned()
+            } else {
+                state::save_state_label(doc)
+            }
+            .into(),
+        );
         ui.set_is_dirty(doc.is_dirty());
         ui.set_location(doc.location_label().into());
         ui.set_encoding_label(doc.encoding().label().into());
@@ -128,6 +153,7 @@ fn refresh(ui: &AppWindow, state: &mut state::AppState, push_text: state::PushTe
         ui.set_format_label(format.label().into());
         ui.set_cursor_label(cursor.as_str().into());
     }
+    ui.set_overwrite(state.overwrite);
 
     // Something that just failed outranks a standing warning about the file.
     let notice = state
@@ -174,6 +200,7 @@ fn refresh(ui: &AppWindow, state: &mut state::AppState, push_text: state::PushTe
     }
     ui.set_passphrase_status(state.passphrase_status.as_str().into());
 
+    ui.set_show_planned_menus(state.show_planned_menus);
     ui.set_show_gutter(state.show_gutter);
     ui.set_wrap_text(state.wrap_text);
     // Points to Slint's `length`. Both editor views read this one property,
@@ -184,16 +211,27 @@ fn refresh(ui: &AppWindow, state: &mut state::AppState, push_text: state::PushTe
     // rest are set once at startup.
     let any_dirty = state.workspace.dirty().next().is_some();
     let has_path = state.workspace.active().and_then(Document::path).is_some();
-    let model = |items: Vec<MenuItem>| slint::ModelRc::new(slint::VecModel::from(items));
+    // Over a viewer tab, every row that cannot act on it is greyed with the
+    // reason, rather than left live to be refused after the click.
+    let model = |items: Vec<MenuItem>| {
+        let items = if viewing {
+            menus::for_viewer(items)
+        } else {
+            items
+        };
+        slint::ModelRc::new(slint::VecModel::from(items))
+    };
 
     ui.set_file_items(model(menus::file(
         any_dirty,
         has_path,
         state.recent.paths(),
+        &state.integration,
     )));
     ui.set_view_items(model(menus::view(
         state.theme,
         state.follow_system_theme,
+        state.system_dark.is_some(),
         state.show_gutter,
         state.wrap_text,
         state.font_size,
@@ -208,10 +246,10 @@ fn refresh(ui: &AppWindow, state: &mut state::AppState, push_text: state::PushTe
     // Rebuilt rather than set once, because the previews are rendered from
     // the clock: a menu built at startup would still be offering this
     // morning's time this afternoon.
-    ui.set_insert_items(model(menus::insert(state::now(), state.editor_view)));
+    ui.set_insert_items(model(menus::insert(state::now())));
     ui.set_data_items(model(menus::data(format)));
     ui.set_note_items(model(menus::note(state.active_has_content())));
-    ui.set_edit_items(model(menus::edit(state.clips.entries(), state.editor_view)));
+    set_clip_menus(ui, state);
     // Rebuilt rather than set once: it shows the *active* document's profile
     // and what that profile permits, both of which change with the tab.
     let encrypted = state
@@ -233,15 +271,66 @@ fn refresh(ui: &AppWindow, state: &mut state::AppState, push_text: state::PushTe
     )));
 }
 
+/// The rows that name clipboard entries: Edit's, and the editor context
+/// menu's (release plan M1-18).
+///
+/// Built from the snapshot the last of those menus opened with, not from
+/// the history as it is now (U5): the poll can add an entry while one is
+/// open, and a rebuild from the live history would move every row down
+/// under the pointer. An entry that has gone since loses its row, so no
+/// preview of text the history has forgotten stays on screen.
+fn set_clip_menus(ui: &AppWindow, state: &state::AppState) {
+    let shown = state.shown_clips();
+    let edit = menus::edit(&shown);
+    let edit = if state.viewer_active() {
+        menus::for_viewer(edit)
+    } else {
+        edit
+    };
+    // Only when the rows differ. This runs on every refresh, the poll's
+    // included, and Slint rebuilds an open context menu whose model is
+    // replaced: in the window tests the keyboard's place in it was lost,
+    // so a copy arriving under the menu disturbed it even though no row
+    // had changed.
+    let set = |current: slint::ModelRc<MenuItem>,
+               items: Vec<MenuItem>,
+               apply: &dyn Fn(slint::ModelRc<MenuItem>)| {
+        use slint::Model as _;
+        if !current.iter().eq(items.iter().cloned()) {
+            apply(slint::ModelRc::new(slint::VecModel::from(items)));
+        }
+    };
+    set(ui.get_edit_items(), edit, &|m| ui.set_edit_items(m));
+    // Not greyed for the viewer: the context menu does not open over it.
+    set(
+        ui.get_context_history_items(),
+        menus::context_history(&shown),
+        &|m| ui.set_context_history_items(m),
+    );
+    set(
+        ui.get_context_pin_items(),
+        menus::context_pins(&shown),
+        &|m| ui.set_context_pin_items(m),
+    );
+    ui.set_context_can_clear(menus::context_can_clear(&shown));
+}
+
 /// Menus whose contents never change. Set once, not on every refresh.
 fn set_static_menus(ui: &AppWindow) {
+    // Keyboard movement through any menu: the search lives in Rust, where
+    // it is tested, because Slint has no loops.
+    ui.global::<MenuNav>().on_next(|items, from, delta| {
+        use slint::Model as _;
+        let enabled: Vec<bool> = items.iter().map(|item| item.enabled).collect();
+        menus::next_live_row(&enabled, from, delta)
+    });
     let model = |items: Vec<MenuItem>| slint::ModelRc::new(slint::VecModel::from(items));
     ui.set_help_items(model(menus::help()));
     ui.set_notebook_items(model(menus::planned_menu("Notebook")));
     ui.set_organize_items(model(menus::planned_menu("Organize")));
     ui.set_research_items(model(menus::planned_menu("Research")));
     ui.set_run_items(model(menus::planned_menu("Run")));
-    ui.set_tools_items(model(menus::planned_menu("Tools")));
+    ui.set_tools_items(model(menus::tools()));
 }
 
 /// The query the find bar currently describes.
@@ -259,29 +348,127 @@ fn ui_query(ui: &AppWindow) -> bp_search::Query {
     )
 }
 
-/// Open a file, starting in a sensible directory.
-pub(crate) fn pick_file(state: &state::AppState) -> Option<PathBuf> {
-    dispatch::pick_file(state)
+thread_local! {
+    /// The process's one connection to the OS clipboard, made on first use
+    /// (release plan M2-08).
+    ///
+    /// One, not one per copy, because on Linux the clipboard is not a store
+    /// but a promise: under X11 the program that copied answers every paste
+    /// itself, for as long as its `arboard::Clipboard` lives. A clipboard
+    /// made for one copy and dropped at the end of it takes the text with it
+    /// unless a clipboard manager happened to grab it first -- so a copy
+    /// from this editor could paste as nothing. It also spares the history
+    /// poll a fresh display connection every 1.2 seconds.
+    ///
+    /// Thread-local because everything that touches it runs on the UI
+    /// thread; `None` until the first use, and again after a failed attempt,
+    /// so a clipboard that was unavailable at startup is retried rather than
+    /// lost for the session.
+    static OS_CLIPBOARD: RefCell<Option<arboard::Clipboard>> = const { RefCell::new(None) };
+
+    /// The timer that clears a private copy off the OS clipboard, and what
+    /// it is waiting to clear. A later private copy restarts it; see
+    /// [`bp_clipboard::clear_after`].
+    static PRIVATE_CLEAR: RefCell<Option<(slint::Timer, bp_clipboard::PendingClear)>> =
+        const { RefCell::new(None) };
 }
 
-/// Choose a save location, starting in a sensible directory with the
-/// ADR-0003 filename suggested.
-pub(crate) fn pick_save_path(state: &state::AppState, id: DocumentId) -> Option<PathBuf> {
-    dispatch::pick_save_path(state, id)
+/// Run `f` against the process's clipboard, connecting first if need be.
+/// `None` if there is no clipboard to be had.
+fn with_os_clipboard<T>(f: impl FnOnce(&mut arboard::Clipboard) -> Option<T>) -> Option<T> {
+    OS_CLIPBOARD.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        if slot.is_none() {
+            *slot = arboard::Clipboard::new().ok();
+        }
+        f(slot.as_mut()?)
+    })
 }
 
-/// Whatever the OS clipboard holds, if it holds text.
 /// Read the OS clipboard, if it holds text.
 ///
 /// Failures are silent: a clipboard held open by another process is normal
 /// and momentary, and there is nothing useful to say about it.
 pub(crate) fn read_os_clipboard() -> Option<String> {
-    arboard::Clipboard::new().ok()?.get_text().ok()
+    with_os_clipboard(|clipboard| clipboard.get_text().ok())
 }
 
 /// Put text on the OS clipboard. Returns whether it worked.
-pub(crate) fn set_os_clipboard(text: &str) -> bool {
-    arboard::Clipboard::new().is_ok_and(|mut c| c.set_text(text.to_owned()).is_ok())
+///
+/// `keep_private` asks the OS to keep this copy out of its own clipboard
+/// history, and on Windows out of cloud clipboard sync and clipboard
+/// monitors -- `bp_clipboard::keep_out_of_os_history` decides when. It is a
+/// request, honoured by Windows' Win+V history and by KDE's Klipper; a
+/// clipboard manager that ignores the hint still sees the text. A private
+/// copy is also cleared off the clipboard after
+/// [`bp_clipboard::PRIVATE_CLEAR_AFTER`], which does not depend on anyone
+/// honouring anything.
+pub(crate) fn set_os_clipboard(text: &str, keep_private: bool) -> bool {
+    let set = with_os_clipboard(|clipboard| {
+        let set = clipboard.set();
+        #[cfg(windows)]
+        let set = if keep_private {
+            use arboard::SetExtWindows as _;
+            set.exclude_from_history()
+                .exclude_from_cloud()
+                .exclude_from_monitoring()
+        } else {
+            set
+        };
+        #[cfg(target_os = "linux")]
+        let set = if keep_private {
+            use arboard::SetExtLinux as _;
+            set.exclude_from_history()
+        } else {
+            set
+        };
+        set.text(text.to_owned()).ok()
+    })
+    .is_some();
+    if set {
+        schedule_private_clear(text, keep_private);
+    }
+    set
+}
+
+/// After a successful copy: start the countdown to clearing a private one,
+/// or, for a standard one, cancel any countdown still running -- the private
+/// text it was waiting for is no longer on the clipboard, and the fingerprint
+/// check would leave the new text alone anyway, but a timer with nothing to
+/// do should not be left running.
+fn schedule_private_clear(text: &str, keep_private: bool) {
+    PRIVATE_CLEAR.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        // Dropping a `slint::Timer` stops it.
+        *slot = None;
+        if !keep_private {
+            return;
+        }
+        let pending = bp_clipboard::PendingClear::new(text);
+        let timer = slint::Timer::default();
+        timer.start(
+            slint::TimerMode::SingleShot,
+            bp_clipboard::PRIVATE_CLEAR_AFTER,
+            clear_if_still_ours,
+        );
+        *slot = Some((timer, pending));
+    });
+}
+
+/// The timer's end: clear the OS clipboard if it still holds the private
+/// copy. The pending entry is taken out first and the borrow released, so
+/// nothing here holds `PRIVATE_CLEAR` while it talks to the clipboard.
+fn clear_if_still_ours() {
+    let Some((_timer, pending)) = PRIVATE_CLEAR.with(|cell| cell.borrow_mut().take()) else {
+        return;
+    };
+    with_os_clipboard(|clipboard| {
+        let current = clipboard.get_text().ok();
+        pending
+            .should_clear(current.as_deref())
+            .then(|| clipboard.clear().ok())
+            .flatten()
+    });
 }
 
 /// Which Slint renderer to ask for.
@@ -303,11 +490,30 @@ pub struct RunOptions {
     pub renderer: Renderer,
     /// Starting theme. `None` uses the built-in default.
     pub theme: Option<ThemeId>,
+    /// Follow the desktop's light or dark preference rather than `theme`.
+    pub follow_system_theme: bool,
+    /// The resolved configuration, and where to save settings chosen in the
+    /// window (release plan M1-03). `None` for both keeps the built-in
+    /// defaults and saves nothing, which is what `run()` and the tests want.
+    pub config: Option<bp_config::Config>,
+    pub settings_path: Option<PathBuf>,
+    /// Where the log and crash reports are written, for Tools ▸ Open Log
+    /// Folder. Passed in rather than worked out again here, so the folder
+    /// opened is the one the binary actually writes to, override and all.
+    pub log_dir: Option<PathBuf>,
     /// Shown in the status bar at startup, where configuration problems go.
     /// A warning the user cannot see is a warning they will hit again.
     pub startup_notice: Option<String>,
     /// Files named on the command line, opened at startup (specs.md §19).
     pub files: Vec<PathBuf>,
+    /// `--line N`: where the caret starts in the file opened last.
+    pub line: Option<std::num::NonZeroUsize>,
+    /// `--readonly`: open `files` in the read-only viewer, whatever their
+    /// size (release plan M1-06).
+    pub readonly: bool,
+    /// `--large-file`: open `files` in the large-file viewer even when they
+    /// are small enough to edit.
+    pub large_file: bool,
     /// Print `BPSPIKE_READY_MS=<f64>` once the first frame has been rendered,
     /// then quit. Drives `scripts/Measure-UiSpike.ps1`.
     ///
@@ -342,75 +548,72 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
     // An explicit SLINT_BACKEND wins: someone debugging a rendering problem
     // has set it deliberately, and silently overriding them would waste an
     // afternoon. Selection must happen before the first window is created.
-    if options.renderer == Renderer::Software && std::env::var_os("SLINT_BACKEND").is_none() {
+    // Said in Help ▸ About as it was decided here, rather than guessed at
+    // later: Slint has no call that reports which renderer it picked.
+    let renderer = if let Ok(asked) = std::env::var("SLINT_BACKEND") {
+        format!("as SLINT_BACKEND={asked} asks")
+    } else if options.renderer == Renderer::Software {
         // A failure here is not fatal -- the platform default still draws a
         // usable window, just a heavier one.
-        if let Err(e) = slint::BackendSelector::new()
+        match slint::BackendSelector::new()
             .renderer_name("software".to_owned())
             .select()
         {
-            tracing::warn!("software renderer unavailable, using platform default: {e}");
+            Ok(()) => "software renderer".to_owned(),
+            Err(e) => {
+                tracing::warn!("software renderer unavailable, using platform default: {e}");
+                "the platform's default (the software renderer was unavailable)".to_owned()
+            }
         }
-    }
+    } else {
+        "the platform's default".to_owned()
+    };
 
     let ui = AppWindow::new()?;
     let mut initial = state::AppState::new();
+    if let Some(config) = &options.config {
+        initial.configure(config, options.settings_path.clone());
+    }
     if let Some(theme) = options.theme {
         initial.theme = theme;
     }
+    initial.follow_system_theme = options.follow_system_theme;
+    initial.log_dir = options.log_dir.clone();
+    initial.renderer = renderer;
     if let Some(size) = options.font_size {
         // Clamped again rather than trusted. `bp-config` bounds what it
         // parses, but `RunOptions` is a public API and a caller reaching it
         // by another route must not be able to hand the editor a 0 pt font.
         initial.font_size = bp_config::zoom(size, 0);
     }
-    initial.error = options.startup_notice.clone();
+    let how = if options.readonly {
+        viewer::OpenAs::ReadOnly
+    } else if options.large_file {
+        viewer::OpenAs::Viewer
+    } else {
+        viewer::OpenAs::Normal
+    };
+    initial.start_up(options.startup_notice.clone(), &options.files, how);
 
-    // Files from the command line. The first one replaces the empty document
-    // opened at startup, so `bachelorpad note.txt` shows one tab rather than
-    // an untouched Untitled beside it.
-    if !options.files.is_empty() {
-        let blank = initial.workspace.active_id();
-        for path in &options.files {
-            initial.open(path.clone());
-        }
-        if let Some(blank) = blank
-            && initial.workspace.len() > 1
-        {
-            initial.close(blank);
-        }
-    }
-
-    // Offer to recover anything a previous session left unsaved, before the
-    // window appears — so nobody starts typing over work they have not been
-    // told about.
+    // What a previous session left unsaved is claimed now, before anything
+    // else can journal, and offered once the window is up -- see
+    // `offer_recovery`. Claimed here, so of two windows opened at once only
+    // one asks.
     initial.journal.clean_temporaries();
     let pending = initial.journal.pending();
-    if !pending.is_empty() {
-        let names: Vec<&str> = pending
-            .iter()
-            .map(|(_, c)| c.name.as_str())
-            .take(5)
-            .collect();
-        let answer = rfd::MessageDialog::new()
-            .set_level(rfd::MessageLevel::Warning)
-            .set_title("Unsaved work recovered")
-            .set_description(format!(
-                "BachelorPad+ closed with {} unsaved document(s):\n\n{}\n\nRestore them?",
-                pending.len(),
-                names.join("\n")
-            ))
-            .set_buttons(rfd::MessageButtons::YesNo)
-            .show();
-
-        if answer == rfd::MessageDialogResult::Yes {
-            initial.restore(pending);
-        } else {
-            // Declining is a decision; honour it rather than asking again
-            // every launch.
-            let _ = initial.journal.discard_all();
-        }
+    // Work another window is still journalling is neither offered nor
+    // touched here -- it is that window's. Said, so nobody wonders where it
+    // went.
+    let elsewhere = initial.journal.held_elsewhere();
+    if elsewhere > 0 {
+        initial.add_notice(format!(
+            "{elsewhere} unsaved document(s) are open in another BachelorPad+ window"
+        ));
     }
+    initial.note_sealed_recovery();
+    // Read once here and again after either integration row is used: the
+    // answer depends on files only those two rows change.
+    initial.integration = default_editor::Rows::read();
 
     initial.editor_view = options.editor_view;
     let state = Rc::new(RefCell::new(initial));
@@ -466,135 +669,56 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
         s.new_document();
     });
 
-    wire!(on_open_document, |s| {
-        if let Some(path) = pick_file(&s) {
-            s.open(path);
-        }
-    });
-
-    wire!(on_save_document, |s| {
-        if let Some(id) = s.workspace.active_id() {
-            save_with_prompt(&mut s, id);
-        }
-    });
-
-    wire!(on_save_as_document, |s| {
-        if let Some(id) = s.workspace.active_id()
-            && let Some(path) = pick_save_path(&s, id)
-        {
-            s.save_document(id, Some(path));
-        }
-    });
-
     wire!(on_cycle_theme, |s| {
         s.theme = s.theme.next();
+        s.follow_system_theme = false;
+        let name = s.theme.name();
+        s.remember(|c| c.theme = Some(name.to_owned()));
     });
 
-    {
-        let cell = Rc::clone(&state);
-        let weak = ui.as_weak();
-        let target = Rc::clone(&state);
-        let target_weak = ui.as_weak();
-        ui.on_tab_context_target(move |raw| {
-            let Some(ui) = target_weak.upgrade() else {
-                return;
-            };
-            let mut s = target.borrow_mut();
-            s.tab_context = state::find_id(&s.workspace, raw);
-            // Built now rather than on every refresh: it is the only menu
-            // whose contents depend on which tab the pointer is over, and
-            // that is knowable only at this moment.
-            let (others, has_path) = s.tab_context_shape();
-            ui.set_tab_items(slint::ModelRc::new(slint::VecModel::from(
-                menus::tab_context(others, has_path),
-            )));
-        });
-
-        ui.on_select_tab(move |raw| {
-            {
-                let mut s = cell.borrow_mut();
-                if let Some(id) = state::find_id(&s.workspace, raw) {
-                    s.workspace.set_active(id);
-                }
-            }
-            if let Some(ui) = weak.upgrade() {
-                refresh(&ui, &mut cell.borrow_mut(), state::PushText::Yes);
-            }
-        });
-    }
-
-    {
-        let cell = Rc::clone(&state);
-        let weak = ui.as_weak();
-        ui.on_close_tab(move |raw| {
-            let id = cell
-                .borrow()
-                .workspace
-                .iter()
-                .map(Document::id)
-                .find(|id| i32::try_from(id.get()).unwrap_or(i32::MAX) == raw);
-            if let Some(id) = id {
-                close_with_prompt(&cell, id);
-            }
-            if let Some(ui) = weak.upgrade() {
-                refresh(&ui, &mut cell.borrow_mut(), state::PushText::Yes);
-            }
-        });
-    }
-
-    {
-        let cell = Rc::clone(&state);
-        let weak = ui.as_weak();
-        ui.on_close_active_tab(move || {
-            let id = cell.borrow().workspace.active_id();
-            if let Some(id) = id {
-                close_with_prompt(&cell, id);
-            }
-            if let Some(ui) = weak.upgrade() {
-                refresh(&ui, &mut cell.borrow_mut(), state::PushText::Yes);
-            }
-        });
-    }
-
-    {
-        let cell = Rc::clone(&state);
-        let weak = ui.as_weak();
-        ui.on_text_edited(move |text| {
-            {
-                cell.borrow_mut().edit(text.to_string());
-            }
-            if let Some(ui) = weak.upgrade() {
-                // PushText::No -- the widget already holds this text. Pushing
-                // it back would clone the document on every keystroke.
-                refresh(&ui, &mut cell.borrow_mut(), state::PushText::No);
-            }
-        });
-    }
+    bind_files(&ui, &state);
 
     // Closing the window must not be a quieter way to lose the same work
     // that closing a tab prompts about.
+    //
+    // The answer to a close request has to be given now, and the questions
+    // are answered later, so a window with unsaved work refuses the request
+    // and asks; `settle_then_quit` closes it once every document is settled.
     {
         let cell = Rc::clone(&state);
+        let weak = ui.as_weak();
         ui.window().on_close_requested(move || {
-            let dirty: Vec<DocumentId> =
-                cell.borrow().workspace.dirty().map(Document::id).collect();
-
-            for id in dirty {
-                let name = cell.borrow().display_name(id);
-                match dispatch::ask_about_unsaved(&name) {
-                    rfd::MessageDialogResult::Yes => {
-                        let mut s = cell.borrow_mut();
-                        if save_with_prompt(&mut s, id) != state::SaveResult::Saved {
-                            // Save failed or was abandoned. Quitting now would
-                            // discard exactly what the user asked to keep.
-                            return slint::CloseRequestResponse::KeepWindowShown;
-                        }
-                    }
-                    rfd::MessageDialogResult::No => {}
-                    _ => return slint::CloseRequestResponse::KeepWindowShown,
-                }
+            // A question is already open. It is answered first, whatever it
+            // is about -- quitting past the recovery prompt would leave the
+            // work it is asking about neither restored nor kept on purpose.
+            if dialog::is_open() {
+                return slint::CloseRequestResponse::KeepWindowShown;
             }
-            slint::CloseRequestResponse::HideWindow
+            let dirty: VecDeque<DocumentId> =
+                cell.borrow().workspace.dirty().map(Document::id).collect();
+            if dirty.is_empty() {
+                return slint::CloseRequestResponse::HideWindow;
+            }
+            if let Some(ui) = weak.upgrade() {
+                settle_then_quit(&ui, &cell, dirty, Vec::new());
+            }
+            slint::CloseRequestResponse::KeepWindowShown
+        });
+    }
+
+    bind_editing(&ui, &state);
+    bind_settings(&ui, &state);
+    bind_viewer(&ui, &state);
+    about::bind(&ui, &state);
+
+    // Every in-app question reports here; `dialog` runs what was waiting on
+    // the answer.
+    {
+        let weak = ui.as_weak();
+        ui.on_dialog_answered(move |chosen| {
+            if let Some(ui) = weak.upgrade() {
+                dialog::answered(&ui, chosen);
+            }
         });
     }
 
@@ -606,6 +730,52 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
         ui.on_menu_action(move |id| {
             let Some(ui) = weak.upgrade() else { return };
             let _ = dispatch::handle_menu_action(&ui, &cell, id);
+        });
+    }
+
+    // --- overwrite mode, for the `TextInput` path -----------------------
+    // The custom surface reaches `toggle_overwrite` through its own key
+    // handler; `TextInput` has no Rust key handler, so Insert arrives here.
+    {
+        let cell = Rc::clone(&state);
+        let weak = ui.as_weak();
+        ui.on_toggle_overwrite(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            cell.borrow_mut().toggle_overwrite();
+            refresh(&ui, &mut cell.borrow_mut(), state::PushText::No);
+        });
+    }
+    ui.on_overwrite_end(editor_view::overwrite_end);
+
+    // --- copies made in the `TextInput` view ----------------------------
+    // Slint copies and cuts by itself, so without this the history only ever
+    // learned of them by polling -- and a poll cannot tell a copy from this
+    // window from one made in a password manager. Returns whether Rust put
+    // the text on the clipboard itself, which it does for a private copy so
+    // the OS can be asked to keep it out of its own history.
+    {
+        let cell = Rc::clone(&state);
+        let weak = ui.as_weak();
+        ui.on_copied_from_editor(move |text, anchor, cursor, cut| {
+            let Some(ui) = weak.upgrade() else {
+                return false;
+            };
+            let Some(selected) = editor_view::selected_text(&text, anchor, cursor) else {
+                return false;
+            };
+            let copied_privately = {
+                let mut s = cell.borrow_mut();
+                s.record_copy(selected);
+                // A cut is left to the widget: `TextInput` has no way to
+                // delete a selection from outside that keeps its own undo
+                // history intact. So a private *cut* in this view reaches
+                // the OS clipboard unmarked -- a known gap, recorded in the
+                // release plan, closed when the default view's editing moves
+                // to Rust.
+                !cut && s.keep_clipboard_private() && set_os_clipboard(selected, true)
+            };
+            refresh(&ui, &mut cell.borrow_mut(), state::PushText::No);
+            copied_privately
         });
     }
 
@@ -739,95 +909,7 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
         });
     }
 
-    // --- find and replace ---------------------------------------------
-    {
-        let cell = Rc::clone(&state);
-        let weak = ui.as_weak();
-        ui.on_find_changed(move || {
-            let Some(ui) = weak.upgrade() else { return };
-            let query = ui_query(&ui);
-            let selection = cell.borrow_mut().find(&query);
-            ui.set_find_status(cell.borrow().find_status.as_str().into());
-            if let Some(range) = selection {
-                dispatch::select(&ui, &mut cell.borrow_mut(), &range);
-            }
-        });
-    }
-
-    for forward in [true, false] {
-        let cell = Rc::clone(&state);
-        let weak = ui.as_weak();
-        let step = move || {
-            let Some(ui) = weak.upgrade() else { return };
-            let selection = cell.borrow_mut().step_match(forward);
-            ui.set_find_status(cell.borrow().find_status.as_str().into());
-            if let Some(range) = selection {
-                dispatch::select(&ui, &mut cell.borrow_mut(), &range);
-            }
-        };
-        if forward {
-            ui.on_find_next(step);
-        } else {
-            ui.on_find_previous(step);
-        }
-    }
-
-    {
-        let cell = Rc::clone(&state);
-        let weak = ui.as_weak();
-        ui.on_replace_all(move || {
-            let Some(ui) = weak.upgrade() else { return };
-            let query = ui_query(&ui);
-            let replacement = ui.get_replace_query().to_string();
-
-            // Planned first, and the plan shown, before anything changes:
-            // specs.md section 6 wants the changes visible before they are
-            // applied. The borrow ends before the dialog blocks -- a native
-            // dialog can pump events, and holding a `RefCell` across one is
-            // how a re-entrant callback panics.
-            let planned = {
-                let s = cell.borrow();
-                bp_search::plan_replace_all(&s.active_text(), &query, &replacement)
-            };
-
-            match planned {
-                Err(e) => cell.borrow_mut().find_status = e.to_string(),
-                Ok(plan) if plan.is_empty() => {
-                    cell.borrow_mut().find_status = "no matches".to_owned();
-                }
-                Ok(plan) if !dispatch::confirm_replace(&plan) => {
-                    cell.borrow_mut().find_status = "cancelled".to_owned();
-                }
-                Ok(plan) => {
-                    let n = plan.count();
-                    let mut s = cell.borrow_mut();
-                    // An ordinary edit, so it is undoable and nothing reaches
-                    // disk until the user saves.
-                    s.edit(plan.apply());
-                    s.matches.clear();
-                    s.find_status = format!("replaced {n}");
-                }
-            }
-            ui.set_find_status(cell.borrow().find_status.as_str().into());
-            refresh(&ui, &mut cell.borrow_mut(), state::PushText::Yes);
-        });
-    }
-
-    {
-        let cell = Rc::clone(&state);
-        let weak = ui.as_weak();
-        ui.on_goto_submitted(move || {
-            let Some(ui) = weak.upgrade() else { return };
-            let moved = cell.borrow_mut().go_to_line(&ui.get_goto_line());
-            ui.set_goto_status(cell.borrow().goto_status.as_str().into());
-            if let Some(range) = moved {
-                // The bar stays open: going to a line is often the first of
-                // several, and closing it would make the second one two
-                // keystrokes further away.
-                dispatch::select(&ui, &mut cell.borrow_mut(), &range);
-            }
-        });
-    }
+    bind_find(&ui, &state);
 
     {
         let cell = Rc::clone(&state);
@@ -870,9 +952,16 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
     }
 
     // --- cross-file search ---------------------------------------------
+    // Find in Files, off the UI thread (release plan M1-07): a walk of a big
+    // tree used to freeze the window until it finished. The timer collects
+    // the result, and stops the walk if the results panel is closed first.
+    let searches = Rc::new(RefCell::new(worker::Background::new()));
+    let search_timer = Rc::new(slint::Timer::default());
     {
         let cell = Rc::clone(&state);
         let weak = ui.as_weak();
+        let searches = Rc::clone(&searches);
+        let timer = Rc::downgrade(&search_timer);
         ui.on_search_folder(move || {
             let Some(ui) = weak.upgrade() else { return };
             let query = ui_query(&ui);
@@ -887,41 +976,9 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
                 return;
             };
 
-            match bp_search::search_dir(&folder, &query) {
-                Ok(report) => {
-                    let rows: Vec<SearchHit> = report
-                        .hits
-                        .iter()
-                        .enumerate()
-                        .map(|(index, hit)| SearchHit {
-                            // Relative to the searched folder: the shared
-                            // prefix is the same on every row and identifies
-                            // nothing.
-                            label: format!(
-                                "{}:{}",
-                                hit.path
-                                    .strip_prefix(&folder)
-                                    .unwrap_or(&hit.path)
-                                    .display(),
-                                hit.line
-                            )
-                            .into(),
-                            detail: hit.preview.as_str().into(),
-                            index: i32::try_from(index).unwrap_or(i32::MAX),
-                        })
-                        .collect();
-
-                    ui.set_search_hits(Rc::new(slint::VecModel::from(rows)).into());
-                    ui.set_results_summary(report.summary().as_str().into());
-                    cell.borrow_mut().file_hits = report.hits;
-                }
-                Err(e) => {
-                    ui.set_search_hits(Rc::new(slint::VecModel::from(Vec::new())).into());
-                    ui.set_results_summary(e.to_string().as_str().into());
-                    cell.borrow_mut().file_hits.clear();
-                }
+            if let Some(timer) = timer.upgrade() {
+                search_folder(&ui, &cell, &searches, &timer, folder, query);
             }
-            ui.set_results_open(true);
         });
     }
 
@@ -946,15 +1003,37 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
     // Autosave to the recovery journal. Separate from the disk watcher
     // because they answer different questions on different clocks: "did
     // someone else change this file" and "is my work safe if the power goes".
+    //
+    // The sealing and writing run on a worker (release plan M1-07): for an
+    // encrypted document each checkpoint is a key derivation, and on this
+    // thread that was a stall in the typing every five seconds. Each tick
+    // first collects the previous batch's outcome, then starts the next --
+    // never two at once, so a slow batch delays the next rather than
+    // piling up behind it. Writes that a save or close overtook are
+    // dropped by the journal's tickets (`prepare_checkpoints`).
     let journal_timer = slint::Timer::default();
     {
         let cell = Rc::clone(&state);
         let weak = ui.as_weak();
+        let batches = RefCell::new(worker::Background::new());
         journal_timer.start(
             slint::TimerMode::Repeated,
             std::time::Duration::from_secs(5),
             move || {
-                cell.borrow_mut().checkpoint_all();
+                {
+                    let mut batches = batches.borrow_mut();
+                    let mut s = cell.borrow_mut();
+                    if let Some(written) = batches.take() {
+                        s.apply_checkpoints(written);
+                    }
+                    if !batches.busy() {
+                        let jobs = s.prepare_checkpoints();
+                        if !jobs.is_empty() {
+                            let journal = s.journal.clone();
+                            batches.start(move |_| state::write_checkpoints(&journal, jobs));
+                        }
+                    }
+                }
                 // The status bar shows the checkpoint time, so it has to
                 // repaint -- but a checkpoint is not a save and the save
                 // state must not move.
@@ -974,6 +1053,7 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
     {
         let cell = Rc::clone(&state);
         let weak = ui.as_weak();
+        let mut last_seen: Option<String> = None;
         clipboard_timer.start(
             slint::TimerMode::Repeated,
             std::time::Duration::from_millis(1200),
@@ -992,7 +1072,26 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
                     // looser profile, and the poll is the soonest reliable
                     // point at which that is noticed.
                     let cleared = s.clips.enforce(policy);
-                    let added = s.clips.push(&text, policy);
+                    // Copies made in the editor are recorded when they happen
+                    // (`copied-from-editor`, and the custom view's commands).
+                    // What the poll adds is everything else, which is another
+                    // program's -- recorded only if the user opted in. The
+                    // document check is the fallback for an in-app copy that
+                    // took a path nobody wired; it runs only when the
+                    // clipboard has changed, which is what `last_seen` is for.
+                    let added = if last_seen.as_deref() == Some(text.as_str()) {
+                        false
+                    } else {
+                        let origin = if s.active_text().contains(text.as_str()) {
+                            bp_clipboard::Origin::OpenDocument
+                        } else {
+                            bp_clipboard::Origin::Elsewhere
+                        };
+                        let record_other_programs = s.record_other_programs;
+                        s.clips
+                            .observe(&text, policy, origin, record_other_programs)
+                    };
+                    last_seen = Some(text);
                     cleared || added
                 };
                 // Only rebuild the menus when the history actually changed.
@@ -1032,9 +1131,684 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
 
     set_static_menus(&ui);
     refresh(&ui, &mut state.borrow_mut(), state::PushText::Yes);
-    ui.run()?;
+    // `run` spelled out, because the recovery question needs the window
+    // shown before it can take the keyboard focus.
+    ui.show()?;
+    // The keyboard to whichever editor is showing. The window's
+    // `forward-focus` names the default view's `TextInput`, which is hidden
+    // under `--editor-view`, so there every key typed before the first click
+    // went nowhere -- found by `scripts/smoke-linux.sh`, invisible to the
+    // window tests, which focus the editor themselves.
+    ui.invoke_focus_editor();
+    if let Some(line) = options.line {
+        start_at_line(&ui, &state, line);
+    }
+    if !pending.is_empty() {
+        offer_recovery(&ui, &state, pending);
+    }
+    slint::run_event_loop()?;
+    ui.hide()?;
     drop(disk_timer);
     Ok(())
+}
+
+/// Start Find in Files under `folder` on the worker, and the timer that
+/// collects its result -- or stops it, if the results panel is closed
+/// first. Everything after the folder picker, so the window tests can drive
+/// it without one.
+fn search_folder(
+    ui: &AppWindow,
+    cell: &Rc<RefCell<state::AppState>>,
+    searches: &Rc<RefCell<worker::Background<SearchOutcome>>>,
+    timer: &Rc<slint::Timer>,
+    folder: PathBuf,
+    query: bp_search::Query,
+) {
+    ui.set_search_hits(Rc::new(slint::VecModel::from(Vec::new())).into());
+    ui.set_results_summary(
+        format!("searching {} -- close this panel to stop", folder.display()).into(),
+    );
+    ui.set_results_open(true);
+    cell.borrow_mut().file_hits.clear();
+
+    let root = folder.clone();
+    searches.borrow_mut().start(move |stop| {
+        let found = bp_search::search_dir_until(&root, &query, &|| {
+            stop.load(std::sync::atomic::Ordering::Relaxed)
+        })
+        .map_err(|e| e.to_string());
+        (root, found)
+    });
+
+    let (cell, weak, searches, stop_timer) = (
+        Rc::clone(cell),
+        ui.as_weak(),
+        Rc::clone(searches),
+        Rc::downgrade(timer),
+    );
+    timer.start(
+        slint::TimerMode::Repeated,
+        std::time::Duration::from_millis(100),
+        move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let mut jobs = searches.borrow_mut();
+            let done = if !jobs.busy() {
+                true
+            } else if !ui.get_results_open() {
+                // Closed while searching: that is the stop button.
+                jobs.stop();
+                true
+            } else if let Some((root, found)) = jobs.take() {
+                drop(jobs);
+                show_search_report(&ui, &cell, &root, found);
+                true
+            } else {
+                false
+            };
+            if done && let Some(timer) = stop_timer.upgrade() {
+                timer.stop();
+            }
+        },
+    );
+}
+
+/// A finished Find in Files: where it looked, and what it found.
+type SearchOutcome = (PathBuf, Result<bp_search::FileSearchReport, String>);
+
+/// Fill the results panel from a finished Find in Files under `folder`.
+fn show_search_report(
+    ui: &AppWindow,
+    cell: &Rc<RefCell<state::AppState>>,
+    folder: &std::path::Path,
+    found: Result<bp_search::FileSearchReport, String>,
+) {
+    match found {
+        Ok(report) => {
+            let rows: Vec<SearchHit> = report
+                .hits
+                .iter()
+                .enumerate()
+                .map(|(index, hit)| SearchHit {
+                    // Relative to the searched folder: the shared prefix is
+                    // the same on every row and identifies nothing.
+                    label: format!(
+                        "{}:{}",
+                        hit.path.strip_prefix(folder).unwrap_or(&hit.path).display(),
+                        hit.line
+                    )
+                    .into(),
+                    detail: hit.preview.as_str().into(),
+                    index: i32::try_from(index).unwrap_or(i32::MAX),
+                })
+                .collect();
+
+            ui.set_search_hits(Rc::new(slint::VecModel::from(rows)).into());
+            ui.set_results_summary(report.summary().as_str().into());
+            cell.borrow_mut().file_hits = report.hits;
+        }
+        Err(e) => {
+            ui.set_search_hits(Rc::new(slint::VecModel::from(Vec::new())).into());
+            ui.set_results_summary(e.as_str().into());
+            cell.borrow_mut().file_hits.clear();
+        }
+    }
+    ui.set_results_open(true);
+}
+
+/// Wire Open, Save, Save As, and selecting and closing tabs. A function of
+/// its own so the window tests drive exactly what `run_with` wires -- Ctrl+S
+/// end to end included (release plan M1-12).
+fn bind_files(ui: &AppWindow, state: &Rc<RefCell<state::AppState>>) {
+    // Ctrl+O, the same as the menu row -- which, unlike the handler that
+    // used to be here, knows an encrypted file from a plain one.
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_open_document(move || {
+            if let Some(ui) = weak.upgrade() {
+                let _ = dispatch::handle_menu_action(&ui, &cell, menus::action::OPEN);
+            }
+        });
+    }
+
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_save_document(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let id = cell.borrow().workspace.active_id();
+            match id {
+                Some(id) => save_with_prompt(&ui, &cell, id, refresh_after(&cell)),
+                None => refresh(&ui, &mut cell.borrow_mut(), state::PushText::Yes),
+            }
+        });
+    }
+
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_save_as_document(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let id = cell.borrow().workspace.active_id();
+            match id {
+                Some(id) => save_as(&ui, &cell, id),
+                None => refresh(&ui, &mut cell.borrow_mut(), state::PushText::Yes),
+            }
+        });
+    }
+
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        let target = Rc::clone(state);
+        let target_weak = ui.as_weak();
+        ui.on_tab_context_target(move |raw| {
+            let Some(ui) = target_weak.upgrade() else {
+                return;
+            };
+            let mut s = target.borrow_mut();
+            s.tab_context = state::find_id(&s.workspace, raw);
+            // Built now rather than on every refresh: it is the only menu
+            // whose contents depend on which tab the pointer is over, and
+            // that is knowable only at this moment.
+            let (others, has_path) = s.tab_context_shape();
+            ui.set_tab_items(slint::ModelRc::new(slint::VecModel::from(
+                menus::tab_context(others, has_path),
+            )));
+        });
+
+        ui.on_select_tab(move |raw| {
+            {
+                let mut s = cell.borrow_mut();
+                if let Some(id) = state::find_id(&s.workspace, raw) {
+                    s.workspace.set_active(id);
+                }
+            }
+            if let Some(ui) = weak.upgrade() {
+                refresh(&ui, &mut cell.borrow_mut(), state::PushText::Yes);
+            }
+        });
+    }
+
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_close_tab(move |raw| {
+            let id = cell
+                .borrow()
+                .workspace
+                .iter()
+                .map(Document::id)
+                .find(|id| i32::try_from(id.get()).unwrap_or(i32::MAX) == raw);
+            let Some(ui) = weak.upgrade() else { return };
+            match id {
+                Some(id) => close_with_prompt(&ui, &cell, id, refresh_after(&cell)),
+                None => refresh(&ui, &mut cell.borrow_mut(), state::PushText::Yes),
+            }
+        });
+    }
+
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_close_active_tab(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let id = cell.borrow().workspace.active_id();
+            match id {
+                Some(id) => close_with_prompt(&ui, &cell, id, refresh_after(&cell)),
+                None => refresh(&ui, &mut cell.borrow_mut(), state::PushText::Yes),
+            }
+        });
+    }
+}
+
+/// Wire the editor's text, caret, Go to Line and tab-cycling callbacks. A
+/// function of its own so the window tests drive exactly what `run_with`
+/// wires.
+fn bind_editing(ui: &AppWindow, state: &Rc<RefCell<state::AppState>>) {
+    // Edit or the editor context menu is opening: freeze which entry each
+    // of its clipboard rows names, and build them from that (U5).
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_clip_menu_opening(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let mut s = cell.borrow_mut();
+            s.open_clip_menu();
+            set_clip_menus(&ui, &s);
+        });
+    }
+
+    // Ctrl+Tab and Ctrl+Shift+Tab.
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_cycle_tab(move |forward| {
+            let Some(ui) = weak.upgrade() else { return };
+            cell.borrow_mut().cycle_tab(forward);
+            refresh(&ui, &mut cell.borrow_mut(), state::PushText::Yes);
+        });
+    }
+
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_text_edited(move |text| {
+            {
+                let mut s = cell.borrow_mut();
+                s.edit(text.to_string());
+                // The caret moved with the typing, and the order in which
+                // Slint reports the two is not promised, so it is read again
+                // after the text rather than trusted from before it.
+                if let Some(ui) = weak.upgrade() {
+                    s.follow_widget_caret(ui.get_editor_anchor(), ui.get_editor_cursor());
+                }
+            }
+            if let Some(ui) = weak.upgrade() {
+                // PushText::No -- the widget already holds this text. Pushing
+                // it back would clone the document on every keystroke.
+                refresh(&ui, &mut cell.borrow_mut(), state::PushText::No);
+            }
+        });
+    }
+
+    // The `TextInput` caret moved: copy it into the editor, and say where it
+    // is. Only the one label, not a whole refresh -- this runs on every
+    // arrow key.
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_caret_moved(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let label = {
+                // Pushing new text into the widget moves its caret, and Slint
+                // reports that at once -- inside `refresh`, which has the
+                // state borrowed. Skipped then rather than panicking: the
+                // refresh under way writes the label itself, and the next
+                // move catches the caret up.
+                let Ok(mut s) = cell.try_borrow_mut() else {
+                    return;
+                };
+                s.follow_widget_caret(ui.get_editor_anchor(), ui.get_editor_cursor());
+                s.cursor_label()
+            };
+            ui.set_cursor_label(label.into());
+        });
+    }
+
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_goto_submitted(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let moved = cell.borrow_mut().go_to_line(&ui.get_goto_line());
+            ui.set_goto_status(cell.borrow().goto_status.as_str().into());
+            if cell.borrow().viewer_active() {
+                refresh(&ui, &mut cell.borrow_mut(), state::PushText::No);
+            }
+            if let Some(range) = moved {
+                // The bar stays open: going to a line is often the first of
+                // several, and closing it would make the second one two
+                // keystrokes further away.
+                dispatch::select(&ui, &mut cell.borrow_mut(), &range);
+            }
+        });
+    }
+}
+
+/// Wire Find, Find Next and Previous, and Replace All. A function of its
+/// own so the window tests drive exactly what `run_with` wires -- the
+/// viewer's search included.
+fn bind_find(ui: &AppWindow, state: &Rc<RefCell<state::AppState>>) {
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_find_changed(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let query = ui_query(&ui);
+            let selection = cell.borrow_mut().find(&query);
+            ui.set_find_status(cell.borrow().find_status.as_str().into());
+            if let Some(range) = selection {
+                dispatch::select(&ui, &mut cell.borrow_mut(), &range);
+            }
+            // The viewer's search has just started on its thread; the
+            // refresh is what sets the poll going that collects it.
+            if cell.borrow().viewer_active() {
+                refresh(&ui, &mut cell.borrow_mut(), state::PushText::No);
+            }
+        });
+    }
+
+    for forward in [true, false] {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        let step = move || {
+            let Some(ui) = weak.upgrade() else { return };
+            if cell.borrow().viewer_active() {
+                let query = ui_query(&ui);
+                cell.borrow_mut().viewer_find(&query, forward, false);
+                ui.set_find_status(cell.borrow().find_status.as_str().into());
+                refresh(&ui, &mut cell.borrow_mut(), state::PushText::No);
+                return;
+            }
+            let selection = cell.borrow_mut().step_match(forward);
+            ui.set_find_status(cell.borrow().find_status.as_str().into());
+            if let Some(range) = selection {
+                dispatch::select(&ui, &mut cell.borrow_mut(), &range);
+            }
+        };
+        if forward {
+            ui.on_find_next(step);
+        } else {
+            ui.on_find_previous(step);
+        }
+    }
+
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_replace_all(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            if cell.borrow().viewer_active() {
+                cell.borrow_mut().find_status =
+                    "read-only: nothing here can be replaced".to_owned();
+                ui.set_find_status(cell.borrow().find_status.as_str().into());
+                return;
+            }
+            let query = ui_query(&ui);
+            let replacement = ui.get_replace_query().to_string();
+
+            // Planned first, and the plan shown, before anything changes:
+            // specs.md section 6 wants the changes visible before they are
+            // applied. The borrow ends before the dialog blocks -- a native
+            // dialog can pump events, and holding a `RefCell` across one is
+            // how a re-entrant callback panics.
+            let planned = {
+                let s = cell.borrow();
+                bp_search::plan_replace_all(&s.active_text(), &query, &replacement)
+            };
+
+            match planned {
+                Err(e) => cell.borrow_mut().find_status = e.to_string(),
+                Ok(plan) if plan.is_empty() => {
+                    cell.borrow_mut().find_status = "no matches".to_owned();
+                }
+                Ok(plan) => {
+                    // The rest happens once the preview is answered.
+                    let cell = Rc::clone(&cell);
+                    dispatch::confirm_replace(&ui, plan, move |ui, plan| {
+                        {
+                            let mut s = cell.borrow_mut();
+                            match plan {
+                                None => s.find_status = "cancelled".to_owned(),
+                                Some(plan) => {
+                                    let n = plan.count();
+                                    // An ordinary edit, so it is undoable and
+                                    // nothing reaches disk until the user
+                                    // saves.
+                                    s.edit(plan.apply());
+                                    s.matches.clear();
+                                    s.find_status = format!("replaced {n}");
+                                }
+                            }
+                        }
+                        ui.set_find_status(cell.borrow().find_status.as_str().into());
+                        refresh(ui, &mut cell.borrow_mut(), state::PushText::Yes);
+                    });
+                    return;
+                }
+            }
+            ui.set_find_status(cell.borrow().find_status.as_str().into());
+            refresh(&ui, &mut cell.borrow_mut(), state::PushText::Yes);
+        });
+    }
+}
+
+/// Wire the large-file viewer's callbacks (release plan M1-06). A function
+/// of its own so the window tests wire the viewer exactly as `run_with`
+/// does.
+fn bind_viewer(ui: &AppWindow, state: &Rc<RefCell<state::AppState>>) {
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_viewer_key(move |text, control, _shift, alt| {
+            let Some(ui) = weak.upgrade() else {
+                return false;
+            };
+            let claimed = cell.borrow_mut().viewer_key(&text, control, alt);
+            if claimed {
+                refresh(&ui, &mut cell.borrow_mut(), state::PushText::No);
+            }
+            claimed
+        });
+    }
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_viewer_pressed(move |row| {
+            let Some(ui) = weak.upgrade() else { return };
+            {
+                let mut s = cell.borrow_mut();
+                let rows = s.viewer_rows;
+                if let Some(viewer) = s.active_viewer_mut() {
+                    let line = viewer.top + usize::try_from(row).unwrap_or(0);
+                    viewer.put_caret(line, rows);
+                }
+            }
+            refresh(&ui, &mut cell.borrow_mut(), state::PushText::No);
+        });
+    }
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_viewer_scrolled(move |lines| {
+            let Some(ui) = weak.upgrade() else { return };
+            {
+                let mut s = cell.borrow_mut();
+                let rows = s.viewer_rows;
+                if let Some(viewer) = s.active_viewer_mut() {
+                    viewer.scroll(isize::try_from(lines).unwrap_or(0), rows);
+                }
+            }
+            viewer::draw(&ui, &mut cell.borrow_mut());
+        });
+    }
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_viewer_scrubbed(move |fraction| {
+            let Some(ui) = weak.upgrade() else { return };
+            {
+                let mut s = cell.borrow_mut();
+                let rows = s.viewer_rows;
+                if let Some(viewer) = s.active_viewer_mut() {
+                    viewer.scrub(fraction, rows);
+                }
+            }
+            refresh(&ui, &mut cell.borrow_mut(), state::PushText::No);
+        });
+    }
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_viewer_resized(move |rows, columns| {
+            let Some(ui) = weak.upgrade() else { return };
+            {
+                let mut s = cell.borrow_mut();
+                s.viewer_rows = usize::try_from(rows).unwrap_or(1).max(1);
+                s.viewer_columns = usize::try_from(columns).unwrap_or(80).max(1);
+            }
+            if cell.borrow().viewer_active() {
+                viewer::draw(&ui, &mut cell.borrow_mut());
+            }
+        });
+    }
+    // The poll that collects indexing and searches, while any is running.
+    // Slint's timer runs it, switched by `viewer-busy`, which `refresh` sets
+    // -- so nothing wakes the event loop while every viewer is idle. Closing
+    // the find bar is how a search is stopped.
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_viewer_tick(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            {
+                let mut s = cell.borrow_mut();
+                if !ui.get_find_open() {
+                    s.stop_viewer_search();
+                }
+                s.poll_viewers();
+            }
+            if cell.borrow().viewer_active() {
+                ui.set_find_status(cell.borrow().find_status.as_str().into());
+            }
+            refresh(&ui, &mut cell.borrow_mut(), state::PushText::No);
+        });
+    }
+}
+
+/// Wire the Settings sheet's callbacks. Each step changes the draft and
+/// redraws the rows; nothing reaches the live state until Save. A function
+/// of its own so the window tests wire the sheet exactly as `run_with` does.
+fn bind_settings(ui: &AppWindow, state: &Rc<RefCell<state::AppState>>) {
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_setting_stepped(move |row, delta| {
+            let Some(ui) = weak.upgrade() else { return };
+            let rows = {
+                let mut s = cell.borrow_mut();
+                let Some(sheet) = s.settings_sheet.as_mut() else {
+                    return;
+                };
+                sheet.step(row, delta);
+                sheet.rows()
+            };
+            ui.set_setting_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
+        });
+    }
+    {
+        let cell = Rc::clone(state);
+        let weak = ui.as_weak();
+        ui.on_settings_saved(move || {
+            let Some(ui) = weak.upgrade() else { return };
+            {
+                let mut s = cell.borrow_mut();
+                if let Some(sheet) = s.settings_sheet.take() {
+                    sheet.save(&mut s);
+                }
+            }
+            refresh(&ui, &mut cell.borrow_mut(), state::PushText::No);
+        });
+    }
+    {
+        let cell = Rc::clone(state);
+        ui.on_settings_cancelled(move || {
+            cell.borrow_mut().settings_sheet = None;
+        });
+    }
+}
+
+/// `--line N`: put the caret at the start of line `N` of the document open
+/// on screen. Past the end lands on the last line and says so, the same as
+/// Go to Line -- a line number from a compiler error that has since moved
+/// should still land somewhere near.
+fn start_at_line(
+    ui: &AppWindow,
+    cell: &Rc<RefCell<state::AppState>>,
+    line: std::num::NonZeroUsize,
+) {
+    let landed = cell.borrow_mut().go_to_line(&line.to_string());
+    if cell.borrow().viewer_active() {
+        // The viewer went there itself, or will once its index has.
+        refresh(ui, &mut cell.borrow_mut(), state::PushText::No);
+        return;
+    }
+    let Some(range) = landed else { return };
+    let said = std::mem::take(&mut cell.borrow_mut().goto_status);
+    if !said.is_empty() {
+        cell.borrow_mut()
+            .add_notice(format!("--line {line}: {said}"));
+    }
+    refresh(ui, &mut cell.borrow_mut(), state::PushText::No);
+    dispatch::select(ui, &mut cell.borrow_mut(), &range);
+}
+
+/// Offer to recover what a previous session left unsaved.
+///
+/// Asked as the window opens, over it, so nobody starts typing over work
+/// they have not been told about: the sheet holds the keyboard until it is
+/// answered. Each button says what it does, which `rfd`'s Yes/No/Cancel
+/// could not on Windows without comctl32 v6, and Escape keeps the work --
+/// only an explicit Discard deletes anything.
+fn offer_recovery(
+    ui: &AppWindow,
+    cell: &Rc<RefCell<state::AppState>>,
+    pending: Vec<(u64, bp_history::Checkpoint)>,
+) {
+    let count = pending.len();
+    let mut names: Vec<&str> = pending
+        .iter()
+        .map(|(_, c)| c.name.as_str())
+        .take(5)
+        .collect();
+    let more = format!("and {} more", count.saturating_sub(5));
+    if count > 5 {
+        names.push(&more);
+    }
+    let body = format!(
+        "BachelorPad+ closed with {count} unsaved document(s):\n\n{}\n\n\
+         Restore opens them now. Discard deletes them for good. \
+         Not Now keeps them and asks again next time.",
+        names.join("\n")
+    );
+
+    let cell = Rc::clone(cell);
+    dialog::ask(
+        ui,
+        dialog::Dialog {
+            title: "Unsaved work recovered".to_owned(),
+            body,
+            buttons: state::RECOVERY_BUTTONS
+                .iter()
+                .map(|&b| b.to_owned())
+                .collect(),
+            default: 0,
+            cancel: 2,
+        },
+        move |ui, chosen| {
+            {
+                let mut s = cell.borrow_mut();
+                match state::recovery_choice(chosen) {
+                    // Restored documents are journalled again under this
+                    // session's ids first, and only then are the ended
+                    // sessions' copies removed, so there is no moment with no
+                    // copy on disk.
+                    state::RecoveryChoice::Restore => {
+                        s.restore(pending);
+                        s.checkpoint_all();
+                        let _ = s.journal.discard_recovered();
+                    }
+                    // An explicit Discard is a decision; honour it rather
+                    // than asking again every launch. `discard_recovered`
+                    // rather than `discard_all`: the question was about the
+                    // ended sessions' work, and this one's own journal is
+                    // none of its business.
+                    state::RecoveryChoice::Discard => {
+                        let _ = s.journal.discard_recovered();
+                    }
+                    state::RecoveryChoice::Keep => {
+                        s.journal.keep_for_later();
+                        s.add_notice(format!(
+                            "{count} unsaved document(s) from last time were kept, not \
+                             restored; you will be asked again at the next launch"
+                        ));
+                    }
+                }
+            }
+            refresh(ui, &mut cell.borrow_mut(), state::PushText::Yes);
+        },
+    );
 }
 
 /// Measure the cost of one keystroke through the application's state path,
@@ -1132,67 +1906,331 @@ pub fn latency_probe() {
     println!("the same keystroke under --editor-view, which writes the rope directly.");
 }
 
+/// A continuation that refreshes the window, whatever the outcome it is
+/// handed. What most callers of the flows below want once they are done.
+fn refresh_after<T>(cell: &Rc<RefCell<state::AppState>>) -> impl FnOnce(&AppWindow, T) + 'static {
+    let cell = Rc::clone(cell);
+    move |ui, _| refresh(ui, &mut cell.borrow_mut(), state::PushText::Yes)
+}
+
 /// Save, escalating to Save As when the document has no path yet, and asking
-/// first if the file changed underneath us.
+/// first if the file changed underneath us. `then` gets the outcome once
+/// there is one -- straight away, unless there was something to ask.
 ///
 /// Save on a never-saved document must not silently do nothing, and Save on a
 /// file somebody else edited must not silently discard their work.
-fn save_with_prompt(state: &mut state::AppState, id: DocumentId) -> state::SaveResult {
-    if state.would_overwrite_external_change(id) {
-        let name = state.display_name(id);
-        let answer = rfd::MessageDialog::new()
-            .set_level(rfd::MessageLevel::Warning)
-            .set_title("Changed on disk")
-            .set_description(format!(
-                "{name} has changed on disk since you opened it.\n\n\
-                 Saving will overwrite those changes. Save anyway?"
-            ))
-            .set_buttons(rfd::MessageButtons::YesNo)
-            .show();
-        if answer != rfd::MessageDialogResult::Yes {
-            // Not a failure -- a refusal. Nothing was written either way, so
-            // the caller must not treat it as saved.
-            return state::SaveResult::NeedsPath;
-        }
+fn save_with_prompt(
+    ui: &AppWindow,
+    cell: &Rc<RefCell<state::AppState>>,
+    id: DocumentId,
+    then: impl FnOnce(&AppWindow, state::SaveResult) + 'static,
+) {
+    // Before the changed-on-disk question: a log growing under the viewer
+    // is the normal case, and asking whether to overwrite it would offer a
+    // save that is never going to happen.
+    if cell.borrow_mut().refuse_read_only(id) {
+        then(ui, state::SaveResult::Failed);
+        return;
+    }
+    let changed = cell.borrow().would_overwrite_external_change(id);
+    if !changed {
+        save_or_pick(ui, cell, id, then);
+        return;
     }
 
-    match state.save_document(id, None) {
-        state::SaveResult::NeedsPath => {
-            match dispatch::pick_save_path(state, id) {
-                Some(path) => state.save_document(id, Some(path)),
-                // The user dismissed the dialog. Nothing was written, and the
-                // caller must not treat that as saved.
-                None => state::SaveResult::NeedsPath,
+    let name = cell.borrow().display_name(id);
+    let cell = Rc::clone(cell);
+    dialog::ask(
+        ui,
+        dialog::Dialog {
+            title: "Changed on disk".to_owned(),
+            body: format!(
+                "{name} has changed on disk since you opened it.\n\n\
+                 Saving will overwrite those changes."
+            ),
+            buttons: vec!["Save Anyway".to_owned(), "Cancel".to_owned()],
+            // Enter cancels here, unlike the other questions: the work
+            // Save Anyway destroys is somebody else's, and they are not the
+            // one pressing Enter.
+            default: 1,
+            cancel: 1,
+        },
+        move |ui, chosen| {
+            if chosen == 0 {
+                save_or_pick(ui, &cell, id, then);
+            } else {
+                // Not a failure -- a refusal. Nothing was written either
+                // way, so the caller must not treat it as saved.
+                then(ui, state::SaveResult::NeedsPath);
             }
+        },
+    );
+}
+
+/// Save to the document's own path, or ask for one if it has none.
+fn save_or_pick(
+    ui: &AppWindow,
+    cell: &Rc<RefCell<state::AppState>>,
+    id: DocumentId,
+    then: impl FnOnce(&AppWindow, state::SaveResult) + 'static,
+) {
+    let (result, path) = {
+        let mut s = cell.borrow_mut();
+        match s.save_document(id, None) {
+            state::SaveResult::NeedsPath => match dispatch::pick_save_path(&s, id) {
+                Some(path) => (s.save_document(id, Some(path.clone())), Some(path)),
+                // The user dismissed the dialog. Nothing was written, and
+                // the caller must not treat that as saved.
+                None => (state::SaveResult::NeedsPath, None),
+            },
+            other => (other, None),
         }
-        other => other,
+    };
+    offer_utf8(ui, cell, id, result, path, then);
+}
+
+/// Save As: ask where, save there, and refresh.
+pub(crate) fn save_as(ui: &AppWindow, cell: &Rc<RefCell<state::AppState>>, id: DocumentId) {
+    // Refused before the file dialog, not after the user has chosen a name.
+    if cell.borrow_mut().refuse_read_only(id) {
+        refresh(ui, &mut cell.borrow_mut(), state::PushText::No);
+        return;
+    }
+    let chosen = dispatch::pick_save_path(&cell.borrow(), id);
+    match chosen {
+        Some(path) => save_to(ui, cell, id, path),
+        None => refresh(ui, &mut cell.borrow_mut(), state::PushText::Yes),
     }
 }
 
-/// Close a tab, asking first if it holds unsaved work.
+/// Save `id` to `path` -- which it then belongs to, as after Save As --
+/// offering UTF-8 if its encoding cannot hold it, and refresh.
+pub(crate) fn save_to(
+    ui: &AppWindow,
+    cell: &Rc<RefCell<state::AppState>>,
+    id: DocumentId,
+    path: PathBuf,
+) {
+    let result = cell.borrow_mut().save_document(id, Some(path.clone()));
+    offer_utf8(ui, cell, id, result, Some(path), refresh_after(cell));
+}
+
+/// If a save failed only because the document's encoding cannot hold one of
+/// its characters, offer to save it as UTF-8 instead; otherwise pass the
+/// outcome straight on.
 ///
-/// Borrows are scoped tightly around each step: the dialogs block, and
-/// holding a `RefCell` borrow across one would panic the moment any other
-/// callback ran.
-fn close_with_prompt(cell: &Rc<RefCell<state::AppState>>, id: DocumentId) {
+/// `path` is where the failed save was going (`None` for the document's own
+/// path), so the retry goes to the same place rather than asking again.
+/// Declining puts the selection on the character in the way when the
+/// document is the one on screen, so the user can see what to change.
+fn offer_utf8(
+    ui: &AppWindow,
+    cell: &Rc<RefCell<state::AppState>>,
+    id: DocumentId,
+    result: state::SaveResult,
+    path: Option<PathBuf>,
+    then: impl FnOnce(&AppWindow, state::SaveResult) + 'static,
+) {
+    let state::SaveResult::Unrepresentable(what) = result else {
+        then(ui, result);
+        return;
+    };
+    let name = cell.borrow().display_name(id);
+    let encoding = what.encoding.label();
+    let cell = Rc::clone(cell);
+    dialog::ask(
+        ui,
+        dialog::Dialog {
+            title: format!("Can't save as {encoding}"),
+            body: format!(
+                "{name} contains \"{}\" (U+{:04X}), which {encoding} has no \
+                 form for.\n\n\
+                 Saving as UTF-8 keeps every character. A program that reads \
+                 only {encoding} may show some of them wrongly.",
+                what.character,
+                u32::from(what.character),
+            ),
+            buttons: vec!["Save as UTF-8".to_owned(), "Cancel".to_owned()],
+            default: 0,
+            cancel: 1,
+        },
+        move |ui, chosen| {
+            if chosen == 0 {
+                let result = {
+                    let mut s = cell.borrow_mut();
+                    s.set_encoding_of(id, bp_core::Encoding::Utf8);
+                    s.save_document(id, path)
+                };
+                then(ui, result);
+                return;
+            }
+            let on_screen = cell.borrow().workspace.active_id() == Some(id);
+            if on_screen {
+                // `select` takes characters; the encoder reports bytes.
+                let start = cell.borrow().byte_to_char(what.byte_offset);
+                dispatch::select(ui, &mut cell.borrow_mut(), &(start..start + 1));
+            }
+            then(ui, result);
+        },
+    );
+}
+
+/// Close a tab, asking first if it holds unsaved work. `then` gets whether
+/// the tab went: false after Cancel, or a save that did not happen, which
+/// is what a caller closing several tabs stops at.
+fn close_with_prompt(
+    ui: &AppWindow,
+    cell: &Rc<RefCell<state::AppState>>,
+    id: DocumentId,
+    then: impl FnOnce(&AppWindow, bool) + 'static,
+) {
     let (dirty, name) = {
         let s = cell.borrow();
         (s.is_dirty(id), s.display_name(id))
     };
-
-    if dirty {
-        match dispatch::ask_about_unsaved(&name) {
-            rfd::MessageDialogResult::Yes => {
-                let mut s = cell.borrow_mut();
-                if save_with_prompt(&mut s, id) != state::SaveResult::Saved {
-                    // Keep the tab open rather than discard unsaved work.
-                    return;
-                }
-            }
-            rfd::MessageDialogResult::No => {}
-            // Cancel, or the dialog was dismissed. Do nothing.
-            _ => return,
-        }
+    if !dirty {
+        cell.borrow_mut().close(id);
+        then(ui, true);
+        return;
     }
-    cell.borrow_mut().close(id);
+
+    let cell = Rc::clone(cell);
+    dialog::ask_about_unsaved(ui, &name, move |ui, answer| match answer {
+        dialog::Unsaved::Save => {
+            let after = Rc::clone(&cell);
+            save_with_prompt(ui, &cell, id, move |ui, result| {
+                // Keep the tab open rather than discard unsaved work.
+                let saved = result == state::SaveResult::Saved;
+                if saved {
+                    after.borrow_mut().close(id);
+                }
+                then(ui, saved);
+            });
+        }
+        dialog::Unsaved::Discard => {
+            cell.borrow_mut().close(id);
+            then(ui, true);
+        }
+        dialog::Unsaved::Cancel => then(ui, false),
+    });
+}
+
+/// Close each of `ids` in turn, asking about each one's unsaved work, and
+/// refresh once done. Cancel stops the lot: the user cancelled closing, not
+/// closing that one tab.
+pub(crate) fn close_each(
+    ui: &AppWindow,
+    cell: &Rc<RefCell<state::AppState>>,
+    mut ids: VecDeque<DocumentId>,
+) {
+    let Some(id) = ids.pop_front() else {
+        refresh(ui, &mut cell.borrow_mut(), state::PushText::Yes);
+        return;
+    };
+    let next = Rc::clone(cell);
+    close_with_prompt(ui, cell, id, move |ui, closed| {
+        if closed {
+            close_each(ui, &next, ids);
+        } else {
+            refresh(ui, &mut next.borrow_mut(), state::PushText::Yes);
+        }
+    });
+}
+
+/// Save each of `ids` in turn and refresh once done, stopping at the first
+/// that is not saved rather than asking again of someone who just
+/// cancelled.
+pub(crate) fn save_each(
+    ui: &AppWindow,
+    cell: &Rc<RefCell<state::AppState>>,
+    mut ids: VecDeque<DocumentId>,
+) {
+    let Some(id) = ids.pop_front() else {
+        refresh(ui, &mut cell.borrow_mut(), state::PushText::Yes);
+        return;
+    };
+    let next = Rc::clone(cell);
+    save_with_prompt(ui, cell, id, move |ui, result| {
+        if result == state::SaveResult::Saved {
+            save_each(ui, &next, ids);
+        } else {
+            refresh(ui, &mut next.borrow_mut(), state::PushText::Yes);
+        }
+    });
+}
+
+/// Settle every unsaved document in `ids`, then close the window.
+///
+/// Documents the user chose not to save are closed only once the window is
+/// going: closing each as it was answered would, after a later Cancel, leave
+/// the user in a window with tabs missing that they never asked to close.
+/// Closing them is what discards their recovery checkpoints, so Don't Save
+/// is not offered back as "recovered" work at the next launch.
+fn settle_then_quit(
+    ui: &AppWindow,
+    cell: &Rc<RefCell<state::AppState>>,
+    mut ids: VecDeque<DocumentId>,
+    mut discarded: Vec<DocumentId>,
+) {
+    let Some(id) = ids.pop_front() else {
+        {
+            let mut s = cell.borrow_mut();
+            for id in discarded {
+                s.close(id);
+            }
+        }
+        let _ = ui.hide();
+        return;
+    };
+    let name = cell.borrow().display_name(id);
+    let cell = Rc::clone(cell);
+    dialog::ask_about_unsaved(ui, &name, move |ui, answer| match answer {
+        dialog::Unsaved::Save => {
+            let next = Rc::clone(&cell);
+            save_with_prompt(ui, &cell, id, move |ui, result| {
+                if result == state::SaveResult::Saved {
+                    settle_then_quit(ui, &next, ids, discarded);
+                } else {
+                    // Quitting now would discard exactly what the user asked
+                    // to keep.
+                    refresh(ui, &mut next.borrow_mut(), state::PushText::Yes);
+                }
+            });
+        }
+        dialog::Unsaved::Discard => {
+            discarded.push(id);
+            settle_then_quit(ui, &cell, ids, discarded);
+        }
+        dialog::Unsaved::Cancel => refresh(ui, &mut cell.borrow_mut(), state::PushText::Yes),
+    });
+}
+
+#[cfg(test)]
+mod clipboard_tests {
+    use super::{PRIVATE_CLEAR, schedule_private_clear};
+
+    fn waiting() -> Option<bool> {
+        PRIVATE_CLEAR.with(|cell| cell.borrow().as_ref().map(|(timer, _)| timer.running()))
+    }
+
+    #[test]
+    fn a_private_copy_starts_the_countdown_and_a_standard_copy_cancels_it() {
+        assert_eq!(waiting(), None);
+        schedule_private_clear("hunter2", true);
+        assert_eq!(waiting(), Some(true));
+        // A second private copy restarts the countdown for the newer text.
+        schedule_private_clear("correct horse", true);
+        assert_eq!(
+            PRIVATE_CLEAR.with(|cell| cell.borrow().as_ref().map(|(_, pending)| *pending)),
+            Some(bp_clipboard::PendingClear::new("correct horse"))
+        );
+        schedule_private_clear("a shopping list", false);
+        assert_eq!(waiting(), None);
+    }
+
+    #[test]
+    fn a_standard_copy_starts_no_countdown() {
+        schedule_private_clear("a shopping list", false);
+        assert_eq!(waiting(), None);
+    }
 }

@@ -22,6 +22,11 @@
     target, and nothing else in this setup would catch a Windows-only
     regression. Requires a Rust toolchain inside the distro.
 
+    Windows hosts only. On a Linux (or other non-Windows) host every stage
+    already runs natively -- including launch and log hygiene, which the WSL
+    leg leaves out -- so there is no second leg to add and the stage is
+    skipped with that reason.
+
 .PARAMETER IncludeSpikes
     Also check the standalone spike workspaces under spikes/. They are
     excluded from the main workspace on purpose (they carry heavy GUI
@@ -41,6 +46,11 @@
 .EXAMPLE
     ./scripts/Invoke-LocalCI.ps1 -Linux -IncludeSpikes
     Everything, both platforms. What to run before calling a phase done.
+
+.EXAMPLE
+    pwsh ./scripts/Invoke-LocalCI.ps1
+    On a Linux host: the full gate, natively. The mode follows the host, so
+    the tracked git hooks need no Linux-specific flag.
 #>
 [CmdletBinding()]
 param(
@@ -55,6 +65,12 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $Root = Split-Path -Parent $PSScriptRoot
+
+# The mode follows the host. Tested through System.Environment rather than
+# $IsWindows, which Windows PowerShell 5.1 does not define and StrictMode
+# would turn into an error there.
+$OnWindows = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+
 $script:Results = [System.Collections.Generic.List[object]]::new()
 $script:Failed = $false
 
@@ -80,12 +96,16 @@ function Invoke-Stage {
     )
 
     Write-Host "RUN   $Name" -ForegroundColor Cyan
+    # A stage may set this to say *how* it passed (the launch stage records
+    # whether it ran under a display, xvfb-run or neither), so the table and
+    # the evidence record carry it rather than only the scrollback.
+    $script:StageNote = ''
     $sw = [Diagnostics.Stopwatch]::StartNew()
     try {
         & $Action
         if ($LASTEXITCODE -ne 0) { throw "exited with code $LASTEXITCODE" }
         $sw.Stop()
-        Add-Result -Stage $Name -Status 'pass' -Seconds $sw.Elapsed.TotalSeconds
+        Add-Result -Stage $Name -Status 'pass' -Seconds $sw.Elapsed.TotalSeconds -Detail $script:StageNote
         Write-Host ("PASS  {0}  ({1:N1}s)" -f $Name, $sw.Elapsed.TotalSeconds) -ForegroundColor Green
     }
     catch {
@@ -106,6 +126,7 @@ Push-Location $Root
 try {
     Write-Host "BachelorPad+ local CI" -ForegroundColor White
     Write-Host ("  root:     {0}" -f $Root)
+    Write-Host ("  host:     {0}" -f $(if ($OnWindows) { 'windows' } else { "native ($([System.Environment]::OSVersion.VersionString))" }))
     Write-Host ("  rustc:    {0}" -f (rustc --version))
     Write-Host ("  cargo:    {0}" -f (cargo --version))
     Write-Host ("  mode:     {0}" -f $(if ($Quick) { 'quick (pre-commit)' } else { 'full' }))
@@ -124,6 +145,23 @@ try {
         Invoke-Stage 'check (locked)' { cargo check --workspace --all-targets --locked }
     }
 
+    # Licences, RustSec advisories, bans and sources (release plan M1-14),
+    # against deny.toml. One tool for what the plan named two: cargo-deny's
+    # advisories check reads the same RustSec database cargo-audit does.
+    # Skipped in quick mode because it fetches that database.
+    if ($Quick) {
+        Skip-Stage 'deny' 'quick mode -- pre-push runs it'
+    }
+    else {
+        Invoke-Stage 'deny' {
+            if (-not (Get-Command cargo-deny -ErrorAction SilentlyContinue)) {
+                throw "cargo-deny is not installed: cargo install --locked cargo-deny"
+            }
+            cargo deny check
+            if ($LASTEXITCODE -ne 0) { throw "cargo deny check failed" }
+        }
+    }
+
     Invoke-Stage 'clippy' { cargo clippy --workspace --all-targets -- -D warnings }
     Invoke-Stage 'test' { cargo test --workspace }
 
@@ -138,11 +176,73 @@ try {
         cargo build --workspace --quiet
         if ($LASTEXITCODE -ne 0) { throw "build failed" }
 
-        $exe = Join-Path $Root 'target/debug/bachelorpad.exe'
+        # Ask cargo where it put the binary rather than assuming `target/`:
+        # CARGO_TARGET_DIR, a relative one, or `build.target-dir` in a cargo
+        # config all move it, and a hard-coded path then launches a stale
+        # binary or none at all.
+        $meta = (cargo metadata --format-version 1 --no-deps) -join "`n"
+        if ($LASTEXITCODE -ne 0) { throw "cargo metadata failed" }
+        $targetDir = ($meta | ConvertFrom-Json).target_directory
+        $exeName = if ($OnWindows) { 'bachelorpad.exe' } else { 'bachelorpad' }
+        $exe = Join-Path (Join-Path $targetDir 'debug') $exeName
+        if (-not (Test-Path $exe)) { throw "no binary at $exe after a successful build" }
+
+        # The resources `apps/bachelorpad/build.rs` embeds (release plan
+        # M2-02). Checked here because nothing else reads them: a build
+        # script that silently skipped would leave an exe with no icon, no
+        # version on its Properties page and no manifest, and every other
+        # stage would still pass.
+        if ($OnWindows) {
+            $info = (Get-Item $exe).VersionInfo
+            $version = ((Get-Content (Join-Path $PSScriptRoot '..' 'Cargo.toml') -Raw) |
+                Select-String -Pattern '(?m)^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+            if ($info.ProductName -ne 'BachelorPad+') {
+                throw "the exe carries no VERSIONINFO (ProductName is '$($info.ProductName)')"
+            }
+            if (-not $info.ProductVersion.StartsWith($version)) {
+                throw "the exe says version '$($info.ProductVersion)', Cargo.toml says '$version'"
+            }
+        }
         $out = Join-Path ([System.IO.Path]::GetTempPath()) "bpad-selfcheck-$PID.txt"
 
-        $proc = Start-Process -FilePath $exe -ArgumentList '--self-check' `
-            -PassThru -NoNewWindow -RedirectStandardOutput $out
+        if ($OnWindows) {
+            $proc = Start-Process -FilePath $exe -ArgumentList '--self-check' `
+                -PassThru -NoNewWindow -RedirectStandardOutput $out
+        }
+        else {
+            # `--self-check` returns before anything opens a display, so the
+            # marker does not need one. A display is still provided where it
+            # can be: it makes a stale binary that ignores the flag and opens
+            # a window behave as it does on Windows (hang, then the bounded
+            # kill below) rather than dying on a missing display, and it keeps
+            # the stage meaningful if the self-check ever grows to touch the
+            # windowing stack (winit dlopens libxkbcommon-x11 there).
+            #
+            # With neither a display nor xvfb-run the stage still runs,
+            # headless, and says so in the table. Failing would reject a
+            # machine over something the assertion does not depend on, and a
+            # skip would give up the one check that loads the linked binary --
+            # the hole this stage exists to close.
+            $hasDisplay = [bool]$env:DISPLAY -or [bool]$env:WAYLAND_DISPLAY
+            $xvfb = Get-Command xvfb-run -CommandType Application -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+            if ($hasDisplay) {
+                $script:StageNote = 'existing display'
+                $proc = Start-Process -FilePath $exe -ArgumentList '--self-check' `
+                    -PassThru -NoNewWindow -RedirectStandardOutput $out
+            }
+            elseif ($xvfb) {
+                $script:StageNote = 'under xvfb-run -a'
+                $proc = Start-Process -FilePath $xvfb.Source -ArgumentList '-a', $exe, '--self-check' `
+                    -PassThru -NoNewWindow -RedirectStandardOutput $out
+            }
+            else {
+                $script:StageNote = 'headless: no DISPLAY/WAYLAND_DISPLAY and no xvfb-run'
+                Write-Host "  launch: $($script:StageNote)" -ForegroundColor Yellow
+                $proc = Start-Process -FilePath $exe -ArgumentList '--self-check' `
+                    -PassThru -NoNewWindow -RedirectStandardOutput $out
+            }
+        }
 
         # Bounded, and it has to stay bounded: the hang this guards against is
         # the one described above, where the binary opens a window instead of
@@ -151,7 +251,11 @@ try {
         # tells you something; a hung one tells you nothing and blocks the
         # commit anyway.
         if (-not $proc.WaitForExit(30000)) {
-            $proc.Kill()
+            # Off Windows the process may be xvfb-run, whose Xvfb and app
+            # children would outlive a plain Kill(). The tree overload is
+            # .NET Core 3+, which is all pwsh runs on; Windows PowerShell 5.1
+            # only reaches the other branch.
+            if ($OnWindows) { $proc.Kill() } else { $proc.Kill($true) }
             $proc.WaitForExit()
             Remove-Item $out -ErrorAction SilentlyContinue
             throw 'did not exit within 30s'
@@ -273,7 +377,10 @@ try {
     }
 
     # --- linux ---------------------------------------------------------
-    if (-not $Linux) {
+    if (-not $OnWindows) {
+        Skip-Stage 'linux (wsl)' 'host is not Windows: the stages above are the native leg'
+    }
+    elseif (-not $Linux) {
         Skip-Stage 'linux (wsl)' 'pass -Linux to run the Linux leg'
     }
     else {
@@ -351,6 +458,7 @@ try {
         [pscustomobject]@{
             run_at    = (Get-Date).ToString('o')
             host_os   = [System.Environment]::OSVersion.VersionString
+            host_mode = $(if ($OnWindows) { 'windows' } else { 'native' })
             rustc     = (rustc --version)
             mode      = $(if ($Quick) { 'quick' } else { 'full' })
             succeeded = (-not $script:Failed)
