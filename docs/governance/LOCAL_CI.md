@@ -98,10 +98,11 @@ the full run and not in `-Quick`. Where one harness is too expensive to gate
 on, the answer is the one `fuzz/tests/envelope.rs` already used: `#[ignore]`
 that test with the reason on it and leave the rest running.
 
-`-Quick` skips the locked dependency resolve and the fuzz workspace. The
-first is the slowest part of a cold run and cannot regress from an edit that
-does not touch a manifest; the second is simply slow, and `pre-push` runs the
-full gate before anything leaves the machine.
+`-Quick` skips the locked dependency resolve, `deny` and the fuzz workspace.
+The first is the slowest part of a cold run and cannot regress from an edit
+that does not touch a manifest; `deny` fetches the advisory database over the
+network; the fuzz workspace is simply slow. `pre-push` runs the full gate
+before anything leaves the machine.
 
 ## What runs when
 
@@ -122,9 +123,9 @@ the first time it is wrong, and then nothing is checked at all.
 ## Native Linux
 
 The mode follows the host. Run on Linux (or any non-Windows host), the script
-runs **every** stage natively -- fmt, `check --locked`, clippy, test, launch,
-log hygiene and fuzz -- which is more than the WSL leg does: that leg skips
-`--locked`, launch and log hygiene. There is no flag to pass, so the tracked
+runs **every** stage natively -- fmt, `check --locked`, deny, clippy, test,
+launch, log hygiene and fuzz -- which is more than the WSL leg does: that leg
+skips `--locked`, deny, launch and log hygiene. There is no flag to pass, so the tracked
 `pre-commit` and `pre-push` hooks work unchanged, and `-Quick` means what it
 means on Windows. `-Linux` is meaningless there and the `linux (wsl)` stage
 is skipped, saying why.
@@ -280,8 +281,13 @@ gh api -X PUT repos/:owner/:repo/actions/permissions -F enabled=true
 # then restore `on: push` / `on: pull_request` in the workflow
 ```
 
-**Keep it in step with `Invoke-LocalCI.ps1`.** Two gates that disagree are
-worse than one.
+Since M3-07 the workflow runs `Invoke-LocalCI.ps1` itself on a Windows and
+an Ubuntu 24.04 runner, after installing the Linux build packages and
+`cargo-deny`, rather than keeping its own copy of the stages. An earlier
+hand-written list had already fallen behind the gate. Two gates that disagree
+are worse than one; one gate run in two places cannot disagree, so a new stage
+belongs in the script, and the workflow changes only when a stage needs a tool
+the runners lack.
 
 ## A note on this machine
 

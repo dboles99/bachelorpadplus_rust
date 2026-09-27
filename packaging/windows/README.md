@@ -12,6 +12,7 @@ installer's job, never the application's (ADR-0032).
 | `New-PortableZip.ps1` | Builds the portable zip from the same exe |
 | `PackagingCommon.ps1` | Shared by the two build scripts (version, licences, CRLF text) |
 | `README-portable.txt` | The zip's `README.txt` |
+| `Signing.ps1` | The Authenticode signing step (M3-04): finds signtool, signs through Azure Artifact Signing or an OV certificate, verifies with `signtool verify /pa`. Dot-sourced by `Invoke-Release.ps1` and `Build-Installer.ps1` |
 | `Test-Install.ps1` | The install/uninstall acceptance test, for a person on a Windows VM |
 
 ## Building
@@ -180,14 +181,21 @@ and a summary in `-EvidenceDir` (default: a new directory in `%TEMP%`).
 
 ## What has not been run
 
-As of 2026-09-26, nothing here has run on Windows. On Linux: the generator,
+As of 2026-09-27, nothing here has run on Windows. On Linux: the generator,
 its escaping, the uninstall flags and the drift test run in
-`cargo test -p bp-platform`; the four scripts parse; `New-PortableZip.ps1`
+`cargo test -p bp-platform`; the five scripts parse; `New-PortableZip.ps1`
 built a zip from a stand-in exe and read it back; `Build-Installer.ps1` was
 run against a stand-in ISCC to check the arguments it passes and the
 not-found message; and `Test-Install.ps1`'s reading of the generated blocks
 was exercised. Never run: ISCC on `bachelorpad.iss` (so its `[Code]` has not
 been compiled), the installer, the uninstaller, `bpad.cmd`, the exe
-version-resource check, and `Test-Install.ps1` end to end. The first Windows
-gate run (M0-12) should start with `Build-Installer.ps1` and
-`Test-Install.ps1` on both VMs.
+version-resource check, `Test-Install.ps1` end to end, and a Windows
+`Invoke-Release.ps1` dry run (the recorded dry run is the Linux one).
+`Signing.ps1` has never signed anything: there is no signing identity yet
+(decision 3; question 3a is open), so signtool, the Artifact Signing dlib
+and `signtool verify /pa` are all untested.
+
+The owner's run-book for all of it is `docs/release/WINDOWS_BRINGUP.md`: the
+first Windows gate run (M0-12), then `Invoke-Release.ps1 -DryRun` (which
+compiles the installer and the zip) and `Test-Install.ps1`, with signing
+last, once an identity exists.

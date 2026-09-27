@@ -29,7 +29,7 @@ below says which code honours each axis and where it stops.
 Not reached, because the thing does not exist in 1.0: revision history
 (deferred to 1.x), semantic metadata and embeddings (the crates are not
 wired to the shell), and network eligibility (nothing in the product sends a
-document anywhere; ADR-0030). Temporary files are an accepted deviation: the
+document anywhere; ADR-0034). Temporary files are an accepted deviation: the
 atomic save writes its temporary copy beside the document.
 
 ## What each axis does today, and where it stops
@@ -45,7 +45,7 @@ product honours each one, and where each one stops. Release plan M1-20,
 | `recovery` | The recovery journal: plaintext, sealed with the document's passphrase, or none (ADR-0020, ADR-0022) | None known |
 | `clipboard` | The in-app clipboard history; marking private copies to stay out of the OS history (Win+V, cloud clipboard, Klipper); clearing a private copy off the OS clipboard after `bp_clipboard::PRIVATE_CLEAR_AFTER` (a minute) if it still holds it (M2-08) | For that minute the OS clipboard holds the text, and a clipboard manager that ignores the exclusion hint keeps its own copy. A private *cut* in the default view reaches the OS clipboard unmarked (the widget owns cut) |
 | `metadata` | The recent-files list, the security history, the document-profile store (digest only) | The profile store keeps a digest of each protected file's path. Anyone who guesses a path can confirm the guess (`bp_history::profiles`) |
-| `network` | Shown in the Security menu | Nothing in the product sends a document anywhere yet, so there is nothing for this axis to stop |
+| `network` | Shown in the Security menu as "Leaves this machine" | Version 1 sends nothing off the machine (ADR-0034), so there is nothing for this axis to stop yet; it binds the first feature that wants the network |
 | `embeddings` | **Nothing yet** | No embeddings are computed yet. Until they are, this axis is a promise about future code, and this row says so |
 | `temporary_files` | **Nothing enforces `Denied`** | Every save is atomic: it writes a temporary file *in the document's own folder*, then renames it over the document. **This is an accepted deviation.** The temporary file holds exactly the bytes the document is about to hold, sits beside it, and does not survive a completed save; a crash can leave one behind. No save writes document content anywhere else (no system temp directory). For an encrypted document the temporary file holds the ciphertext |
 | `zeroise` | **Partly** | See below |
@@ -85,7 +85,11 @@ Portable encryption:
 - versioned envelope
 - authenticated metadata handling
 
-Platform key protection:
+Platform key protection is deferred to 1.x (ADR-0030 S4). 1.0 has no
+DPAPI, Windows Hello or Secret Service integration: the one long-lived key,
+Sign Document's signing key, is kept in a passphrase `.bpadx` envelope in
+the data directory (decision 16). When the platform stores arrive they are
+meant to wrap that key rather than replace it:
 - Windows: DPAPI / Windows Hello-assisted workflows where appropriate
 - Linux: Secret Service / desktop keyring integrations where appropriate
 
