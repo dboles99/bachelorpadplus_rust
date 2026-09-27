@@ -9,3 +9,5 @@
 - `decisions/` — ADRs
 - `governance/` — work model and definition of done
 - `product/` — menu and product behavior maps
+- `release/` — the release-candidate checklist and the Windows bring-up run-book
+- `user/` — the user guide

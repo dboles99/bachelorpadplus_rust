@@ -338,6 +338,8 @@ Goal: the app looks and registers like a native application on each OS, and ever
 - **M1-18 done (U5).** A right-click, the Menu key or Shift+F10 opens an editor context menu in both views (Cut, Copy, Paste, Select All, Paste Special…, Clipboard History ▸, Pin ▸, Clear Clipboard History); never over the viewer. Every menu that shows clipboard rows takes a snapshot of the history when it opens, and a row's slot holds the entry's hash, so a click acts on the entry it showed or, if that entry has gone, says so and does nothing. A window test reproduces the old race and fails without the fix. The popup is Slint's own, light under every theme (queued).
 - **Waiting:** a Windows dry run (the owner's machine), a `-Container` run on a host that reaches Debian's mirrors, Fedora and Arch package tests, and M3-08 after the first signed release. `project/WORK_QUEUE.md` "Follow-ups from M3" has the detail.
 
+**Session close (2026-09-27).** Sessions 6 and 7 are merged into `main` (`65a13c3`, PR #3): M0 to M3 as far as a Linux machine can take them, 2,313 tests passing. Nothing since the sixth session has run on Windows; the owner is taking `docs/release/WINDOWS_BRINGUP.md` to a Windows laptop. Two new questions are in `DECISIONS_NEEDED.md`: D11 (bare CRs in line-ending conversion) and 3a (whether the owner can get Artifact Signing, or needs an OV certificate). The next session's order is in `project/NEXT_SESSION.md`.
+
 ### M4 — Evidence on each OS. Target: 2 weeks, dominated by human time.
 
 | ID | Title | Crate(s) / files | OS | Size | Depends | Par | Verify |

@@ -1,286 +1,132 @@
 # Next session plan
 
-Rewritten 2026-09-25, at the end of the sixth build session.
+Rewritten 2026-09-27, at the end of the seventh build session. Everything
+below is on `main` (merged as `65a13c3`, PR #3). The history of how it got
+there is in `git log` and in the dated "Progress" notes under each milestone
+of [`RELEASE_PLAN.md`](RELEASE_PLAN.md); this file keeps only what the next
+session needs.
 
-State: 24 crates, 1,729 tests at the end of the sixth session and over
-2,000 after the seventh, green on Linux -- **the Windows leg has not been
-run on either session's work** (release-plan M0-12), see below. One is
-`#[ignore]`d on purpose because it names a decision rather than a defect
-(D6); the two defects that shared its company are fixed.
+## Where things stand
 
-**Start from [`project/RELEASE_PLAN.md`](RELEASE_PLAN.md).** A five-agent
-audit at the end of the sixth session measured the product against the spec
-and against what a release candidate needs on each OS, and the plan built
-from it replaces the "what to do next" of this file: milestones M0 to M5,
-22 decisions for the owner in the order they block work, and the first ten
-items to take. The owner answered decisions 1-7 the same day (ADR-0030 to
-ADR-0033), and most of M0 landed before the session ended -- the plan's
-"Progress" note under M0 says exactly which items, which are partial, and
-that M0-07, M0-10 and the owner's Windows gate run (M0-12) are next.
+25 crates, **2,313 tests passing on Linux** (one ignored on purpose: the
+fuzz workspace's cost measurement, which pays a 256 MiB Argon2 derivation).
+The version is `1.0.0-rc.0`, used for release dry runs only; nothing has
+been published. **Nothing built since the sixth session has run on
+Windows.**
 
-**Seventh session (same day): M0 finished, M1 done except the owner's
-decisions.** The plan's M1 "Progress" notes have the detail. What is left
-in M1 waits on the owner: M1-06 (U3), M1-09 (D6), M1-14 (the copyright
-holder) and M1-18 (U5), plus the Windows gate run (M0-12). **Next without
-them: M2** (platform integration, per the plan), starting with whatever
-the Windows gate run turns up.
-
-**Later the same session: M2 done except what waits on the owner.** The
-plan's M2 "Progress" note lists each item. Waiting: the icon's approval
-(M2-01), decisions 15 (Argon2 ceiling, M2-09) and 17 (what may leave the
-machine, M2-11), and the Windows gate run, which now also covers M2-02/03/04
--- none of that Windows code has run on Windows yet. **Next without the
-owner: M3** (packaging and the release pipeline), and the M2 follow-ups at
-the end of `WORK_QUEUE.md`.
-
-**2026-09-26: M3 done as far as this machine can take it.** The plan's M3
-"Progress" note has the detail. Every package format is built. A Linux dry run
-of the release script is recorded in `artifacts/releases/v1.0.0-rc.0/linux/`.
-Licences, notices, cargo-deny and the user docs are in, and a plaintext leak in
-Save a Copy was found and fixed. What remains needs other machines or the
-owner:
-- the Windows gate and a Windows dry run (`Invoke-Release.ps1` on Windows);
-- a `-Container` run where Debian's mirrors are reachable;
-- the signing identity (decision 3);
-- decisions 15, 21 and U3/D6/U5;
-- the icon's approval.
-
-**Next without them: M4's automatable parts**, and the follow-ups in
-`project/WORK_QUEUE.md`.
-
-Two tools worth knowing about:
-
-- `scripts/smoke-linux.sh` drives the real binary on Xvfb in both views.
-  Its first run found a defect the window tests could not see.
-- `worker::Background` in `bp-ui` is the pattern for anything slow. Only
-  the newest job's result comes back, the job gets a stop flag, and
-  results arrive over a channel collected on the UI thread.
-
-Eight agents ran in hand-made worktrees off the working branch, each with its own target
-directory, and that pattern held. Watch the disk: a release build in a
-worktree is about 12 GB, and the session hit "no space left" once; build
-the main tree with `CARGO_INCREMENTAL=0` when space is short.
-
-**Before dispatching parallel agents again, read this.** Five ran in
-worktrees this session and two things went wrong that were not their
-fault: `isolation: worktree` created their trees from `main`, not from the
-working branch, and sharing one `CARGO_TARGET_DIR` between worktrees made
-cargo reuse one tree's build of a crate in another (it names workspace
-crates by their path relative to the workspace root). Give each agent its
-own branch point explicitly, and never a shared target directory; if disk
-is tight, run fewer agents rather than share.
-
----
-
-## What the sixth session did
-
-Tier 0.5 of the queue, the housekeeping item that went with it, and a
-request that arrived mid-session -- **make the cursor keys, Home, End,
-Page Up, Page Down and Insert work** -- which turned out to hide two real
-defects nobody had seen, because nothing had ever tested the default view
-in a window.
-
-The commits themselves are in `git log`, which is the record; this file
-no longer keeps a hand-made table of them, because the last one missed the
-two fixes that landed after it (the ADR-0029 migration races and errors).
-What each landed item did is in the release plan's "Progress" notes and the
-Done table of `project/WORK_QUEUE.md`. In short: a notebook cell naming a
-language it cannot map stays `Raw` (ADR-0025); a long path is spelled `\\?\`
-for the atomic rename; the recent list, security history and recovery
-journal left the roaming directory (ADR-0029); and Page Up/Down, a view that
-follows the caret, Insert/overwrite, the CUA clipboard keys and the window
-tests arrived in `bp-ui`.
-
-**The Windows leg has not run on any of this.** The session's container had
-no PowerShell and no Windows; the Linux leg was run stage by stage by hand
-(fmt, check --locked, clippy, test, launch, log hygiene, fuzz) and is green.
-The long-path fix is Windows behaviour, exercised on Linux only through its
-platform-parameterised half, and the window tests have never run on Windows.
-**Run `./scripts/Invoke-LocalCI.ps1` on Windows first**, before anything
-else.
-
-## The window tests, and what they are for
-
-`crates/bp-ui/src/window_tests.rs` builds the real `AppWindow` on
-`MinimalSoftwareWindow` and dispatches real `WindowEvent::KeyPressed`
-events. No display, no new dependency -- both are public Slint API. Slint's
-platform is per thread, and so is each test. **This is the tool the
-`--editor-view` checklist below has been missing**: most of its rows can now
-be asked of a test rather than of a person. What it found first:
-
-- **Page Up and Page Down did nothing in the default view.** `TextInput`
-  pages by its `page-height`, which defaults to zero, and it refuses a page
-  of zero. Set to the `Flickable`'s height now.
-- **The arrows, End and Ctrl+End moved the caret out of sight.** A bare
-  `Flickable` does not follow its content's caret, so past the bottom row
-  the keys looked dead. `cursor-position-changed` scrolls it now, only as
-  far as needed, and a no-wrap document has a viewport as wide as its
-  longest line.
-
-Both were seen to fail with the fix removed. `AppWindow` gained two `out`
-properties, `editor-scroll-x` and `-y`, so a test can ask where the view is.
-
-**Driving the whole binary on Xvfb works for `--editor-view` and not for
-the default view.** With `libxkbcommon-x11-0` installed and `python-xlib`
-sending XTEST events, the custom surface took clicks, every navigation key,
-overwrite and Ctrl+S end to end, and the saved file was checked. The default
-view's `TextInput` received nothing -- not even the window's own Ctrl+S --
-which looks like the X input-method path `TextInput` enables, with no IM
-server on a bare Xvfb. A harness limit, not a product defect; the headless
-tests above are the better tool for that view anyway.
-
-**That run found one defect it did not fix: `--editor-view` draws its caret
-to the right of the text on Linux.** `EditorSurface` multiplies one measured
-advance by the column, which holds only for a monospace font. It asks for
-`"Consolas"`; Slint resolves a family name literally -- no fontconfig
-aliasing, no generic `monospace` -- so Linux gets a proportional sans and the
-caret drifts further right with every character. This is the "advance
-measurement" row of the checklist below, answered for Linux. The fix is a
-product choice (bundle a monospace font with `import`, or choose the family
-per platform in Rust) and is in the queue as Tier 0.75.
-
-## Insert, and what it had been doing
-
-Under `--editor-view`, Insert had no meaning, so its key code -- U+F727, in
-the private-use block Slint encodes named keys into -- fell through as a
-character and **was typed into the document, invisibly**. So was every other
-key the shell does not name (F1-F12, Menu). `bp_editor::keys::is_toolkit_key`
-refuses the block now, as `TextInput` always did.
-
-Overwrite is one rule in one place: `bp_editor::overwritten` -- one character
-per character typed, never past the end of the line, nothing for a line
-break or a key that is not text. `Editor::type_text` uses it; the `TextInput`
-view asks through `overwrite_end`, selects what it will replace, and lets the
-widget's own "typing replaces the selection" do the rest. That reads the
-caret through `cursor-position_byte-offset`, which Slint marks internal -- the
-only way to read it. An upgrade that removes it fails to compile rather than
-misbehaving. The mode is the window's, shown as `OVR` in the status bar.
-
-## The shape of the problem has changed
-
-For three sessions the largest gap was that capabilities did not exist. It is
-now the opposite. **Three crates and one module are built, tested and
-unreachable** — `bp-notebook`, `bp-research`, `bp-storage` and `bp-buffer`'s
-large-file viewer — and the queue's Tier 0 is nothing but wiring. (ADR-0030
-has since kept the three crates out of RC1, so of these only the viewer,
-M1-06, is release work.) Building another library is the easy, comfortable
-move and it is the wrong one.
-
-An audit at the end of the fifth session put a number on that: `bp-research`,
-`bp-notebook` and `bp-storage` have **zero reverse dependencies anywhere in
-the application**, and with `bp-buffer`'s large-file engine that is over ten
-thousand lines and 237 unit tests defending code no user can reach.
-`bp-notebook` is named by the fuzz harness; nothing in the shipped binary
-names any of the three. `bp-audit` came off that list in the same session --
-Security ▸ Security History reads it and five capabilities write into it.
-
-The same audit found two things this file had no way to see, and they are
-items 2 and 3 below. Both are cheap, and both make everything after them
-worth trusting.
-
-Four things are worth more than any new crate:
-
-### 1. Ten minutes with the application
-
-Still first, still not done, and now with more riding on it. Security gained
-four rows in the fourth session; the fifth rebuilt Verify Signature on
-`bp-integrity`'s sidecar and added File ▸ Set as Default Editor, which writes
-into the desktop database on Linux and saves a `.reg` on Windows. **None of it
-has been clicked**, and the last of those is the one row here that changes
-something outside this application. The `--editor-view` checklist below is
-unchanged and still unanswered.
-
-```powershell
-cargo run --release
-cargo run --release -- --editor-view
-```
-
-Click Security ▸ Scan for Secrets on a file with an AWS key in it. Click Hash
-Document and check the digest against `sha256sum`. Note whether the menu, now
-four rows longer, still reaches its own bottom row — `MenuPopup` caps its
-height and scrolls, and a long menu putting its lowest rows out of reach has
-happened here before and was found by a person, not a test.
-
-Then File ▸ Set as Default Editor, which deserves reading rather than
-clicking through: it reports what opens those types today *before* it offers
-to change anything, and on Windows it writes nothing at all without a Save
-dialog first. It is the only row in this product that touches state outside
-it.
-
-### 2. ~~Fix the defects the cross-crate tests found~~ — done, all but a decision
-
-**Six of the seven defects are fixed; the seventh, D6, is a decision.** The sixth
-session took the last two. The fifth took the one that destroyed documents: `bp_naming::sanitize` now takes the stem before the first dot, the
-way Win32 does, so `con.txt`, `aux.log`, `NUL.dat` and `lpt1.bak` become
-`con File.txt` and its friends rather than names that write to the device.
-Its list gained `CONIN$` and `CONOUT$`, and a property test compares the two
-crates' verdicts stem by stem, in both directions, so the two lists cannot
-drift apart quietly. `bp-files` closes the other route into the same failure
--- the name a user *types*, which sanitising never sees -- by refusing to
-write to a device at all.
-
-The two that sat behind it -- `bp-notebook` running code it could not name
-through the kernel's interpreter, and `bp-files` never applying `\\?\` --
-are fixed and their tests run. The line-definition disagreement is D6 and
-wants an answer, not a patch.
-
-**Write more cross-crate tests as you go.** Eleven files of them have now
-found seven defects that the unit tests had not. That ratio is still the most
-useful thing this project has learned.
-
-### 3. ~~Make the record match the product again~~ — done, and worth knowing why
-
-**Done at the end of the fifth session, in the same pass that found it.**
-This repository's method is that the written record says what is real — that
-is what ROADMAP's three-word status vocabulary is for. An audit found four
-entries in `DECISIONS.md`'s open-items list describing defects that were
-demonstrably fixed, a README roster naming two crates that have menu rows
-while omitting two that have none, and phase 18 still marked *Built,
-unwired* a session after Set as Default Editor shipped. All of it is
-corrected. What is worth carrying forward is the list itself, because every
-one of these went stale the same way — the fix landed and the record did
-not:
-
-| Claim | Where it is false |
+| Milestone | State |
 | --- | --- |
-| JSONL sniff calls a pretty-printed array "JSON Lines" | `bp_formats::looks_like_json_lines` requires `closes_what_it_opens(first)` |
-| The encoder is `pub(crate)` in the shell | `crates/bp-files/src/encode.rs` |
-| YAML has no way in | `bp-ui/src/state.rs` calls `bp_data::yaml_validate` (and `yaml_format`, `yaml_minify`, `yaml_to_json`) |
-| `bp-audit`'s sealed destination has no implementor | `bp-audit/src/passphrase.rs:185` |
-| README: five crates built and unreachable | Names `bp-integrity` and `bp-platform`, which have rows; omits `bp-audit` and `bp-storage`, which do not |
-| ROADMAP phase 18: **Built, unwired** | File ▸ Set as Default Editor shipped in the fifth session |
+| M0: data safety, privacy, honesty | Done, except M0-12, the Windows gate run |
+| M1: the shipping view, an honest gate | Built. Its exit also needs the Windows gate and a 1 GB file opened in the viewer |
+| M2: platform integration | Done in code. The Windows half (M2-02/03/04) has never run on Windows |
+| M3: packaging and the release pipeline | Done as far as this machine can go. Waiting: a Windows dry run, a Debian 12 container build, Fedora and Arch package tests, a signing identity |
+| M4: evidence on each OS | Not started |
+| M5: RC1 per OS | Not started |
 
-A reader who checks one claim and finds it stale has no way to know which of
-the rest to trust, and the method depends entirely on trusting them. **The
-roster is now counted rather than remembered** — reverse dependencies read
-out of every `Cargo.toml` and checked against what the shell's source
-actually names — which is the only version of that claim that stays true
-without somebody maintaining it.
+Landed in the seventh session, in outline: in-app dialogs, About and
+Settings; Ln/Col and the line moves in the default view; the large-file
+read-only viewer (`--readonly`, `--large-file`); the D6 line rule (LF, CRLF
+and a bare CR end a line everywhere); the editor context menu with
+snapshot-on-open clipboard rows (U5); the Argon2 cost cap (decision 15);
+nothing leaves the machine (ADR-0034); Windows resources, the `.reg` pair
+and the Settings deep link; Linux Set as Default; the approved icon;
+licences and generated third-party notices; `cargo deny` in the gate; the
+Inno Setup installer, the portable zip, `.deb`, `.rpm`, `tar.gz` and
+`PKGBUILD`; `scripts/Invoke-Release.ps1` with a recorded Linux dry run; the
+signing step (wired, never run); and the user guide, CHANGELOG, SECURITY
+and the RC checklist.
 
-### 4. ~~Put `fuzz/` inside the gate~~ — done, and it costs five minutes
+## Before the next session: the owner, on the Lenovo
 
-`Invoke-LocalCI.ps1` swept `spikes/` for standalone workspaces. There is no
-`spikes/` directory in this tree, and there *was* a `fuzz/` one holding five
-hostile-input harnesses that nothing formatted, linted or ran — while phase 19
-was marked *Started* on the strength of them.
+[`docs/release/WINDOWS_BRINGUP.md`](../docs/release/WINDOWS_BRINGUP.md) is the
+run-book: install the tools, run the gate, use the app for ten minutes, run
+the release dry run and `Test-Install.ps1`, and bring the results back. Also
+waiting on the owner, all listed in [`DECISIONS_NEEDED.md`](DECISIONS_NEEDED.md):
 
-Two stages now run them, on both legs, and they were green from the first run:
-42 tests, one `#[ignore]`d for cost with the reason on it. **The full gate is
-about five minutes longer** — two and a half per leg — which is the honest
-price of the assurance and is visible in the stage table rather than hidden.
-`-Quick` skips it, so `pre-commit` is unchanged and `pre-push` carries it.
+- **3a, the signing identity.** Azure Artifact Signing takes individual
+  developers in the USA and Canada only; an OV certificate is the fallback,
+  and `Signing.ps1` already takes either.
+- **D11, bare CRs in line-ending conversion.** Recommended: yes, rewrite
+  them, and label a CR-only file "CR".
+- **The package mirrors.** Allow `deb.debian.org`, `security.debian.org`,
+  `dl.fedoraproject.org`, `mirrors.fedoraproject.org`,
+  `geo.mirror.pkgbuild.com` and `archlinux.org` in this environment's
+  network settings.
 
-Two things worth keeping from doing it:
+## The next session, in order
 
-- **The stage was verified to fail**, by breaking the formatting of
-  `fuzz/tests/yaml.rs` and watching it go red while the workspace `fmt` stage
-  stayed green. That contrast *is* the blindness, reproduced. A gate stage
-  nobody has seen fail is a stage nobody knows the shape of.
-- **Where one harness becomes too expensive to gate on**, the answer is
-  already in the tree: `fuzz/tests/envelope.rs` `#[ignore]`s its KDF-cost
-  test with the reason on it. Do that, not a switch that turns the stage off.
+1. **Start clean.** The session branch's pull request is merged, so restart
+   the branch from `main`: `git fetch origin main && git checkout -B
+   <branch> origin/main`. Check the disk (`df -h /`); `target/` from an
+   earlier session can be 15 GB.
+2. **Triage whatever the Windows run brought back.** A failing gate stage
+   comes before everything else, because every other item assumes Windows
+   builds and runs. Commit the Windows dry run's `manifest.json` and
+   `SHA256SUMS` beside the Linux ones. M0-12 closes when the gate is green
+   on Windows.
+3. **If the mirrors are open** (check with `curl -sI https://deb.debian.org`):
+   `pwsh scripts/Invoke-Release.ps1 -Tag v1.0.0-rc.0 -DryRun -Container`,
+   which is also the first build of the pinned Debian 12 image, then
+   `packaging/linux/test-packages.sh` on Fedora and Arch. Commit the
+   record; the manifest's glibc figure should drop to 2.36 or below.
+4. **Fix before rc.1:** a `.bpadx` opened from Recent Files, the command
+   line or a Find in Files hit goes through `AppState::open` and never gets
+   the passphrase flow. Route them through `open_maybe_encrypted`
+   (`crates/bp-ui/src/state.rs`), with a test per entry point.
+5. **D11, once answered:** a `LineEnding::Cr` in `bp-files`, conversion that
+   rewrites bare CRs, and the status bar label.
+6. **M4's automatable parts** (plan §5, M4):
+   - M4-01 to M4-03: startup, open-time, typing latency and idle memory
+     on Linux, and a 1 GB file in the viewer (M1-06's exit check);
+   - M4-05: a coverage-guided fuzz run, if nightly and crates.io are
+     reachable;
+   - M4-06: `docs/security/THREAT_MODEL.md`.
+7. **Smaller follow-ups** in `WORK_QUEUE.md` "Follow-ups from M3": the
+   context menu ignores the theme; whether the default `TextInput` view
+   breaks lines at U+2028 or a form feed; the `artifacts/test-evidence`
+   ignore rule against the RC checklist's layout; `SLINT_BACKEND=winit-x11`
+   in risk R8.
+8. **When a signing identity exists:** the first `-Sign` run on Windows
+   (M3-04), then M3-08.
+9. **Then M5:** cut `1.0.0-rc.1` (the version, the CHANGELOG heading, the
+   release notes with the Windows 10 statement) once M4's evidence is in.
 
----
+Not for RC1, and not to be started: notebook execution, semantic
+organisation (`bp-storage`, `bp-organize`), personality modes, syntax
+highlighting, Markdown preview (ADR-0030; U4 and D3 are open for 1.x).
+
+## Working with agents in this repository
+
+Seven sessions of evidence:
+
+- **Each agent gets its own worktree, cut from the working branch's HEAD**
+  (not `main`; `isolation: worktree` cuts from `main`), and its own
+  `CARGO_TARGET_DIR`. Sharing one target directory between trees makes cargo
+  reuse one tree's build of a workspace crate in another. It also bakes a
+  deleted worktree's path into test binaries through `CARGO_MANIFEST_DIR`:
+  after M1-18 the gate failed two drift tests looking for files in a
+  worktree that no longer existed. If a shared target is unavoidable
+  because disk is short, `touch` every `.rs` file in the workspace before
+  the gate.
+- **The container can restart and kill a running agent.** Its uncommitted
+  work survives in the worktree. Tell agents to commit each coherent slice
+  as they go, and when one is lost, resume from its diff.
+- **One crate per agent; serialise anything touching `bp-ui/src/state.rs`
+  or `ui/app.slint`.** Two agents in parallel on different crates merged
+  cleanly all session; the conflicts were always in `state.rs`.
+- **Review the substance, not the report.** Merging the viewer and the line
+  rule found a column tracker that counted only `\n`, which neither agent
+  could have seen alone.
+- **Ask for a test that fails without the fix**, and a property where one
+  exists. Every defect found by review was found that way.
+- **Tell agents to report problems outside their scope rather than fix
+  them**, and keep `scripts/Invoke-LocalCI.ps1` changes in their own commit.
+- **Code taking a `Platform` parameter must not use `std::path` to split
+  anything.** Use `bp_platform::paths::file_name` and `paths::join`; this has
+  been sprung twice.
+- **Disk:** a release build is about 12 GB and the full debug target about
+  15 GB. Build with `CARGO_INCREMENTAL=0`, and `CARGO_PROFILE_DEV_DEBUG=0`
+  when two builds share the disk.
 
 ## The `--editor-view` checklist, partly answered by a machine
 
@@ -289,208 +135,55 @@ cargo run --release -- --editor-view
 ```
 
 A person has still not done this. The sixth session drove the binary on a
-virtual X display with synthetic input, on Linux, which answers some rows
-and cannot answer the rest -- a synthetic click lands exactly where it was
-sent, and nobody was looking at the result as a user would.
+virtual X display with synthetic input, which answers some rows and cannot
+answer the rest.
 
 | Check | What would be wrong | Sixth session, Xvfb, Linux |
 | --- | --- | --- |
-| Type a character | Keys not reaching the `FocusScope` at all | **Works** |
-| Click mid-line | Caret lands left or right of the pointer — the measured advance is off | **Was wrong on Linux**: no Consolas, proportional fallback. The cause is removed by the bundled DejaVu Sans Mono (M0-03, ADR-0032); **not yet re-checked** |
-| Click at the end of a long line | Advance error accumulating across columns | **Was wrong on Linux**, same cause, and it did accumulate. Same fix; **not yet re-checked** |
-| Arrow down through a short line and back up | The goal column not surviving | Page Down kept the column; the round trip itself not run |
-| Drag to select | Selection rectangles misplaced, or drag not extending | Not run |
+| Type a character | Keys not reaching the `FocusScope` | **Works** |
+| Click mid-line | Caret left or right of the pointer: the measured advance is off | Was wrong on Linux (proportional fallback font). The bundled DejaVu Sans Mono (ADR-0032) removes the cause; **not re-checked** |
+| Click at the end of a long line | Advance error accumulating | Same cause, same fix; **not re-checked** |
+| Arrow down through a short line and back | The goal column lost | Page Down kept the column; the round trip not run |
+| Drag to select | Selection misplaced | Not run |
 | Scroll the wheel | Wrong direction, or snapping back to the caret | Not run |
-| **Ctrl+S** | The surface swallowing chords it should reject — this would stop saving | **Works** -- the file on disk had every edit |
-| Ctrl+D, Alt+Up, Alt+Down | Duplicate and move line, shipped this session, never run | Not run |
-| Watch the status bar | Ln/Col is the payoff; it should track the caret | **Works**, and shows `OVR` |
-| Open a tab-indented file | Tab stops wrong, caret off by columns | Not run |
-| Resize the window | Row count not following, blank strip at the bottom | Not run |
-| Home, End, Page Up/Down, Ctrl+Home/End, Insert | Keys unnamed, or landing on the wrong line | **Works** -- each checked by where a typed marker landed in the saved file |
-
-**The advance measurement was one of the two most likely to be subtly wrong,
-and on Linux it was -- not subtly.** The font is bundled now, so it should
-hold on both OSes, but a person has to look: the headless window tests send
-keys and never place the pointer. So does the wheel direction.
+| Ctrl+S | The surface swallowing chords | **Works** |
+| Ctrl+D, Alt+Up, Alt+Down | Duplicate and move line | Covered by window tests since; not run by hand |
+| Right-click, Menu key | The context menu (M1-18) | **Works** under Xvfb in both views |
+| Status bar | Ln/Col tracking the caret | **Works**, shows `OVR` |
+| A tab-indented file | Tab stops wrong | Not run |
+| Resize the window | Row count not following | Not run |
+| Home, End, Page Up/Down, Ctrl+Home/End, Insert | Keys unnamed or landing wrongly | **Works** |
 
 Write down what feels wrong, not only what breaks. The default is still
-`TextInput`, so nothing is lost if the answer is bad — and since M1-04 the
-caret features (Go to Line, Duplicate and Move Line, Insert Date/Time, Ln/Col)
-work in the default view too, so they no longer inherit whatever this caret
-does.
+`TextInput`, so nothing is lost if the answer is bad.
 
----
+## Housekeeping still open
 
-## What is no longer on this list
-
-Three items that headed previous versions of this plan are done, and are
-recorded here so nobody re-derives them:
-
-- **Wire the five built-but-unreachable things** — done, plus seven more.
-  Every library half in the old table has its menu row.
-- **Parity, or retire the flag** — settled, and not in the view's favour.
-  Word wrap works; input-method composition cannot be done on Slint 1.17.1
-  and the evidence is in `project/WORK_QUEUE.md`. `--editor-view` stays
-  opt-in and the default stays `TextInput`.
-- **Security profiles (phase 14)** — done. All three dependants read the
-  policy, Privacy Mode clamps it for the session, and phase 15 shipping means
-  the profiles wanting an encrypted journal are honoured rather than refused.
-
-The replacement for all three was Tier 0 of `project/WORK_QUEUE.md`: three
-crates and one module with no way in. The release plan has since replaced
-it as the thing to start from.
-
-## Decisions still waiting on a human
-
-The one list is [`project/DECISIONS_NEEDED.md`](DECISIONS_NEEDED.md), kept
-current as work happens; [`RELEASE_PLAN.md`](RELEASE_PLAN.md) §4 orders the
-same questions by the milestone each blocks. This section used to keep its
-own four-item copy, which fell behind the queue; it no longer duplicates it.
-The ones holding up M1 today are U3 (M1-06), D6 (M1-09), the copyright holder
-(M1-14) and U5 (M1-18).
-
-## Working with agents in this repository
-
-Three sessions of evidence, worth reading before dispatching any:
-
-- **`prompts/rosettas/R011_WIRE_CAPABILITY_INTO_SHELL.md` earns its keep.** An
-  agent that read it found and fixed an unbounded dispatch range that would
-  have swallowed its own new ids.
-- **Give one crate per agent.** Four ran concurrently without collision when
-  each owned one crate. The moment two want `bp-ui` or `app.slint`, serialise.
-- **Ask for a property, not more examples.** Every defect found by review this
-  session was found by a property — "moving a line down and back returns the
-  exact original bytes" caught two that example-based unit tests written
-  alongside the feature missed entirely.
-- **Tell them to report problems outside their scope rather than fix them.**
-  Both times an agent fixed something adjacent, it was wrong to: a JSON
-  reformatter that duplicated `bp-data` and disagreed with it on key order,
-  and the removal of the launch stage's timeout inside a "pure refactor"
-  commit.
-- **`scripts/Invoke-LocalCI.ps1` changes are their own commit, never a
-  passenger.** It is the thing that validates everything else.
-- **Review the substance, not the report.** Agents self-reported all green in
-  every case where a real defect was present.
-- **Code taking a `Platform` parameter must not use `std::path` to split
-  anything.** This has now been sprung twice. `4390593` recorded a surviving
-  mutation where `PathBuf::join` stood in for `bp_platform::paths::join` and
-  only the Linux leg would ever have failed. The fifth session's device-name
-  refusal did it again: the *judgement* was parameterised and the *split* was
-  `Path::file_name()`, which splits by the platform the binary was compiled
-  for — so on Linux `C:\Users\me\con.txt` is one file name containing no
-  device, and the Windows rule passed by never being evaluated. Windows had
-  been green for an hour. **`bp_platform::paths::file_name(platform, path)`
-  exists now**, with `Path::file_name`'s exact semantics and the platform made
-  explicit, so the correct thing is a drop-in rather than something you have
-  to know to spell as `components(platform, p).last()`. `paths::join` was
-  already the same fix for the writing direction.
-
-  Not made into a gate check, and that was measured rather than assumed: a
-  grep for host-dependent `std::path` calls in files that mention `Platform`
-  returns five hits and all five are legitimate -- `str::strip_prefix`, and
-  `path.parent()` on paths that really are the host's. A stage that cries
-  wolf gets disabled wholesale, which `docs/governance/LOCAL_CI.md` already
-  says about gates that are wrong. The enforcement is the primitive being
-  there and obvious.
-
----
-
-## Housekeeping
-
-- ~~**`bp-ui`'s tests create `%APPDATA%\bachelorpad\recovery`.**~~ **Done**
-  with ADR-0029, together with the `recent.toml` item it was paired with.
-  Worse than recorded: the tests were also replacing the developer's own
-  recent-files list with fixture paths. What was recorded: Empty --
-  every checkpoint they trigger is refused and refusal deletes -- so it is a
-  `mkdir` and nothing more. It is still a test reaching outside a temp
-  directory, and it is the same shape as the defect the security history hit
-  and now guards against: `AppState::new()` builds its `Journal` from the
-  real `recovery_dir()`. The fix is the one the history took, a field rather
-  than a global, and it wants doing with the item below about `recent.toml`
-  roaming, since both own `bp-config` and `bp-ui` together.
-
-
-- ~~**`ui/app.slint` wants splitting.**~~ **Done** — seven files. What is left
-  in it, and why each thing stayed, is in `docs/architecture/ARCHITECTURE.md`.
-  The popups were the one piece deliberately not moved: a `PopupWindow` is
-  positioned relative to its parent element, so moving them would change the
-  coordinate parent, and nothing in the gate can see a menu opening in the
-  wrong place.
-- ~~**Five agent worktrees under `.claude/worktrees/`.**~~ **Pruned**, after
-  each was checked file by file against what landed: the cross-crate test file
-  is byte-identical to `9d716f5`, `fuzz/README.md` to `db9af48`, and the
-  worktree carrying a draft `ADR-0022.md` held the *YAML* ADR, whose body is
-  byte-identical to the `ADR-0023.md` it was renumbered into. Nothing unique
-  was in any of them. Worth knowing for next time: **an abandoned worktree's
-  file can differ from the main tree and still be safe**, because the branch
-  moved on — the comparison that answers the question is against the commit
-  the work landed in, not against `HEAD`. It also removes the sixfold copy of
-  `fuzz/corpus/yaml/` that was breaking editor tooling.
-- ~~**All 59 commits live on `feat/phase-01-foundation-ui`.**~~ **Merged**:
-  `31f6858 Merge phases 1-19 into main (PR #1)`. The work since -- the sixth
-  and seventh sessions -- is on `claude/compassionate-wright-wwclxq`, open as
-  [PR #3](https://github.com/dboles99/bachelorpadplus_rust/pull/3) into
-  `main`. The local branch was 54 commits ahead of the last-fetched
-  `origin/main` when this was written; `git fetch` then
-  `git log --oneline origin/main..HEAD` gives today's count. The audit of
-  2026-09-25 recommends merging only after the Windows gate run (M0-12).
-- ~~**The panic discipline is real and unenforced.**~~ **Enforced now.**
-  There was not one `unwrap()`, `panic!`, `todo!` or `unimplemented!` in
-  production library code across all 24 crates before the lints were switched
-  on, which is why switching them on cost no code changes.
-  `[workspace.lints.clippy]` carries the four at `warn`, the gate's
-  `-D warnings` makes them errors, and `clippy.toml` exempts test code
-  because `unwrap()` in a fixture *is* the assertion.
-
-  Three exemptions, each narrow and each with its reason on it: Slint's
-  generated code moved behind a `mod generated` so its ~400 machine-written
-  panics stop drowning the lint that guards the hand-written 209 tests'
-  worth of shell around it; `bp-buffer`'s benchmark and `bp-naming`'s
-  property-strategy helpers carry file-level allows, because clippy's
-  `allow-unwrap-in-tests` recognises `#[test]` functions and `#[cfg(test)]`
-  blocks and neither of those is either; and `tests/integration` does not
-  inherit the lints at all, being test code end to end.
-
-  `expect_used` (nine in library code, all with a message saying what was
-  assumed), `unreachable` (one) and `indexing_slicing` (thirty-six) are
-  **not** on. Each is a change to the code rather than to the policy and
-  wants its own pass.
 - **Native Linux timing.** WSLg's compositor makes startup numbers
-  unrepresentative, so ADR-0015's evidence remains Windows-only.
-- **Scroll smoothness under CPU rasterisation** is the standing revert
-  condition on ADR-0017 and needs a capture rig. The custom view makes it more
-  pressing: it redraws a set of `Text` elements per scroll.
-- **Idle memory drifted from ~20 MB to ~32 MB** in one session after dialogs
-  had been opened. Below the 50 MB target, observed twice, never investigated.
-- **A clipboard menu row decodes its id against the history at click time**,
-  not when the menu was built, and a 1.2 s poll can shift it in between.
-  Pre-existing and applies to plain paste too; fixing it means freezing a
-  snapshot while a menu is open.
-- **`fuzz/corpus/yaml/` breaks editor tooling that scans the workspace.**
-  Google's Cloud Code extension crash-loops its YAML language server on
-  `billion-laughs.yaml` — a 570-byte file, 21 aborts in one window, and three
-  notifications that never mention YAML. No checked-in setting fixes it —
-  narrowing `cloudcode.yaml.yamlFileMatcher` was tried and does not, because
-  the server dies during initialisation. Disable the extension for this
-  workspace; nothing here is GCP. Any other tool that walks the tree for
-  `*.yaml` is a candidate; the `.claude/worktrees/` copies multiply it.
-  Reproduction and numbers in `fuzz/README.md`.
-
----
+  unrepresentative; ADR-0015's evidence is Windows-only. M4-01 is the fix.
+- **Scroll smoothness under CPU rasterisation** is ADR-0017's standing
+  revert condition and needs a capture rig.
+- **Idle memory drifted from ~20 MB to ~32 MB** after dialogs, observed
+  twice, never investigated. M1-01 replaced those dialogs; M4-03 measures.
+- **`expect_used`, `unreachable` and `indexing_slicing`** are not linted.
+  Each is a code change rather than a policy change and wants its own pass.
+- **`fuzz/corpus/yaml/` crashes editor tooling** that scans for `*.yaml`
+  (Google's Cloud Code YAML server). Disable that extension for this
+  workspace; details in `fuzz/README.md`.
 
 ## How to work in this repository
 
-- `./scripts/Invoke-LocalCI.ps1` is the gate: on Windows add `-Linux` for the
-  WSL leg; on a Linux host `pwsh -NoProfile -File scripts/Invoke-LocalCI.ps1`
-  runs every stage natively (M0-13). There is no hosted CI (ADR-0016):
-  `.github/workflows/ci.yml` runs only on `workflow_dispatch`. ADR-0016 also
-  records Actions as disabled at the repository level on 2026-08-17; that
-  setting lives on GitHub, not in the repository, and has not been
-  re-verified since.
+- `./scripts/Invoke-LocalCI.ps1` is the gate: on Windows add `-Linux` for
+  the WSL leg; on Linux run `pwsh -NoProfile -File
+  scripts/Invoke-LocalCI.ps1`. There is no hosted CI (ADR-0016):
+  `.github/workflows/ci.yml` runs only on `workflow_dispatch`, and runs the
+  gate script itself.
 - `./scripts/Install-GitHooks.ps1` once per clone; the hooks run the gate.
-- Every commit in this repository has passed the gate. Keep it that way.
-- `docs/decisions/` is the register; add an ADR when a decision has
-  consequences beyond one file.
-- **Do not edit files while the gate is running.** The Linux leg re-runs
-  `cargo fmt --check` from scratch, and a mid-run edit fails it for a reason
-  that has nothing to do with the change.
+- Releases are made by `scripts/Invoke-Release.ps1` on the owner's machines
+  (decision 19, the ADR-0016 amendment), never by CI.
+- `docs/decisions/` is the register (34 ADRs); add an ADR when a decision has
+  consequences beyond one file. `project/DECISIONS_NEEDED.md` is the queue of
+  questions only the owner can answer: ask them all at once, at the start.
+- **Do not edit files while the gate is running.** The formatting stage
+  re-reads the tree, and a mid-run edit fails it for no reason connected to
+  the change.

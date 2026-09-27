@@ -51,7 +51,7 @@ Core phrase:
 ## Suggested implementation style
 
 - Cargo workspace.
-- Slint is a leading UI candidate, but final UI toolkit should be benchmarked/prototyped before irreversible commitment.
-- SQLite for local metadata.
+- Slint (1.17.1) is the UI toolkit, chosen after prototyping (ADR-0015) and used under its Royalty-free Licence 2.0 (ADR-0031).
+- SQLite for local metadata (`bp-storage`; unwired for RC1, ADR-0030).
 - `bp-*` crate naming.
 - Strong tests, fuzzing and benchmark baselines from early phases.
