@@ -31,6 +31,7 @@ members = [
     "crates/bp-storage",
     "crates/bp-files",
     "crates/bp-theme",
+    "crates/bp-embeddings",
     "crates/bp-ui",
     "tests/integration",
 ]

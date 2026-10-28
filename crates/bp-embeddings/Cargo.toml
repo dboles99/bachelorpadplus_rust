@@ -1,0 +1,36 @@
+[package]
+name = "bp-embeddings"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+authors = ["BachelorPad+ contributors"]
+
+[dependencies]
+bp-security = { path = "../bp-security" }
+bp-platform = { path = "../bp-platform" }
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+tracing = "0.1"
+
+# Local provider dependencies (E2) - optional, not included by default
+# candle-core provides the tensor operations without pulling in CUDA/Metal
+# candle-core = { version = "0.3", optional = true }
+
+# Cloud provider dependencies (E3)
+reqwest = { version = "0.12", features = ["json"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
+serde_json = "1"
+
+[dev-dependencies]
+proptest = "1"
+
+[features]
+default = []
+# Enable to include the bundled model in the build (not recommended for general use)
+# bundled-model = []
+
+[lints.clippy]
+unwrap_used = "warn"
+panic = "warn"
+todo = "warn"
+unimplemented = "warn"
