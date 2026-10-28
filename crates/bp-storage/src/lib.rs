@@ -24,12 +24,20 @@
 
 use std::path::Path;
 
-use bp_security::Metadata;
+use bp_security::{Embeddings, Metadata, Policy};
 use rusqlite::{Connection, OptionalExtension, params};
 use thiserror::Error;
 
 mod migrations;
 pub use migrations::latest_version;
+
+/// A semantic embedding vector.
+///
+/// Stored as a fixed-size array of f32 values, serialized to bytes.
+/// The dimension is determined by the embedding model, not by this type.
+///
+/// `None` means no embedding has been computed for this document.
+pub type Embedding = Option<Vec<f32>>;
 
 /// Crate identity used by workspace smoke tests and diagnostics.
 pub const CRATE_NAME: &str = "bp-storage";
@@ -343,6 +351,131 @@ impl Store {
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
+    /// Store an embedding for a document.
+    ///
+    /// Returns `Ok(false)` if the document does not exist or the policy
+    /// forbids storing embeddings.
+    pub fn store_embedding(
+        &self,
+        document_id: i64,
+        embedding: &[f32],
+        policy: &Policy,
+    ) -> Result<bool, StoreError> {
+        if policy.embeddings == Embeddings::None {
+            return Ok(false);
+        }
+
+        let bytes: Vec<u8> = embedding
+            .iter()
+            .flat_map(|f| f.to_le_bytes().to_vec())
+            .collect();
+
+        let changed = self.connection.execute(
+            "UPDATE documents SET embedding = ?1 WHERE id = ?2 AND embedding IS NOT ?1",
+            params![bytes, document_id],
+        )? > 0;
+
+        if !changed {
+            self.connection.execute(
+                "UPDATE documents SET embedding = ?1 WHERE id = ?2",
+                params![bytes, document_id],
+            )?;
+        }
+
+        Ok(true)
+    }
+
+    /// Retrieve an embedding for a document.
+    pub fn embedding_of(&self, document_id: i64) -> Result<Embedding, StoreError> {
+        let bytes: Option<Vec<u8>> = self
+            .connection
+            .query_row(
+                "SELECT embedding FROM documents WHERE id = ?1",
+                params![document_id],
+                |row| row.get::<_, Option<Vec<u8>>>(0),
+            )
+            .optional()?
+            .flatten();
+
+        Ok(bytes.map(|b| {
+            // SAFETY: embedding bytes are always stored as f32 values in little-endian,
+            // so they are always divisible by 4. This is validated when storing.
+            let chunks = b.as_chunks::<4>();
+            chunks
+                .0
+                .iter()
+                .map(|c| f32::from_le_bytes(*c))
+                .collect()
+        }))
+    }
+
+    /// Clear an embedding for a document.
+    pub fn clear_embedding(&self, document_id: i64) -> Result<bool, StoreError> {
+        let removed = self.connection.execute(
+            "UPDATE documents SET embedding = NULL WHERE id = ?1",
+            params![document_id],
+        )?;
+        Ok(removed > 0)
+    }
+
+    /// Find documents similar to the given embedding using cosine similarity.
+    ///
+    /// Returns documents with embeddings, ordered by similarity (descending).
+    ///
+    /// **Must work with zero vectors stored** -- that is the `None` default,
+    /// and it is every user until a provider ships.
+    pub fn similar_to(
+        &self,
+        embedding: &[f32],
+        limit: usize,
+        policy: &Policy,
+    ) -> Result<Vec<(DocumentRecord, f32)>, StoreError> {
+        if policy.embeddings == Embeddings::None {
+            return Ok(Vec::new());
+        }
+
+        let query_norm = norm(embedding);
+
+        let mut statement = self.connection.prepare(
+            "SELECT id, path, title, first_seen, last_seen, embedding
+               FROM documents
+              WHERE embedding IS NOT NULL
+              ORDER BY id",
+        )?;
+
+        let mut results = Vec::new();
+        let mut rows = statement.query(params![])?;
+
+        while let Some(row) = rows.next()? {
+            let record = DocumentRecord {
+                id: row.get(0)?,
+                path: row.get(1)?,
+                title: row.get(2)?,
+                first_seen: row.get(3)?,
+                last_seen: row.get(4)?,
+            };
+            let stored_bytes: Vec<u8> = row.get::<_, Option<Vec<u8>>>(5)?.unwrap_or_default();
+            let stored: Vec<f32> = stored_bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|c| f32::from_le_bytes(*c))
+                .collect();
+
+            if stored.len() != embedding.len() {
+                continue;
+            }
+
+            let similarity = cosine_similarity(embedding, &stored, query_norm);
+            if similarity > 0.0 {
+                results.push((record, similarity));
+            }
+        }
+
+        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        Ok(results.into_iter().take(limit).collect())
+    }
+
     /// Every tag currently in use, with how many documents carry it, most
     /// frequent first.
     ///
@@ -445,6 +578,33 @@ fn document_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DocumentRecord
 fn path_str(path: &Path) -> Result<&str, StoreError> {
     path.to_str()
         .ok_or_else(|| StoreError::UnsupportedPath(path.display().to_string()))
+}
+
+/// Compute the L2 norm of a vector.
+fn norm(v: &[f32]) -> f32 {
+    v.iter().map(|x| x * x).sum::<f32>().sqrt()
+}
+
+/// Compute cosine similarity between two vectors.
+///
+/// Returns a value in [-1, 1] where 1 means identical direction,
+/// 0 means orthogonal, and -1 means opposite.
+///
+/// Pre-normalized version: if `a_norm` is provided (the norm of vector a),
+/// we only need to compute the norm of b once.
+fn cosine_similarity(a: &[f32], b: &[f32], a_norm: f32) -> f32 {
+    if a.len() != b.len() {
+        return 0.0;
+    }
+
+    let dot_product: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    let b_norm = norm(b);
+
+    if a_norm == 0.0 || b_norm == 0.0 {
+        return 0.0;
+    }
+
+    (dot_product / (a_norm * b_norm)).clamp(-1.0, 1.0)
 }
 
 #[cfg(test)]
@@ -1093,5 +1253,148 @@ mod tests {
             "a PathOnly write must not smuggle a new title in, and does not \
              erase the old one either -- erasing is a separate operation"
         );
+    }
+
+    // --- embeddings (Phase 10, E1) ----------------------------------------------
+
+    #[test]
+    fn embedding_stores_and_retrieves_a_vector() {
+        let store = store();
+        let id = store
+            .record_document(&path("note.md"), None, 1, Metadata::Summary)
+            .unwrap()
+            .unwrap();
+
+        let embedding = vec![0.1, 0.2, 0.3, 0.4];
+        let policy = bp_security::Profile::Standard.policy();
+
+        store.store_embedding(id, &embedding, &policy).unwrap();
+        let retrieved = store.embedding_of(id).unwrap().unwrap();
+
+        assert_eq!(retrieved.len(), embedding.len());
+        for (a, b) in embedding.iter().zip(retrieved.iter()) {
+            assert!((a - b).abs() < 0.0001, "values must match");
+        }
+    }
+
+    #[test]
+    fn embedding_none_policy_refuses_storage() {
+        let store = store();
+        let id = store
+            .record_document(&path("note.md"), None, 1, Metadata::Summary)
+            .unwrap()
+            .unwrap();
+
+        let embedding = vec![0.1, 0.2, 0.3];
+        let mut policy = bp_security::Profile::Standard.policy();
+        policy.embeddings = bp_security::Embeddings::None;
+
+        assert!(!store.store_embedding(id, &embedding, &policy).unwrap());
+        assert!(store.embedding_of(id).unwrap().is_none());
+    }
+
+    #[test]
+    fn similar_to_returns_empty_when_no_embeddings_exist() {
+        let store = store();
+        let embedding = vec![0.1, 0.2, 0.3];
+        let policy = bp_security::Profile::Standard.policy();
+
+        let results = store.similar_to(&embedding, 10, &policy).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn similar_to_returns_documents_ordered_by_similarity() {
+        let store = store();
+        let policy = bp_security::Profile::Standard.policy();
+
+        let doc_a = store
+            .record_document(&path("a.md"), None, 1, Metadata::Summary)
+            .unwrap()
+            .unwrap();
+        let doc_b = store
+            .record_document(&path("b.md"), None, 2, Metadata::Summary)
+            .unwrap()
+            .unwrap();
+        let doc_c = store
+            .record_document(&path("c.md"), None, 3, Metadata::Summary)
+            .unwrap()
+            .unwrap();
+
+        let embedding_a = vec![1.0, 0.0, 0.0, 0.0];
+        let embedding_b = vec![0.707, 0.707, 0.0, 0.0];
+        let embedding_c = vec![0.5, 0.5, 0.5, 0.5];
+
+        store.store_embedding(doc_a, &embedding_a, &policy).unwrap();
+        store.store_embedding(doc_b, &embedding_b, &policy).unwrap();
+        store.store_embedding(doc_c, &embedding_c, &policy).unwrap();
+
+        let query = vec![1.0, 0.0, 0.0, 0.0];
+        let results = store.similar_to(&query, 10, &policy).unwrap();
+
+        assert_eq!(
+            results.len(),
+            3,
+            "all three should have positive similarity"
+        );
+        assert!(results[0].1 > results[1].1);
+        assert!(results[1].1 > results[2].1);
+        assert_eq!(results[0].0.id, doc_a, "a is most similar to query");
+        assert_eq!(results[1].0.id, doc_b, "b is second most similar");
+        assert_eq!(results[2].0.id, doc_c, "c is least similar");
+    }
+
+    #[test]
+    fn similar_to_respects_limit() {
+        let store = store();
+        let policy = bp_security::Profile::Standard.policy();
+
+        for i in 0..5 {
+            let doc = store
+                .record_document(&path(&format!("doc{}.md", i)), None, 1, Metadata::Summary)
+                .unwrap()
+                .unwrap();
+            store
+                .store_embedding(doc, &[1.0, 0.0, 0.0], &policy)
+                .unwrap();
+        }
+
+        let query = vec![1.0, 0.0, 0.0];
+        let results = store.similar_to(&query, 3, &policy).unwrap();
+        assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn clear_embedding_removes_the_vector() {
+        let store = store();
+        let id = store
+            .record_document(&path("note.md"), None, 1, Metadata::Summary)
+            .unwrap()
+            .unwrap();
+
+        let policy = bp_security::Profile::Standard.policy();
+
+        store.store_embedding(id, &[0.1, 0.2], &policy).unwrap();
+        assert!(store.embedding_of(id).unwrap().is_some());
+
+        store.clear_embedding(id).unwrap();
+        assert!(store.embedding_of(id).unwrap().is_none());
+    }
+
+    #[test]
+    fn similar_to_returns_empty_when_policy_is_none() {
+        let store = store();
+        let id = store
+            .record_document(&path("note.md"), None, 1, Metadata::Summary)
+            .unwrap()
+            .unwrap();
+
+        let embedding = vec![0.1, 0.2, 0.3];
+        let mut policy = bp_security::Profile::Standard.policy();
+        policy.embeddings = bp_security::Embeddings::None;
+
+        store.store_embedding(id, &embedding, &policy).unwrap();
+        let results = store.similar_to(&embedding, 10, &policy).unwrap();
+        assert!(results.is_empty());
     }
 }
