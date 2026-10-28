@@ -234,6 +234,16 @@ impl Editor {
         &self.buffer
     }
 
+    /// Mutable access to the underlying buffer.
+    ///
+    /// Needed to set the buffer's access level when a file is opened, so
+    /// that read-only files refuse edits at the rope level rather than at
+    /// the save dialog. This is `pub` rather than `pub(crate)` because
+    /// `bp-ui` needs it and it is the only caller.
+    pub fn buffer_mut(&mut self) -> &mut Buffer {
+        &mut self.buffer
+    }
+
     pub fn text(&self) -> String {
         self.buffer.to_string()
     }

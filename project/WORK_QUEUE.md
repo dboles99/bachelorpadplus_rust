@@ -193,6 +193,9 @@ so whoever finishes an item updates them as part of it.
 | — | Organize ▸ Suggested Folder | ADR-0048, id 702 |
 | — | Run ▸ Run Document, Interpreters | ADR-0048, ids 751-752, and `Language::{all,interpreter}` |
 | — | Security ▸ Lock Document | ADR-0048, id 212 |
+| — | `Buffer::access` wired to file permissions | ADR-0083, `bp-files`, `bp-editor`, `bp-ui` |
+| — | Status bar reports Ln/Col in both surfaces | ADR-0084, `bp-ui` |
+| — | Recovery journal warns once when it would write secrets in plaintext | ADR-0085, `bp-ui` |
 
 Every library half now has its row.
 
@@ -274,13 +277,11 @@ first, so neither is the pure wiring P1 and P3 were.**
 
 | # | Item | Why it is ready |
 | --- | --- | --- |
-| **C1** | **`Buffer::access` is set by nothing -- wire it, or delete it.** `set_access` and `with_access` have **zero callers** outside `bp-buffer`, so the read-only guards in `insert`/`remove` have never once fired | **Decided by evidence, not a design pass, which is what R1 was sized as.** Downstream deleted the type ([ADR-0066 there](../../bachelorpluslite/docs/decisions/ADR-0066.md)) because Lite has neither a huge-document viewer nor Lock Document. **This product has both**, so the same finding argues the other way: `LargeFile::open` already computes an `Access`, and Security ▸ Lock Document is a second producer nobody connected. **Adapt, do not adopt** |
-| **C2** | **The status bar could say `Ln 42, Col 18` in both surfaces.** `cursor_label` returns a bare line count under `TextInput` | specs.md §3 asks for line and column, and the reason it was refused is gone. **Deliberately not taken with ADR-0080**, and the reason is the item's whole shape: that change took the caret for rows that *edit* at it, where a wrong answer is visible at once. A status bar refreshed on **every keystroke** is a different risk profile, and it needs a caret feed into `AppState`, which `cursor_label` cannot reach today |
+| **C2** | **The status bar could say `Ln 42, Col 18` in both surfaces.** `cursor_label` returns a bare line count under `TextInput` | **Done.** ADR-0084: `caret_byte_offset` field in `AppState`, captured during refresh and converted to position in `cursor_label()` |
 
-| **C3** | **The recovery journal writes secrets to disk in cleartext, and nothing tells the user.** Found in the wild on 2026-09-10: a stray journal on this machine held two API-key-shaped strings beside the service names they belonged to, in plaintext, for six days | **Working as designed, which is the point.** Under Standard the journal is on and unencrypted (ADR-0020), and that is the documented behaviour. But `bp-secrets::scan` would have called both of those strings secrets, and **nothing connects the two**: a buffer the scanner would flag is journalled in cleartext anyway and the user is never told. Options, cheapest first -- warn once when a journalled buffer scans dirty; refuse to journal it; or journal it sealed regardless of profile. **A decision, so an ADR** -- the third silently changes what a profile promises |
+| **C3** | **The recovery journal writes secrets to disk in cleartext, and nothing tells the user.** Found in the wild on 2026-09-10: a stray journal on this machine held two API-key-shaped strings beside the service names they belonged to, in plaintext, for six days | **Done.** ADR-0085: `bp-secrets::scan` wired into `checkpoint_all`; warns once per session when a plaintext journal would receive a document containing credentials, with at least `Confidence::Medium` |
 
-**Neither C1 nor C2 is blocked on a decision.** C1 needs an ADR because it either deletes
-a public type or gives it its first producer; C2 needs one only if it changes
+**C2 is not blocked on a decision.** C2 needs one only if it changes
 how often `refresh` runs.
 
 ### Also ready, and not packaging

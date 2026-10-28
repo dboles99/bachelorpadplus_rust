@@ -37,11 +37,14 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
+use bp_buffer::Access;
 use bp_config::Recent;
 use bp_core::{Document, DocumentId, Encoding, LineEnding, UNTITLED, Workspace};
 use bp_files::{DiskState, FileStamp, LineEndingPolicy, SaveOptions, atomic_write, encode, load};
 use bp_formats::Format;
 use bp_naming::SemanticName;
+use bp_secrets::Confidence;
+use bp_security::Recovery;
 use bp_theme::ThemeId;
 use time::OffsetDateTime;
 
@@ -131,6 +134,13 @@ pub struct AppState {
     /// one taller than the window has to be scrollable through, and a
     /// line-only anchor could only jump over it.
     pub(crate) anchor: bp_editor::view::Anchor,
+    /// The caret's byte offset in the active TextInput, for status bar display.
+    ///
+    /// Updated by `capture_caret_byte_offset` during refresh. Only used
+    /// when `!editor_view`, because under EditorSurface the editor owns its
+    /// caret. Holds the offset from Slint's `cursor-position-byte-offset`
+    /// property.
+    pub(crate) caret_byte_offset: usize,
     /// How many rows fit in it. Slint measures and tells us.
     pub(crate) visible_rows: usize,
     /// How many characters fit across it, for wrapping. Slint measures this
@@ -149,6 +159,9 @@ pub struct AppState {
     /// reports it; nothing here asks the platform directly.
     pub(crate) system_dark: Option<bool>,
     pub(crate) error: Option<String>,
+    /// Whether the "document contains secrets in plaintext journal" warning
+    /// has been shown this session. One shot per session to avoid spam.
+    pub(crate) secrets_warning_shown: std::cell::Cell<bool>,
     /// Cached gutter text, and the line count it was built for.
     ///
     /// Rebuilding this on every keystroke was the single largest avoidable
@@ -309,12 +322,16 @@ impl AppState {
         let mut workspace = Workspace::new();
         let id = workspace.open_new(now());
         let mut editors = HashMap::new();
-        editors.insert(id, bp_editor::Editor::default());
+        let mut editor = bp_editor::Editor::default();
+        // A new document has no backing file, so it is editable by default.
+        editor.buffer_mut().set_access(Access::Editable);
+        editors.insert(id, editor);
         Self {
             workspace,
             editors,
             editor_view: false,
             anchor: bp_editor::view::Anchor::default(),
+            caret_byte_offset: 0,
             // Replaced by Slint's own measurement as soon as the surface has
             // a height; only Page Up before the first frame would see this.
             visible_rows: 30,
@@ -325,6 +342,7 @@ impl AppState {
             follow_system_theme: false,
             system_dark: None,
             error: None,
+            secrets_warning_shown: std::cell::Cell::new(false),
             gutter: String::new(),
             gutter_lines: usize::MAX,
             show_gutter: true,
@@ -385,10 +403,41 @@ impl AppState {
                 continue;
             }
 
+            let text = self.text_of(id).to_owned();
+            // Scan for secrets before writing to the recovery journal.
+            // If the document contains credentials and the profile allows
+            // plaintext journaling, warn the user once so they can decide
+            // whether to encrypt the document or clear the journal.
+            // Sealed journals are already encrypted, so no warning is needed.
+            let has_secrets = !bp_secrets::scan(&text)
+                .iter()
+                .filter(|f| f.confidence >= Confidence::Medium)
+                .collect::<Vec<_>>()
+                .is_empty();
+            if has_secrets {
+                let recovery = doc.security().policy_under(self.privacy).recovery;
+                if matches!(recovery, Recovery::Plaintext) {
+                    // Only warn once per session; do not spam on every
+                    // keystroke. A sealed or disabled journal is opt-in;
+                    // this warning is for the user who does not know they
+                    // are writing plaintext secrets to disk.
+                    if !self.secrets_warning_shown.get() {
+                        self.secrets_warning_shown.set(true);
+                        self.error = Some(
+                            "this document contains what looks like a \
+                             credential and is being written to the recovery \
+                             journal in plaintext; encrypt the document to \
+                             silence this warning"
+                                .to_owned(),
+                        );
+                    }
+                }
+            }
+
             let entry = bp_history::Checkpoint {
                 path: doc.path().map(Path::to_path_buf),
                 name: doc.display_name().to_owned(),
-                text: self.text_of(id).to_owned(),
+                text,
                 written_at: bp_history::now_unix(),
                 encoding: checkpoint_encoding_of(doc.encoding()),
                 line_ending: Some(checkpoint_line_ending_of(doc.line_ending())),
@@ -434,7 +483,12 @@ impl AppState {
                 Some(path) => self.workspace.open_path(path, now()),
                 None => self.workspace.open_new(now()),
             };
-            self.editors.insert(id, bp_editor::Editor::new(&entry.text));
+            let mut editor = bp_editor::Editor::new(&entry.text);
+            // A recovered checkpoint was in memory and is therefore editable.
+            // The file it came from may have been read-only, but the recovery
+            // journal is the source of truth now, and it holds editable text.
+            editor.buffer_mut().set_access(Access::Editable);
+            self.editors.insert(id, editor);
             if let Some(doc) = self.workspace.get_mut(id) {
                 doc.set_encoding(encoding_of_checkpoint(entry.encoding));
                 // A pre-upgrade checkpoint has no recorded line ending; guess
@@ -671,7 +725,10 @@ impl AppState {
                     // Back in step with disk, so the document is clean again.
                     doc.record_disk_save(now());
                 }
-                self.editors.insert(id, bp_editor::Editor::new(&file.text));
+                let mut editor = bp_editor::Editor::new(&file.text);
+                let access = Access::of(file.bytes_on_disk, file.file_is_read_only);
+                editor.buffer_mut().set_access(access);
+                self.editors.insert(id, editor);
                 self.mark_in_step(id, &path);
             }
             Err(e) => self.error = Some(e.to_string()),
@@ -789,7 +846,10 @@ impl AppState {
     pub(crate) fn new_document(&mut self) {
         self.error = None;
         let id = self.workspace.open_new(now());
-        self.editors.insert(id, bp_editor::Editor::default());
+        let mut editor = bp_editor::Editor::default();
+        // A new document has no backing file, so it is editable by default.
+        editor.buffer_mut().set_access(Access::Editable);
+        self.editors.insert(id, editor);
     }
 
     pub(crate) fn open(&mut self, path: PathBuf) {
@@ -813,7 +873,13 @@ impl AppState {
                     doc.set_encoding(file.encoding);
                     doc.set_line_ending(file.line_ending);
                 }
-                self.editors.insert(id, bp_editor::Editor::new(&file.text));
+                // Set the editor's buffer access from the file's own permissions.
+                // A file read-only on disk will refuse edits at the rope level,
+                // matching the behaviour of a huge file opened in a viewer.
+                let mut editor = bp_editor::Editor::new(&file.text);
+                let access = Access::of(file.bytes_on_disk, file.file_is_read_only);
+                editor.buffer_mut().set_access(access);
+                self.editors.insert(id, editor);
                 self.sizes.insert(id, file.bytes_on_disk);
                 self.mark_in_step(id, &path2);
             }
@@ -1417,10 +1483,16 @@ impl AppState {
     /// never reconciled because nothing forced the two to be read together.
     ///
     /// The label itself is deliberately still the line count here. ADR-0080
-    /// took the caret for the rows that *edit* at it, where a wrong answer is
-    /// visible immediately; a status bar refreshed on every keystroke is a
-    /// different risk profile and wants its own decision, which is a queue
-    /// item rather than a side effect of this one.
+    /// Returns the cursor position label for the status bar.
+    ///
+    /// For viewers: reports the viewport position.
+    /// For both editor surfaces: reports "Ln X, Col Y".
+    ///
+    /// ADR-0080 confirmed that TextInput exposes its caret as byte offsets
+    /// via `cursor-position-byte-offset` and `anchor-position-byte-offset`.
+    /// The byte offset is converted to a character position using the
+    /// buffer's own conversion, so multi-byte characters are handled
+    /// correctly.
     pub(crate) fn cursor_label(&self) -> String {
         // A viewer has no caret -- there is no rope for a position to be in --
         // so it reports where in the document the screen is instead. Asked
@@ -1431,16 +1503,24 @@ impl AppState {
             return crate::viewer::viewer_label(view.top(), self.drawn_rows);
         }
         let lines = self.gutter_lines;
-        if !self.editor_view {
+        let Some(editor) = self.active_editor() else {
             return format!("{lines} lines");
+        };
+        // For both TextInput and EditorSurface, we can report line and column.
+        // Under TextInput the caret is managed by Slint, but we still have the
+        // buffer and can compute the position once we have the byte offset.
+        // That byte offset is stored in the state after refresh captures it
+        // from the UI (see `capture_caret_byte_offset`).
+        if !self.editor_view {
+            // TextInput: use the captured byte offset.
+            let byte_offset = self.caret_byte_offset;
+            let char_idx = editor.buffer().char_of_byte(byte_offset);
+            let position = editor.buffer().position_of(char_idx);
+            return format!("Ln {}, Col {}", position.line, position.column);
         }
-        self.active_editor().map_or_else(
-            || format!("{lines} lines"),
-            |editor| {
-                let position = editor.position();
-                format!("Ln {}, Col {}", position.line, position.column)
-            },
-        )
+        // EditorSurface: the editor owns its caret.
+        let position = editor.position();
+        format!("Ln {}, Col {}", position.line, position.column)
     }
 
     /// Scroll so the caret is on screen, moving as little as possible.
