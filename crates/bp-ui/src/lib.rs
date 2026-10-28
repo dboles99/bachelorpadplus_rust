@@ -81,6 +81,37 @@ pub enum UiError {
     Platform(#[from] slint::PlatformError),
 }
 
+/// The file name of the window icon.
+///
+/// ADR-0086: the icon ships beside the executable. Slint 1.17 cannot decode
+/// ICO, so the window icon is always the PNG regardless of platform.
+fn window_icon_file_name() -> &'static str {
+    "io.github.dboles99.BachelorPadPlus.png"
+}
+
+/// The path to the window icon, if it exists beside the executable.
+///
+/// Returns `None` if the icon is missing -- a cosmetic loss, not an error.
+/// Slint falls back to its own default, and refusing to start over a missing
+/// icon would turn a cosmetic loss into an outage.
+fn window_icon_path() -> Option<String> {
+    // The executable's directory, found by the same path resolution the
+    // release scripts use: beside the binary.
+    let exe_path = std::env::current_exe().ok()?;
+    let icon_path = exe_path
+        .parent()
+        .map(|dir| dir.join(window_icon_file_name()))
+        .expect("executable has no parent directory");
+
+    if icon_path.exists() {
+        Some(icon_path.to_string_lossy().into_owned())
+    } else {
+        // Not an error; the archive might be incomplete or the user might
+        // have deleted it. Log nothing; the absence is invisible.
+        None
+    }
+}
+
 fn apply_theme(ui: &AppWindow, theme: ThemeId) {
     let p: ThemePalette = theme.palette();
     let c = |v: bp_theme::Rgb| slint::Color::from_rgb_u8(v.r, v.g, v.b);
@@ -1287,6 +1318,18 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
                 dispatch::reveal(&ui, &mut cell.borrow_mut(), &range);
             }
         });
+    }
+
+    // Window icon (ADR-0086). Slint 1.17 cannot decode ICO, so the window
+    // icon must be the PNG. Set here rather than embedded at compile time
+    // so the icon can be swapped without rebuilding.
+    if let Some(icon_path) = window_icon_path() {
+        // Slint's Image::load_from_path loads an image from a file path.
+        // If the file is missing or corrupt, it returns an error, which we
+        // handle by falling back to the default (1x1 transparent).
+        ui.set_window_icon(
+            slint::Image::load_from_path(std::path::Path::new(&icon_path)).unwrap_or_default(),
+        );
     }
 
     ui.run()?;

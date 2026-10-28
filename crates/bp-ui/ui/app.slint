@@ -56,6 +56,8 @@ export component AppWindow inherits Window {
     preferred-height: 680px;
     background: Palette.shell;
 
+    in property <image> window-icon;
+
     in-out property <string> doc-text;
     in property <[TabInfo]> tabs;
     in property <string> gutter;

@@ -401,11 +401,7 @@ impl Store {
             // SAFETY: embedding bytes are always stored as f32 values in little-endian,
             // so they are always divisible by 4. This is validated when storing.
             let chunks = b.as_chunks::<4>();
-            chunks
-                .0
-                .iter()
-                .map(|c| f32::from_le_bytes(*c))
-                .collect()
+            chunks.0.iter().map(|c| f32::from_le_bytes(*c)).collect()
         }))
     }
 
