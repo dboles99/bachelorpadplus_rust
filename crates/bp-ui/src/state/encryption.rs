@@ -28,6 +28,8 @@
 
 use std::path::{Path, PathBuf};
 
+use bp_buffer::Access;
+
 use bp_core::DocumentId;
 use bp_files::{SaveOptions, atomic_write};
 
@@ -164,7 +166,14 @@ impl AppState {
                     None => text,
                 };
 
-                self.editors.insert(id, bp_editor::Editor::new(&text));
+                let mut editor = bp_editor::Editor::new(&text);
+                // An encrypted document that has been unlocked is editable.
+                // The file on disk is a `.bpadx` envelope; the fact that we
+                // have the text means we have the key, so the document is
+                // editable. The read-only check for the `.bpadx` file itself
+                // happens at save time, not here.
+                editor.buffer_mut().set_access(Access::Editable);
+                self.editors.insert(id, editor);
                 self.passphrases
                     .insert(id, zeroize::Zeroizing::new(passphrase.to_owned()));
                 self.mark_in_step(id, &path);

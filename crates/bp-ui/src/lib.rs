@@ -180,6 +180,11 @@ fn refresh(ui: &AppWindow, state: &mut state::AppState, push_text: state::PushTe
     if state.sync_gutter() {
         ui.set_gutter(state.gutter.as_str().into());
     }
+    // Capture the caret byte offset for TextInput so the status bar can
+    // report line and column. ADR-0080 confirmed this property exists.
+    if !state.editor_view {
+        state.caret_byte_offset = usize::try_from(ui.get_caret_byte_offset()).unwrap_or(0);
+    }
     let cursor = state.cursor_label();
     let format = state.format();
 

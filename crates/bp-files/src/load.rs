@@ -67,6 +67,13 @@ pub struct LoadedFile {
     pub line_ending: LineEnding,
     /// Size on disk, before BOM stripping or decoding.
     pub bytes_on_disk: u64,
+    /// Whether the file on disk is read-only (permissions).
+    ///
+    /// This is the file's own property, not a document property: a file
+    /// opened read-only here can still be saved under a different name
+    /// (Save As), and a file that is not read-only on disk can be locked
+    /// from the UI (Security ▸ Lock Document).
+    pub file_is_read_only: bool,
 }
 
 /// Read a text file, detecting its encoding and line endings.
@@ -84,11 +91,16 @@ pub struct LoadedFile {
 /// one is indistinguishable from binary without statistical guessing, and a
 /// wrong guess is the mangling this crate refuses.
 pub fn load(path: &Path) -> Result<LoadedFile, LoadError> {
+    let metadata = std::fs::metadata(path).map_err(|source| LoadError::Read {
+        path: path.to_owned(),
+        source,
+    })?;
     let bytes = std::fs::read(path).map_err(|source| LoadError::Read {
         path: path.to_owned(),
         source,
     })?;
     let bytes_on_disk = bytes.len() as u64;
+    let file_is_read_only = metadata.permissions().readonly();
     let encoding = Encoding::detect_bom(&bytes);
     // `Encoding::Utf8` has an empty mark, so this covers all four cases.
     let body = &bytes[encoding.bom().len()..];
@@ -119,6 +131,7 @@ pub fn load(path: &Path) -> Result<LoadedFile, LoadError> {
         encoding,
         line_ending,
         bytes_on_disk,
+        file_is_read_only,
     })
 }
 
