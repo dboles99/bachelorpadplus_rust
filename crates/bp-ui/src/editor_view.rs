@@ -796,7 +796,9 @@ mod tests {
         state.edit("one\ntwo".to_owned());
         state.sync_gutter();
 
-        assert_eq!(state.cursor_label(), "2 lines", "TextInput hides its caret");
+        // ADR-0084: TextInput now exposes cursor-position-byte-offset,
+        // so cursor_label shows Ln/Col in both surfaces, not just line count.
+        assert_eq!(state.cursor_label(), "Ln 1, Col 1");
 
         state.editor_view = true;
         state.active_editor_mut().unwrap().set_cursor(5);

@@ -233,7 +233,9 @@ proptest! {
             return Ok(());
         }
         let spans: Vec<Span<'_>> = offsets
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|chunk| Span::new(chunk[0], chunk[1]))
             .collect();
 

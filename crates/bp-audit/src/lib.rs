@@ -1085,7 +1085,7 @@ fn hex_decode(text: &str) -> Option<Vec<u8>> {
     }
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len() / 2);
-    for pair in bytes.chunks_exact(2) {
+    for pair in bytes.as_chunks::<2>().0.iter() {
         let hi = (pair[0] as char).to_digit(16)?;
         let lo = (pair[1] as char).to_digit(16)?;
         out.push(u8::try_from(hi * 16 + lo).ok()?);
