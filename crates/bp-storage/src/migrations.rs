@@ -45,6 +45,12 @@ pub(crate) const MIGRATIONS: &[&str] = &[
 
     CREATE INDEX document_tags_tag ON document_tags (tag_id);
     ",
+    // --- 2: embeddings column for semantic search (Phase 10, E1) ---
+    r#"
+    ALTER TABLE documents ADD COLUMN embedding BLOB;
+    
+    CREATE INDEX documents_embedding ON documents (embedding);
+    "#,
 ];
 
 /// The schema version this build produces.
