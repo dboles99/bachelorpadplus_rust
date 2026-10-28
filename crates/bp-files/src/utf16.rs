@@ -80,7 +80,9 @@ pub(crate) fn decode(body: &[u8], endian: Endian) -> Result<String, Utf16Error> 
     }
 
     let units = body
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| endian.unit([pair[0], pair[1]]));
 
     // One byte of UTF-8 per code unit is the floor, and the common case for

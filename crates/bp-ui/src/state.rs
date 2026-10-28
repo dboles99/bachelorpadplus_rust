@@ -2562,6 +2562,23 @@ mod tests {
     }
 
     #[test]
+    fn a_stamp_is_inserted_at_the_caret_under_textinput_surface() {
+        let mut state = AppState::new();
+        state.editor_view = false;
+        state.edit("ab".to_owned());
+        state.active_editor_mut().unwrap().set_cursor(1);
+
+        assert!(state.insert_stamp(0), "Date is the first stamp");
+
+        let text = state.active_text();
+        assert!(
+            text.starts_with('a') && text.ends_with('b') && text.len() > 2,
+            "the stamp landed at the caret; got {text:?}"
+        );
+        assert!(state.workspace.active().unwrap().is_dirty());
+    }
+
+    #[test]
     fn a_stamp_index_past_the_end_of_the_list_changes_nothing() {
         // The ids are a base plus an offset, so an id from a stale menu can
         // name a row that no longer exists.
