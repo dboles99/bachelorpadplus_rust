@@ -67,6 +67,26 @@ pub enum SaveError {
     #[error("{} already exists", .path.display())]
     AlreadyExists { path: PathBuf },
 
+    /// The file on disk is marked read-only, and we know it rather than
+    /// guessing.
+    ///
+    /// **Separate from [`SaveError::Replace`] because the way out differs.**
+    /// Replace lists three candidate causes and hedges with "may be", which is
+    /// honest when the cause is unknown and needlessly vague when it is not:
+    /// at the moment a replace fails, the file can be stat'ed.
+    ///
+    /// Only raised when the attribute is *set*. On Unix
+    /// `Permissions::readonly()` reports "no write bit for anyone", which is a
+    /// different question from "may this process write it" -- a file owned by
+    /// somebody else with mode 644 answers `false` and still refuses us. That
+    /// case keeps `Replace`'s hedge, because there the hedge is true.
+    #[error(
+        "cannot save {} -- the file is marked read-only. Use Save As to write a \
+         copy somewhere else, or clear the read-only attribute and try again",
+        .path.display()
+    )]
+    ReadOnlyFile { path: PathBuf },
+
     #[error(
         "cannot replace {} -- it may be read-only, open in another program, or in a \
          directory that no longer exists: {source}",
@@ -184,9 +204,21 @@ pub fn atomic_write(
     // The atomic step. Everything before this touched only the temp file, so
     // any earlier failure leaves the user's file exactly as it was.
     let _persisted = match options.overwrite {
-        Overwrite::Replace => temp.persist(target).map_err(|e| SaveError::Replace {
-            path: path.to_owned(),
-            source: e.error,
+        Overwrite::Replace => temp.persist(target).map_err(|e| {
+            // Check if the target is marked read-only now rather than
+            // remembered from the open, because the attribute can be set while
+            // a document is open and a remembered answer would be wrong in
+            // exactly that case.
+            if is_marked_read_only(target) {
+                SaveError::ReadOnlyFile {
+                    path: path.to_owned(),
+                }
+            } else {
+                SaveError::Replace {
+                    path: path.to_owned(),
+                    source: e.error,
+                }
+            }
         })?,
         Overwrite::FailIfExists => {
             temp.persist_noclobber(target)
@@ -194,10 +226,21 @@ pub fn atomic_write(
                     io::ErrorKind::AlreadyExists => SaveError::AlreadyExists {
                         path: path.to_owned(),
                     },
-                    _ => SaveError::Replace {
-                        path: path.to_owned(),
-                        source: e.error,
-                    },
+                    _ => {
+                        // Same check as Replace: a missing or permission-denied
+                        // directory is a Replace, but a read-only file is a
+                        // ReadOnlyFile.
+                        if is_marked_read_only(target) {
+                            SaveError::ReadOnlyFile {
+                                path: path.to_owned(),
+                            }
+                        } else {
+                            SaveError::Replace {
+                                path: path.to_owned(),
+                                source: e.error,
+                            }
+                        }
+                    }
                 })?
         }
     };
@@ -317,6 +360,16 @@ fn writable_path(platform: Platform, path: &Path) -> Cow<'_, Path> {
 /// trailing dot, an over-long component -- all end in the filesystem refusing
 /// the write, which is a loud failure this function would only be duplicating.
 /// This one ends in silence.
+/// Whether a file is marked read-only on disk.
+///
+/// Checked only on the failure path for a replace, so an ordinary save pays
+/// nothing for it -- and asked of the *target* now rather than remembered from
+/// the open, because the attribute can be set while a document is open and
+/// a remembered answer would be wrong in exactly that case.
+fn is_marked_read_only(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|meta| meta.permissions().readonly())
+}
+
 fn refuse_device_name(platform: Platform, path: &Path) -> Result<(), SaveError> {
     // `bp_platform::paths::file_name` and deliberately not
     // `Path::file_name`, which splits by the rules of the platform this

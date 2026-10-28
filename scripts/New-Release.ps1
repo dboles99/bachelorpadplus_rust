@@ -126,6 +126,16 @@ foreach ($doc in 'README.md', 'LICENSE-MIT', 'LICENSE-APACHE') {
     Copy-Item $source (Join-Path $staging $doc)
 }
 
+# Icon files (ADR-0068): the icon ships beside the executable.
+# bachelorpad.ico for Windows registration; io.github.dboles99.BachelorPadPlus.png
+# for the Slint window icon (Slint 1.17 cannot decode ICO).
+$iconFiles = 'bachelorpad.ico', 'io.github.dboles99.BachelorPadPlus.png'
+foreach ($icon in $iconFiles) {
+    $source = Join-Path $Root "assets/$icon"
+    if (-not (Test-Path $source)) { throw "icon $icon is missing from assets/" }
+    Copy-Item $source (Join-Path $staging $icon)
+}
+
 # The short spelling specs.md section 19 promises. A `.cmd` shim rather than a
 # second copy: the executable is ~21 MB and two of them in one archive would
 # be a strange thing to hand somebody. `%~dp0` is the shim's own directory, so

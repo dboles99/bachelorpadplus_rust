@@ -57,6 +57,12 @@ ln -s bachelorpad "$DIR/bpad"
 
 cp README.md LICENSE-MIT LICENSE-APACHE "$DIR/"
 
+# Icon files (ADR-0068): the icon ships beside the executable.
+# io.github.dboles99.BachelorPadPlus.png for the Slint window icon.
+# bachelorpad.ico is copied for completeness but unused on Linux.
+cp assets/io.github.dboles99.BachelorPadPlus.png "$DIR/io.github.dboles99.BachelorPadPlus.png"
+cp assets/bachelorpad.ico "$DIR/bachelorpad.ico"
+
 # Asked of the Linux binary rather than assumed from the Windows one. Two
 # builds of one workspace reporting different versions is a thing that should
 # stop a release, not be discovered by whoever downloads the wrong half.
