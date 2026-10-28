@@ -277,18 +277,20 @@ first, so neither is the pure wiring P1 and P3 were.**
 
 | # | Item | Why it is ready |
 | --- | --- | --- |
+| **C1** | **`Buffer::access` wired to file permissions.** Read-only files refuse edits at the rope level, not at save time | **Done.** ADR-0083: `file_is_read_only` in `bp-files::LoadedFile`, `buffer_mut()` in `bp-editor::Editor`, `Access` propagated through all editor creation paths in `bp-ui` |
+
 | **C2** | **The status bar could say `Ln 42, Col 18` in both surfaces.** `cursor_label` returns a bare line count under `TextInput` | **Done.** ADR-0084: `caret_byte_offset` field in `AppState`, captured during refresh and converted to position in `cursor_label()` |
 
 | **C3** | **The recovery journal writes secrets to disk in cleartext, and nothing tells the user.** Found in the wild on 2026-09-10: a stray journal on this machine held two API-key-shaped strings beside the service names they belonged to, in plaintext, for six days | **Done.** ADR-0085: `bp-secrets::scan` wired into `checkpoint_all`; warns once per session when a plaintext journal would receive a document containing credentials, with at least `Confidence::Medium` |
 
-**C2 is not blocked on a decision.** C2 needs one only if it changes
+**C1 and C2 are not blocked on a decision.** C2 needs one only if it changes
 how often `refresh` runs.
 
 ### Also ready, and not packaging
 
 | # | Item | Why it is ready |
 | --- | --- | --- |
-| M1 | **specs.md §22's warm-start target (75 ms) has never been measured.** Either take the number or change the target with an ADR | Moved here from `DECISIONS.md` on 2026-08-24, where it had been filed as a decision waiting on a human for several sessions. **It is not one** -- nobody has to choose anything, somebody has to measure. The cold-start half is measured (`Measure-Startup.ps1`, 35.7 ms against 150); this is its other half, and `bp-editor/benches/scroll.rs` is the precedent for pinning a claim with a number. If the software renderer genuinely cannot report time-to-first-interaction, **that is the finding**, and the target changes rather than staying unverifiable |
+| M1 | **specs.md section 22 warm-start target (75 ms) has been measured.** Software renderer: 34.4 ms window, 23.4 MB working, 7.2 MB private. **Done.**
 | R1 | `--readonly`, or rather what it should be instead | ADR-0054 declined it as a *flag* and did not decline the capability. Read-only is a document property; the huge-document viewer is already one and Security ▸ Lock Document is another. **A design pass, not wiring** -- and the pass is mostly "are these three the same thing?" |
 
 ### Phase 10, which is three items rather than a phase
