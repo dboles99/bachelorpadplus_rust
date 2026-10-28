@@ -92,6 +92,9 @@ so whoever finishes an item updates them as part of it.
 | T0 | Split `bp-ui/src/lib.rs` into `state` / `editor_view` / `dispatch` | `b6e2544` |
 | T1 | Split `bp-ui/ui/app.slint` into seven component files | `0215d29` |
 | W1 | Duplicate Line, Move Line Up / Down | Edit menu, Ctrl+D / Alt+Up / Alt+Down |
+| E1 | Phase 10 store side: vector column, nearest-neighbour query | `79a0c9a` |
+| E2 | Phase 10 Local provider with Candle dependency | `5c33fd8`, ADR-0088 |
+| E3 | Phase 10 Cloud provider behind UserGesture | `5c33fd8` |
 | W2 | Paste transformations | Edit menu, per clipboard entry |
 | W3 | CSV to JSON / JSON Lines / Column Types | Data menu, Csv and Tsv only |
 | W5 (library half) | `Editor::go_to_line`, `go_to_position` | `bp-editor` |
@@ -282,6 +285,10 @@ first, so neither is the pure wiring P1 and P3 were.**
 | **C2** | **The status bar could say `Ln 42, Col 18` in both surfaces.** `cursor_label` returns a bare line count under `TextInput` | **Done.** ADR-0084: `caret_byte_offset` field in `AppState`, captured during refresh and converted to position in `cursor_label()` |
 
 | **C3** | **The recovery journal writes secrets to disk in cleartext, and nothing tells the user.** Found in the wild on 2026-09-10: a stray journal on this machine held two API-key-shaped strings beside the service names they belonged to, in plaintext, for six days | **Done.** ADR-0085: `bp-secrets::scan` wired into `checkpoint_all`; warns once per session when a plaintext journal would receive a document containing credentials, with at least `Confidence::Medium` |
+
+| **E1** | **The store side: a column for a vector, a nearest-neighbour query over it, and the `Network`/`Embeddings` agreement.** | **Done.** `bp-storage::Store::{store_embedding, embedding_of, clear_embedding, similar_to}`, cosine similarity, Policy agreement, 7 tests |
+| **E2** | **A `Local` provider.** Carries a dependency decision, so it carries an ADR. | **Done.** ADR-0088, `bp-embeddings::{LocalProvider, EmbeddingProvider trait}`, candle-core dependency, model file checking, graceful degradation |
+| **E3** | **A `Cloud` provider, behind `UserGesture`.** Needs an explicit `Policy`. | **Done.** `bp-embeddings::CloudProvider` with reqwest/tokio, UserGesture token, respects Policy::embeddings and Policy::network |
 
 **C1 and C2 are not blocked on a decision.** C2 needs one only if it changes
 how often `refresh` runs.
