@@ -5353,7 +5353,7 @@ mod tests {
         let message = state.error.clone().expect("the scan says what it found");
         assert!(
             !message.contains("security history"),
-            "the audit notice displaced the scan result: {message}"
+            "the audit notice displaced the scan result"
         );
     }
 
@@ -5978,8 +5978,7 @@ mod tests {
         );
         assert!(
             state.passphrase_status.contains("independent"),
-            "the note names what has not happened; got {}",
-            state.passphrase_status
+            "the note names what has not happened"
         );
         assert!(
             !state.passphrase_status.contains('\n') && state.passphrase_status.len() < 80,
@@ -6396,15 +6395,15 @@ mod tests {
         let notice = state.error.clone().expect("a status message");
         assert!(
             notice.contains('1'),
-            "the count belongs in it; got {notice}"
+            "the count belongs in it"
         );
         assert!(
             notice.contains("AWS access key ID"),
-            "the kind belongs in it; got {notice}"
+            "the kind belongs in it"
         );
         assert!(
             notice.contains("line 2"),
-            "where it is is the actionable part; got {notice}"
+            "where it is is the actionable part"
         );
     }
 
@@ -6423,7 +6422,7 @@ mod tests {
         ] {
             assert!(
                 !line.contains(LEAKED),
-                "the credential is back on screen: {line}"
+                "the credential is back on screen"
             );
         }
     }
@@ -6440,8 +6439,8 @@ mod tests {
         assert_eq!(findings.len(), 5, "the fixture should yield five");
 
         let summary = secret_scan_summary(&findings);
-        assert!(summary.contains('5'), "got {summary}");
-        assert!(summary.contains("and 2 more"), "got {summary}");
+        assert!(summary.contains('5'), "the summary has the finding count");
+        assert!(summary.contains("and 2 more"), "the summary names omitted findings");
     }
 
     #[test]
@@ -6449,7 +6448,7 @@ mod tests {
         let findings = bp_secrets::scan(LEAKY);
         let report = secret_scan_report(&findings);
         assert_eq!(report.lines().count(), findings.len());
-        assert!(report.contains("line 2, column"), "got {report}");
+        assert!(report.contains("line 2, column"), "the report includes the finding position");
     }
 
     // --- Hash, sign, verify ------------------------------------------------
@@ -6894,8 +6893,7 @@ mod tests {
         assert!(matches!(state.ask, Some(Ask::NewKey { .. })));
         assert!(
             state.passphrase_status.contains("no signing key yet"),
-            "the user learns a key is about to exist; got {}",
-            state.passphrase_status
+            "the user learns a key is about to exist"
         );
 
         // A mismatch goes back to the first question and makes nothing.
@@ -6943,8 +6941,7 @@ mod tests {
         );
         assert!(
             state.passphrase_status.contains("does not open"),
-            "got {}",
-            state.passphrase_status
+            "the passphrase failure is reported"
         );
         assert!(!dir.path().join("notes.txt.sig").exists());
 
@@ -7438,7 +7435,7 @@ a = 2
         for line in [planned, consent, outcome, plan.refusal()] {
             assert!(
                 !line.contains(LEAKED),
-                "the credential is back on screen: {line}"
+                "the credential is back on screen"
             );
         }
     }
@@ -7458,11 +7455,11 @@ a = 2
             "there is nothing here this can safely destroy"
         );
         let notice = state.error.clone().expect("a status message");
-        assert!(notice.contains("nothing was redacted"), "got {notice}");
-        assert!(notice.contains("private key"), "got {notice}");
+        assert!(notice.contains("nothing was redacted"), "the redaction explains its refusal");
+        assert!(notice.contains("private key"), "the redaction identifies the private key");
         assert!(
             notice.contains("BEGIN"),
-            "the user has to know why, or they will read it as a bug; got {notice}"
+            "the user has to know why, or they will read it as a bug"
         );
         assert!(
             state.active_text().contains("MIIBOgIBAAJBAKtQ"),
@@ -7492,8 +7489,8 @@ a = 2
         state.decline_redaction(&plan);
         let notice = state.error.clone().expect("a status message");
 
-        assert!(notice.contains("nothing was redacted"), "got {notice}");
-        assert!(notice.contains("still in this document"), "got {notice}");
+        assert!(notice.contains("nothing was redacted"), "the refusal is reported");
+        assert!(notice.contains("still in this document"), "the surviving credential is reported");
         assert_eq!(state.active_text(), LEAKY);
     }
 
@@ -7513,10 +7510,10 @@ a = 2
             "stale offsets must not be applied"
         );
         let notice = state.error.clone().expect("a status message");
-        assert!(notice.contains("nothing was redacted"), "got {notice}");
+        assert!(notice.contains("nothing was redacted"), "the refusal is reported");
         assert!(
             notice.contains("changed while the dialog was open"),
-            "got {notice}"
+            "the stale plan explains why it was refused"
         );
         assert!(
             state.active_text().contains(LEAKED),
@@ -7543,13 +7540,13 @@ a = 2
 
         assert!(state.apply_redaction(&plan));
         let notice = state.error.clone().expect("a status message");
-        assert!(notice.starts_with('⚠'), "got {notice}");
-        assert!(notice.contains("still occurs elsewhere"), "got {notice}");
+        assert!(notice.starts_with('⚠'), "the survivor warning is shown");
+        assert!(notice.contains("still occurs elsewhere"), "the survivor warning explains the result");
         assert!(
             notice.contains("line 1"),
-            "the survivor is reported by position, never by text; got {notice}"
+            "the survivor is reported by position, never by text"
         );
-        assert!(!notice.contains(LEAKED), "got {notice}");
+        assert!(!notice.contains(LEAKED), "the survivor warning does not include the credential");
     }
 
     #[test]
