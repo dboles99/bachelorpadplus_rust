@@ -131,6 +131,7 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
+use std::fs::{OpenOptions, TryLockError};
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -453,6 +454,34 @@ impl ProfileStore {
     /// status-bar line for the shell, never a reason to refuse the profile:
     /// it still applies for the session.
     pub fn save(&mut self, path: &Path) -> io::Result<()> {
+        let Some(directory) = path.parent() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "a document profile store needs a parent directory",
+            ));
+        };
+        if !directory.as_os_str().is_empty() {
+            std::fs::create_dir_all(directory)?;
+        }
+        let lock_path = path.with_extension("lock");
+        let mut lock_options = OpenOptions::new();
+        lock_options.read(true).write(true).create(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            lock_options.mode(0o600);
+        }
+        let lock = lock_options.open(lock_path)?;
+        match lock.try_lock() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "another process is saving document profiles",
+                ));
+            }
+            Err(TryLockError::Error(e)) => return Err(e),
+        }
         let (mut entries, mut kept) = match read(path) {
             OnDisk::Absent => (BTreeMap::new(), BTreeMap::new()),
             OnDisk::Read { entries, kept } => (entries, kept),
