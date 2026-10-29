@@ -39,14 +39,22 @@ Take the *whole* item, including its documentation. "Whoever finishes an item
 updates the record as part of it" is not optional; a fix that lands without
 the record moving is how every stale sentence in this repository got there.
 
-### 2. Commit and push once the full gate is green
+### 2. Commit and push; hosted CI is the gate
+
+Hosted CI runs the gate on every push ([ADR-0091](docs/decisions/ADR-0091.md)).
+Commit on the current feature branch once the hooks' `-Quick` pass, push, then
+**watch the run and report its result** -- a red run is the failure it says it
+is, not noise. Do not ask first.
+
+**When hosted CI cannot run** -- a GitHub outage, or Actions blocked because a
+bill is unpaid -- the local gate stands in, and its green is the permission as
+it always was:
 
 ```powershell
 ./scripts/Invoke-LocalCI.ps1 -Linux    # ~7 min. Background it.
 ```
 
-Green on **both legs** is the whole of the permission. Commit on the current
-feature branch, push, and report. Do not ask first.
+Green on **both legs**, then commit, push and report.
 
 Two things this authority does *not* cover, and both need a human:
 
@@ -125,15 +133,18 @@ clause and link; it must not retell it.
 ./scripts/Drive-Window.ps1 -Kill        # launch the app and photograph it
 ```
 
-This **is** the gate that authorises a push, and it runs on this machine
-([ADR-0016](docs/decisions/ADR-0016.md)). **Hosted CI exists again as of
-[ADR-0082](docs/decisions/ADR-0082.md)** and does not change that: it runs on
-pull requests and on `main`, it skips three stages this one runs, and a green
-run there is necessary and not sufficient. ADR-0016's premise -- *"GitHub
-Actions is not available"* -- became false silently, which is trap 6 for the
-second time.
+**Hosted CI is the gate; this one is the fallback**
+([ADR-0091](docs/decisions/ADR-0091.md)). `.github/workflows/ci.yml` runs
+`Invoke-LocalCI.ps1` itself on Windows and Ubuntu, on every push and pull
+request, so there is one gate run in two places and the two cannot disagree. Run
+it here when GitHub is unavailable or Actions is blocked, and before a push if
+you want the answer in minutes rather than after the push. ADR-0016's premise --
+*"GitHub Actions is not available"* -- became false silently
+([ADR-0082](docs/decisions/ADR-0082.md)), which is trap 6 for the second time;
+ADR-0082's *"private, so metered"* then became false the same way when the
+repository went public.
 
-Every commit in this repository has passed it. Keep it that way.
+Every commit on `main` should have a green hosted run behind it. Keep it that way.
 
 - **Background it, and do not edit files while it runs.** The Linux leg
   re-runs `cargo fmt --check` from scratch, so a mid-run edit fails the run
@@ -143,9 +154,10 @@ Every commit in this repository has passed it. Keep it that way.
   failure's detail is *above* the summary, so truncating the output discards
   the only thing a red run is worth reading. It happened once, and a failing
   test could not be named afterwards.
-- The hooks run `-Quick` only. **The full `-Linux` leg is yours to run**, and
-  authority 2 depends on it — a push whose Linux leg was never run is a push
-  that skipped half the gate.
+- The hooks run `-Quick` only, and that is deliberate: hosted CI supplies the
+  rest. **When hosted CI is unavailable, the full `-Linux` leg is yours to run**
+  and authority 2 depends on it -- a push made then, with its Linux leg never
+  run, is a push that skipped half the gate.
 
 ---
 

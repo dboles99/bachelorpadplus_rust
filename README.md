@@ -53,10 +53,12 @@ The installer is conservative: it will not silently overwrite an existing reposi
 ./scripts/Invoke-LocalCI.ps1     # format, check, clippy, test
 ```
 
-This project has **hosted CI** on GitHub Actions ([ADR-0082](docs/decisions/ADR-0082.md)),
-scoped to pull requests and `main`. `scripts/Invoke-LocalCI.ps1` remains the
-authoritative gate and runs from `pre-commit` and `pre-push`. See
-[docs/governance/LOCAL_CI.md](docs/governance/LOCAL_CI.md) and ADR-0016.
+This project's gate is **hosted CI** on GitHub Actions, which runs
+`scripts/Invoke-LocalCI.ps1` on Windows and Ubuntu for every push and pull request
+([ADR-0091](docs/decisions/ADR-0091.md)). Run the script yourself for a quick
+answer before pushing, or as the fallback if GitHub is unavailable; `pre-commit`
+and `pre-push` run its quick mode. See
+[docs/governance/LOCAL_CI.md](docs/governance/LOCAL_CI.md).
 
 ```powershell
 cargo run --release            # the app

@@ -1,44 +1,26 @@
-# Hosted CI, restored by ADR-0082 -- and ADR-0016 was right when it was written.
+# The gate. Hosted CI is the primary check (ADR-0091); the local gate in
+# scripts/Invoke-LocalCI.ps1 is the fallback for when GitHub is unavailable --
+# an outage, or Actions blocked for billing. See docs/governance/LOCAL_CI.md.
+# Releases are built by a local script (release plan decision 19), so nothing
+# here builds or uploads a release.
 #
-# **The local gate stays authoritative.** scripts/Invoke-LocalCI.ps1 runs on
-# pre-commit, pre-push, and by hand with -Linux, and a push cannot happen
-# without it being green. This file is not a second opinion on that; it is the
-# thing a local gate structurally cannot be -- a build somebody who is not
-# Daniel, on a machine that is not his, can watch succeed.
+# It runs the gate script itself rather than a copy of its steps (release
+# plan M3-07). An earlier version listed fmt, check, clippy and test by hand
+# and had already fallen behind: no launch stage, no log-hygiene stage, no
+# licence and advisory checks, and no system packages, so it could not even
+# have built the shell on Linux. Two gates that disagree are worse than one;
+# one gate run in two places cannot disagree.
 #
-# **Keep the steps below in sync with Invoke-LocalCI.ps1.** Two gates that
-# disagree are worse than one, which is ADR-0016's warning and still holds.
+# ## Why every push, and not only pull requests and `main`
 #
-# **Three stages the local gate runs and this one does not**, said out loud
-# rather than left for somebody to assume parity:
+# ADR-0082 scoped this to pull requests and `main` because the repository was
+# private and Actions minutes were metered, Windows at 2x. The repository is
+# public and the minutes are free, so that reasoning no longer holds and
+# ADR-0082 said it should then be revisited. A push to a feature branch now
+# gets an independent machine's verdict instead of waiting for a pull request.
 #
-#   - *launch*, which starts the built binary and waits for a window. A hosted
-#     runner has no display.
-#   - *log hygiene*, the scan forbidding a tracing macro from naming an
-#     identifier that carries document text or secrets. It lives inside
-#     Invoke-LocalCI.ps1 rather than in a script of its own, so mirroring it
-#     here would mean a second copy of the rule -- and two copies of a rule
-#     drift, which is the failure this comment block exists to prevent.
-#   - *doctests*, which the local gate runs as a separate pass because nextest
-#     cannot. `cargo test --workspace` below does run them.
-#
-# So a green run here is necessary and not sufficient. The local gate remains
-# the one that authorises a push.
-#
-# ## Why these triggers and not `push:`
-#
-# **This repository is private, so Actions minutes are metered**, and Windows
-# runners bill at 2x. A full matrix is roughly 50-60 billed minutes, which is
-# about fifty pushes a month against a Pro allowance -- less than one sprint.
-#
-# Feature-branch pushes are already covered: authority 2 in CLAUDE.md requires a
-# green full local gate *before* a push, so re-running the same stages here buys
-# minutes and nothing else. Pull requests and `main` are where an independent
-# machine says something the local gate cannot.
-#
-# The derived repository runs on every push (its ADR-0073) and is right to: it
-# is about to be public, where minutes are free and unmetered. **The reasoning
-# transfers and the economics do not** -- adapt, do not adopt.
+# `concurrency` cancels a run the next push has made redundant, so a branch
+# with an open pull request does not queue two gates for every commit.
 
 name: CI
 
@@ -46,37 +28,38 @@ on:
   workflow_dispatch:
   pull_request:
   push:
-    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  check:
+  gate:
     strategy:
+      fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        os: [windows-latest, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          # About's commit line and the build script's dirty flag read git.
+          fetch-depth: 0
+      # No toolchain action: `rust-toolchain.toml` pins the toolchain, and
+      # rustup (preinstalled on both runners) honours it on first use.
+      - name: Linux build and launch dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libfontconfig1-dev \
+            libxkbcommon-dev libxcb1-dev libgl1-mesa-dev libwayland-dev libssl-dev \
+            libxkbcommon-x11-0 libxcb-cursor0 xvfb xauth
+      - name: Licence and advisory tools
+        run: cargo install --locked cargo-deny
       - uses: Swatinem/rust-cache@v2
-      - name: Format
-        run: cargo fmt --all -- --check
-      - name: Check
-        run: cargo check --workspace --all-targets --locked
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Test
-        run: cargo test --workspace
-      # `fuzz/` declares its own `[workspace]`, so every `--workspace` step
-      # above walks past it. It holds the hostile-input harnesses for
-      # bp-crypto, bp-data, bp-files, bp-formats and bp-notebook.
-      - name: Format (fuzz)
-        working-directory: fuzz
-        run: cargo fmt --all -- --check
-      - name: Clippy (fuzz)
-        working-directory: fuzz
-        run: cargo clippy --all-targets -- -D warnings
-      - name: Test (fuzz)
-        working-directory: fuzz
-        run: cargo test
+      # PowerShell 7 is preinstalled on both runners. On Windows the gate
+      # runs its native leg only: the WSL leg (-Linux) is what the ubuntu
+      # job is for.
+      - name: Gate
+        shell: pwsh
+        run: ./scripts/Invoke-LocalCI.ps1
