@@ -1379,6 +1379,16 @@ impl AppState {
         let Some(target) = path.or_else(|| doc.path().map(Path::to_path_buf)) else {
             return SaveResult::NeedsPath;
         };
+        let policy = doc.security().policy_under(self.privacy);
+        if matches!(policy.temporary_files, bp_security::TemporaryFiles::Denied)
+            && !self.passphrases.contains_key(&id)
+        {
+            self.error = Some(
+                "not saved -- this profile requires encryption before writing temporary files"
+                    .to_owned(),
+            );
+            return SaveResult::Failed;
+        }
 
         // `Preserve`, not the document's declared line ending: a save must
         // return the bytes the user was given. Converting here is what made
@@ -1476,6 +1486,16 @@ impl AppState {
         let Some(doc) = self.workspace.get(id) else {
             return SaveResult::Saved;
         };
+        let policy = doc.security().policy_under(self.privacy);
+        if matches!(policy.temporary_files, bp_security::TemporaryFiles::Denied)
+            && !self.passphrases.contains_key(&id)
+        {
+            self.error = Some(
+                "copy not saved -- this profile requires encryption before writing temporary files"
+                    .to_owned(),
+            );
+            return SaveResult::Failed;
+        }
 
         // The same policy as a real save, for the same reason the encoding is
         // shared: bytes written differently from the original would make the
@@ -2102,11 +2122,16 @@ impl AppState {
             text: self.text_of(id).to_owned(),
             written_at: bp_history::now_unix(),
         };
-        let passphrase = self.passphrases.get(&id).map(|p| p.to_string());
-        if let Ok(bp_history::Written::Refused(refusal)) =
-            self.journal
-                .checkpoint(id.get(), &entry, policy.recovery, passphrase.as_deref())
-            && let Some(message) = refusal.notice()
+        let passphrase = self
+            .passphrases
+            .get(&id)
+            .map(|p| zeroize::Zeroizing::new(p.to_string()));
+        if let Ok(bp_history::Written::Refused(refusal)) = self.journal.checkpoint(
+            id.get(),
+            &entry,
+            policy.recovery,
+            passphrase.as_ref().map(|p| p.as_str()),
+        ) && let Some(message) = refusal.notice()
         {
             self.error = Some(message.to_owned());
         }
@@ -2415,6 +2440,7 @@ impl AppState {
                     self.keep_profile(target, security);
                 }
                 self.mark_in_step(id, target);
+                self.record_security_event(bp_audit::Event::DocumentEncrypted);
                 self.passphrase_status.clear();
                 self.error = Some(format!("encrypted to {}", target.display()));
                 false
@@ -4305,6 +4331,31 @@ mod tests {
         assert_eq!(second.security(), private, "the new file lost it");
         second.open(old);
         assert_eq!(second.security(), private, "the old file lost its own");
+    }
+
+    #[test]
+    fn a_confidential_plaintext_save_is_refused_before_a_temporary_file_is_created() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secret.txt");
+        let (mut state, _) = two_sessions();
+        state.set_security(bp_security::Security::Named(
+            bp_security::Profile::Confidential,
+        ));
+        state.edit("secret\n".to_owned());
+        let id = state.workspace.active_id().unwrap();
+
+        assert_eq!(
+            state.save_document(id, Some(path.clone())),
+            SaveResult::Failed
+        );
+        assert!(!path.exists());
+        assert!(
+            state
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("requires encryption")
+        );
     }
 
     #[test]
