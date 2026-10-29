@@ -140,6 +140,26 @@ Kept rather than deleted, because every one of these went stale the same
 way — a fix landing without the record moving — and because the lesson in each
 is worth more than the fact.
 
+### A one-sided commit count says nothing about the other side -- and a workflow that has never run has never been tested
+
+2026-10-29, [ADR-0091](docs/decisions/ADR-0091.md). A session told Daniel that
+`main` was "88 commits behind" the feature branch, and gave merge advice on it.
+The number was `git rev-list --count origin/main..HEAD`: what the branch has
+that `main` lacks. It said nothing about the other direction, which was **109
+commits** -- a merge of two earlier sessions' work, a different `ci.yml`, a
+pinned toolchain, a `cargo deny` stage -- against the branch's 90. A trial
+`git merge-tree --write-tree` then named dozens of conflicting files in
+seconds. **`git rev-list --left-right --count origin/main...HEAD` gives both
+counts in one line; ask for both before saying "behind" or "ahead".** This is
+trap 6 with the claim written by the previous turn rather than the record.
+
+The same day found its twin. The branch's `ci.yml` had sat unrun since
+[ADR-0082](docs/decisions/ADR-0082.md) because its triggers excluded feature
+branches, and failed at its first `cargo check` for want of the system
+libraries Slint links. `main`'s workflow had been run and failed only on a real
+advisory (RUSTSEC-2026-0414). A check that never executes is a comment about a
+check.
+
 ### A constraint blamed on a dependency deserves the same scepticism as one blamed on the record — and it is cheaper to check
 
 2026-09-10, [ADR-0080](docs/decisions/ADR-0080.md). Thirteen menu rows were

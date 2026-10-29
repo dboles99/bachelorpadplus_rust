@@ -375,6 +375,7 @@ The headlines, so somebody knows whether to go and look:
 | ~~`.bpadx` encryption~~ | **Done.** ADR-0021 settled the envelope and it ships; ADR-0022 seals the recovery journal with it. |
 | Print | Platform work with no cross-platform story yet. |
 | **W11, drag and drop to open** | **Slint 1.17.1**, and this was checked rather than assumed. `DropArea` exists and compiles, and the item is implemented in `i-slint-core/items/drag_n_drop.rs` -- but the winit backend has no file-drop plumbing, and `DataTransfer` exposes only `plain_text` and `image`. There is no channel a dropped file's path could arrive through. Revisit on a Slint upgrade; do not spend an afternoon on it before checking that changed. |
+| **Hosted CI going green** | **GitHub Actions billing**, which resets 2026-11-01. The steps, in order, are in [NEXT_SESSION.md](NEXT_SESSION.md) "Resume here"; the local gate is the gate until then ([ADR-0091](../docs/decisions/ADR-0091.md)). |
 
 ## Not a queue item, and it is the top of `NEXT_SESSION.md`
 
