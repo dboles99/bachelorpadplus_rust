@@ -120,7 +120,7 @@ New-Item -ItemType Directory -Force -Path $staging | Out-Null
 
 Write-Step 'staging the Windows archive'
 Copy-Item $exe (Join-Path $staging 'bachelorpad.exe')
-foreach ($doc in 'README.md', 'LICENSE-MIT', 'LICENSE-APACHE') {
+foreach ($doc in 'README.md', 'LICENSE') {
     $source = Join-Path $Root $doc
     if (-not (Test-Path $source)) { throw "$doc is missing -- the manifests claim a licence this archive would not carry" }
     Copy-Item $source (Join-Path $staging $doc)

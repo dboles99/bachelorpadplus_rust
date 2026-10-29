@@ -1,32 +1,27 @@
 # 02-core-editor
 
-Roadmap phase 2. **Crates built and tested; wiring blocked.**
+Roadmap phase 2. **Done.**
 
 | Task | Status |
 | --- | --- |
-| [rope-buffer](01-rope-buffer.md) | Crate done; not yet the editor's storage |
+| [rope-buffer](01-rope-buffer.md) | Crate done; editor's storage via custom surface |
 | [tabs](02-tabs.md) | Done in phase 1 (`bp-core::Workspace` + tab strip) |
 | [file-io](03-file-io.md) | Done in phase 1 (`bp-files`) |
-| [status-bar](04-status-bar.md) | Done except Ln/Col |
-| [undo-redo](05-undo-redo.md) | Crate done; not yet the authority |
+| [status-bar](04-status-bar.md) | Done, including Ln/Col (ADR-0084) |
+| [undo-redo](05-undo-redo.md) | Crate done; authority via custom surface |
 
-## The one thing blocking this phase
+## Blocking issue resolved
 
-**Slint's `TextInput` owns the text and the caret.** It hands the whole buffer
-back on every edit, keeps its own undo stack, and exposes the caret only
-through a property marked *"internal, undocumented, only exposed for tests"*.
+The custom editor surface ([ADR-0080](../docs/decisions/ADR-0080.md)) owns
+its own text and caret, unblocking the three items previously blocked by
+Slint's `TextInput`:
 
-That single fact blocks three separate items:
-
-- the rope cannot become the storage — a rope behind that widget means
-  converting to `String` on every push, which is worse than the `String` it
-  would replace;
-- `bp-editor`'s undo cannot become the authority — two undo stacks over one
-  document is worse than one;
-- the status bar cannot show Ln/Col.
-
-All three unblock together, with a custom virtualised editor view that owns
-its own text and routes keys itself.
+- the rope **is** the editor's storage — `draw_editor_view` passes
+  `editor.buffer()` to `bp_editor::view::visible_rows`;
+- `bp-editor`'s undo **is** the authority — menu UNDO/REDO dispatch to
+  `bp_editor::Command::Undo`/`bp_editor::Command::Redo`;
+- the status bar **does** show Ln/Col — `caret_byte_offset` in AppState
+  captured during refresh and converted to position (ADR-0084).
 
 Building the libraries first was the right order: their semantics are provable
 without a window, and the widget is the risky part. `bp-editor` has 19 tests
