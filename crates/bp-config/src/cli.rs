@@ -176,12 +176,6 @@ pub const FLAGS: &[Flag] = &[
         section: Section::Setting,
     },
     Flag {
-        names: &["editor-view"],
-        value: None,
-        summary: "Draw with the custom editor surface.",
-        section: Section::Development,
-    },
-    Flag {
         names: &["self-check"],
         value: None,
         summary: "Load, print a marker and exit. For the gate.",
