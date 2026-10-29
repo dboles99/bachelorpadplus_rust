@@ -169,6 +169,8 @@ try {
 
     # --- workspace -----------------------------------------------------
     Invoke-Stage 'fmt' { cargo fmt --all -- --check }
+    # --- third-party notices ----------------------------------------------
+    Invoke-Stage 'notices' { if (-not (Test-Path THIRD-PARTY-NOTICES.md)) { throw 'THIRD-PARTY-NOTICES.md is missing. Generate with: scripts/Generate-ThirdPartyNotices.ps1' } }
 
     if ($Quick) {
         # --locked forces a dependency re-resolve, which is the slowest part

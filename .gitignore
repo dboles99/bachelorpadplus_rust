@@ -43,6 +43,7 @@ artifacts/releases/SHA256SUMS.txt
 !/README.md
 !/CLAUDE.md
 !/DECISIONS.md
+!/THIRD-PARTY-NOTICES.md
 !/PROJECT_MEMORY.md
 !/ROADMAP.md
 !/specs.md
