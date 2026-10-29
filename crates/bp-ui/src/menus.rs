@@ -82,12 +82,16 @@ pub mod action {
 
     pub const SHORTCUTS: i32 = 50;
     pub const ABOUT: i32 = 51;
+    /// Report an issue: opens a pre-filled GitHub issue URL in the browser.
+    /// Tickets never leave the machine by themselves (D19) -- this is always
+    /// a user-initiated hand-off to a pre-filled form (D20).
+    pub const REPORT_ISSUE: i32 = 58;
 
     /// Security profiles, one id per `bp_security::Profile::all()` in that
     /// order. A base plus an offset for the same reason as `STAMP_BASE`: the
     /// menu and the dispatch cannot disagree about which row is which, and
     /// adding a profile cannot leave the dispatch matching the old count.
-    /// Bounded by [`super::profile_end`]. 56-59 are free.
+    /// Bounded by [`super::profile_end`]. 56-57, 59 are free.
     pub const PROFILE_BASE: i32 = 52;
 
     /// Encrypt the active document to a `.bpadx` file (ADR-0021). 57-59 free.
@@ -1322,6 +1326,7 @@ pub fn help() -> Vec<MenuItem> {
     vec![
         row("Keyboard Shortcuts", "", action::SHORTCUTS),
         row("About BachelorPad+", "", action::ABOUT),
+        row("Report an Issue", "", action::REPORT_ISSUE),
         row_end("Diagnostics", "", action::DIAGNOSTICS),
     ]
 }

@@ -53,6 +53,36 @@ fn show_info(title: &str, body: &str) {
         .show();
 }
 
+/// Open a pre-filled GitHub issue for reporting a bug (D19, D20).
+///
+/// Tickets never leave the machine by themselves -- this always requires
+/// explicit user action to open the browser with a pre-filled form.
+/// The URL points to this repository's issue tracker with template parameters.
+fn open_github_issue() {
+    // Build a URL with pre-filled parameters for the issue template
+    // Using GitHub's issue template with title and body pre-filled
+    let version = env!("CARGO_PKG_VERSION");
+    let title = "Bug Report";
+    let body = format!(
+        "BachelorPad+ Version: {}\n\n---\n\nPlease describe the issue here.",
+        version
+    );
+
+    // URL-encode the title and body
+    let encoded_title = urlencoding::encode(title);
+    let encoded_body = urlencoding::encode(&body);
+
+    let url = format!(
+        "https://github.com/dboles99/bachelorpadplus_rust/issues/new?title={}&body={}",
+        encoded_title, encoded_body
+    );
+
+    // Open the URL in the user's default browser
+    if let Err(e) = webbrowser::open(&url) {
+        tracing::warn!("Failed to open GitHub issue URL: {}", e);
+    }
+}
+
 /// Ask about unsaved work before discarding it.
 ///
 /// Blocking and native. The three-way answer matters: "Cancel" has to be
@@ -856,11 +886,12 @@ pub fn handle_menu_action(
             "About BachelorPad+",
             &format!(
                 "BachelorPad+ {}\n\nNotepad when you want it. More when you need it.\n\n\
-                 Renderer: {}\nLicence: MIT OR Apache-2.0",
+                 Renderer: {}\nLicence: GPL-3.0-only",
                 env!("CARGO_PKG_VERSION"),
                 std::env::var("SLINT_BACKEND").unwrap_or_else(|_| "software".to_owned()),
             ),
         ),
+        action::REPORT_ISSUE => open_github_issue(),
         // What the application thinks its environment is, not a file
         // browser: no document content, no passphrase, no listing of what is
         // in the directories it names -- only where it resolved them to.

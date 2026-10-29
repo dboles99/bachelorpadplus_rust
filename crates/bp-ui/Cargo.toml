@@ -79,6 +79,11 @@ rfd = { version = "0.17", default-features = false, features = [
     "xdg-portal",
     "pollster",
 ] }
+# Report Issue: open a pre-filled GitHub issue URL (D19, D20).
+# Tickets never leave the machine by themselves -- this is always a
+# user-initiated browser hand-off.
+webbrowser = "1"
+urlencoding = "2"
 serde_json.workspace = true
 thiserror.workspace = true
 time.workspace = true
