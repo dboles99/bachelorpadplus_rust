@@ -11,7 +11,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::{Query, SearchError, find_all};
+use crate::{Query, SearchError, find_all_limited};
 
 /// Directories skipped entirely.
 ///
@@ -211,11 +211,16 @@ fn search_file(
         return Ok(false);
     };
 
-    for m in find_all(&text, query)? {
-        if report.hits.len() >= MAX_HITS {
+    let room = MAX_HITS.saturating_sub(report.hits.len());
+    if room == 0 {
+        let (matches, _) = find_all_limited(&text, query, 1)?;
+        if !matches.is_empty() {
             report.truncated = true;
-            return Ok(true);
         }
+        return Ok(true);
+    }
+    let (matches, truncated) = find_all_limited(&text, query, room)?;
+    for m in matches {
         // The same lines the number counts, or a bare-CR file previews the
         // wrong one.
         let preview = crate::lines(&text)
@@ -231,6 +236,9 @@ fn search_file(
             preview,
             offset: m.range.start,
         });
+    }
+    if truncated {
+        report.truncated = true;
     }
     Ok(true)
 }
