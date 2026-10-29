@@ -46,7 +46,8 @@ The installer is conservative: it will not silently overwrite an existing reposi
 ./scripts/Invoke-LocalCI.ps1     # format, check, clippy, test
 ```
 
-This project has **no hosted CI**. `scripts/Invoke-LocalCI.ps1` is the
+This project has **hosted CI** on GitHub Actions ([ADR-0082](docs/decisions/ADR-0082.md)),
+scoped to pull requests and `main`. `scripts/Invoke-LocalCI.ps1` remains the
 authoritative gate and runs from `pre-commit` and `pre-push`. See
 [docs/governance/LOCAL_CI.md](docs/governance/LOCAL_CI.md) and ADR-0016.
 
@@ -58,15 +59,15 @@ cargo run --release -- --help  # every flag it accepts
 ```
 
 `New-Release.ps1` stages the binary with both licence texts and a `BUILD.txt`
-naming the commit, archives it (`.zip` for Windows, `.tar.gz` for Linux, built
-inside WSL so the executable bit and the `bpad` symlink survive), and writes a
-`SHA256SUMS.txt` that `sha256sum -c` reads. **The archives are unsigned and
-the script says so on every run** — signing is deferred and self-signing
-refused, for the reason in [ADR-0055](docs/decisions/ADR-0055.md).
+naming the commit, archives it (`.zip` and bare `.exe` for Windows, `.tar.gz` and
+`.zip` for Linux, built inside WSL so the executable bit and the `bpad` symlink
+survive), and writes a `SHA256SUMS.txt` that `sha256sum -c` reads. **The
+archives are unsigned and the script says so on every run** — signing is
+deferred and self-signing refused, for the reason in [ADR-0055](docs/decisions/ADR-0055.md).
 
-## Current state (2026-08-23)
+## Current state (2026-10-29)
 
-**25 crates, 1,990 tests, green on Windows and Linux.** **Every menu row either does something or is a readout** ([ADR-0048](docs/decisions/ADR-0048.md)) — nothing anywhere says "not implemented yet" any more. The app opens, edits and
+**25 crates, 2,018 tests, green on Windows and Linux.** **Every menu row either does something or is a readout** ([ADR-0048](docs/decisions/ADR-0048.md)) — nothing anywhere says "not implemented yet" any more. The app opens, edits and
 saves atomically, and does rather more than that:
 
 | Area | What works |
