@@ -151,14 +151,21 @@ Set-Content -Path (Join-Path $staging 'BUILD.txt') -Encoding utf8 -Value @(
     "commit:   $commit",
     "target:   windows-x86_64",
     "signed:   no -- see ADR-0055",
-    "licence:  MIT OR Apache-2.0; both texts are in this archive"
+    "licence:  GPL-3.0-only; text is in this archive"
 )
 
 $windowsArchive = Join-Path $Out "$stem-windows-x86_64.zip"
 if (Test-Path $windowsArchive) { Remove-Item $windowsArchive -Force }
 Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $windowsArchive
+
+# Also provide the bare executable as a separate download for users who
+# want just the binary without the supporting files.
+$bareExe = Join-Path $Out "$stem-windows-x86_64.exe"
+if (Test-Path $bareExe) { Remove-Item $bareExe -Force }
+Copy-Item (Join-Path $staging 'bachelorpad.exe') $bareExe
+
 Remove-Item $staging -Recurse -Force
-Write-Note "wrote $([IO.Path]::GetFileName($windowsArchive))"
+Write-Note "wrote $([IO.Path]::GetFileName($windowsArchive)) and $([IO.Path]::GetFileName($bareExe))"
 
 # --- Linux ---------------------------------------------------------------
 
@@ -208,7 +215,7 @@ else {
 # can verify without being told how.
 
 Write-Step 'checksums'
-$archives = @($windowsArchive)
+$archives = @($windowsArchive, $bareExe)
 if ($linuxArchive) { $archives += $linuxArchive }
 
 $lines = foreach ($archive in $archives) {

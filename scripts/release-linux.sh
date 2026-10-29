@@ -89,6 +89,8 @@ chmod 755 "$DIR" "$DIR/bachelorpad"
 chmod 644 "$DIR/README.md" "$DIR/LICENSE" "$DIR/BUILD.txt"
 
 mkdir -p "$OUT"
-rm -f "$OUT/$NAME.tar.gz"
+rm -f "$OUT/$NAME.tar.gz" "$OUT/$NAME.zip"
 tar czf "$OUT/$NAME.tar.gz" -C "$STAGE" "$NAME"
-echo "staged $NAME.tar.gz"
+# Also create a zip variation for Linux users who prefer it
+(cd "$STAGE" && zip -r "$OUT/$NAME.zip" "$NAME")
+echo "staged $NAME.tar.gz and $NAME.zip"
