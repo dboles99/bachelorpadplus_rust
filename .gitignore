@@ -48,6 +48,9 @@ artifacts/releases/SHA256SUMS.txt
 !/ROADMAP.md
 !/specs.md
 
+# Screenshots from Drive-Window.ps1. Generated test artefacts.
+shots/
+
 # Agent worktrees. A subagent working in isolation gets a git worktree here,
 # which is a repository inside this one -- `git add -A` sweeps it into a
 # commit as a stray gitlink if it is not ignored. It happened once.
