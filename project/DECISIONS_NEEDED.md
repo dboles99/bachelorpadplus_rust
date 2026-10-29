@@ -33,6 +33,16 @@ halfway through an item to ask one thing.
 > **D19/D20 (tickets) are also answered:** Report Issue menu opens pre-filled GitHub URL.
 > **D22 (unsigned) is also answered:** README documents Windows SmartScreen click-through.
 > **D27 is also answered:** the countdown counts to the release ([ADR-0089](../docs/decisions/ADR-0089.md)).
+>
+> **Two rows opened 2026-10-29, both about the merge D13 gates, and neither can
+> be defaulted:**
+>
+> - **D30 -- what is the merge plan?** The branch and `main` have *diverged* (90
+>   and 109 commits each); `main` also has no `LICENSE` and says
+>   `MIT OR Apache-2.0` while the branch is GPL-3.0-only.
+> - **D31 -- after Actions is paid for again, does `main`'s gate script and
+>   `ci.yml` replace the branch's?** Proposed: yes.
+
 ## How this is used
 
 - **Anything here blocks something, or will.** If a question stops mattering,
@@ -68,6 +78,8 @@ Remaining items below are from earlier plans and kept for context.
 | D29 | ~~There is no `THIRD-PARTY-NOTICES.md`.~~ | **Done.** File generated, CI gate in place | -- |
 | D27 | ~~What does the countdown count to?~~ | **Answered.** The release ([ADR-0089](../docs/decisions/ADR-0089.md)) | -- |
 | D28 | ~~ADR numbering collides with the derived repository~~ | **Answered 2026-09-10 and closed the same day.** This sequence continues at **0080**; 0057-0079 are deliberately unused, because `bachelorpluslite` holds those numbers for different decisions and this project's records link to several of them. Recorded in [ADR-0080](../docs/decisions/ADR-0080.md) itself, on the far side of the gap, rather than left for somebody to notice | -- |
+| D30 | What is the merge plan for D13, now the branch and `main` have diverged? | **No safe default.** `main` has 109 commits the branch lacks and the branch 90 that `main` lacks; a trial merge conflicts in dozens of files; `main` has no `LICENSE` and declares `MIT OR Apache-2.0` against the branch's GPL-3.0-only ([ADR-0081](../docs/decisions/ADR-0081.md)), in public. Proposed: merge `main` *into* the branch, resolve there, then one pull request | Daniel |
+| D31 | After Actions is paid for again, does `main`'s gate script and `ci.yml` replace the branch's? | **Proposed: yes.** `main`'s ran on both OSes (xvfb launch, `cargo deny`) and failed only on a real advisory; the branch script's `launch` stage hard-codes `bachelorpad.exe` ([ADR-0091](../docs/decisions/ADR-0091.md)) | Daniel |
 
 **Twelve rows, not eleven.** D28 was raised and answered inside one session, so
 it is listed above already closed rather than given a turn in the queue -- but it
