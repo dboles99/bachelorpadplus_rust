@@ -1,5 +1,9 @@
 # BachelorPad+
 
+[![Release](https://img.shields.io/github/v/release/dboles99/bachelorpadplus_rust?style=flat-square)](https://github.com/dboles99/bachelorpadplus_rust/releases)
+[![License: GPL-3.0-only](https://img.shields.io/badge/License-GPL-3.0-only-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![CI](https://github.com/dboles99/bachelorpadplus_rust/actions/workflows/ci.yml/badge.svg)](https://github.com/dboles99/bachelorpadplus_rust/actions)
+
 **BachelorPad+** is a Rust-native semantic text-processing appliance for **Windows 10, Windows 11, and Linux**.
 
 It begins as a fast Notepad-like editor and progressively adds:
@@ -64,6 +68,21 @@ naming the commit, archives it (`.zip` and bare `.exe` for Windows, `.tar.gz` an
 survive), and writes a `SHA256SUMS.txt` that `sha256sum -c` reads. **The
 archives are unsigned and the script says so on every run** — signing is
 deferred and self-signing refused, for the reason in [ADR-0055](docs/decisions/ADR-0055.md).
+
+## Release Notes
+
+**v1.1.1 — 2026-10-29**
+
+First public release. Download from [GitHub Releases](https://github.com/dboles99/bachelorpadplus_rust/releases/tag/v1.1.1):
+- `bachelorpadplus-1.1.1-windows-x86_64.exe` — Windows executable
+- `bachelorpadplus-1.1.1-windows-x86_64.zip` — Windows portable ZIP
+- `bachelorpadplus-1.1.1-linux-x86_64.tar.gz` — Linux tar.gz
+- `bachelorpadplus-1.1.1-linux-x86_64.zip` — Linux ZIP
+- `SHA256SUMS.txt` — Checksums for all artifacts
+
+All artifacts are **unsigned** ([ADR-0055](docs/decisions/ADR-0055.md)). Windows users will see "Windows protected your PC" — click **"More info" → "Run anyway"**.
+
+Licensed under [GPL-3.0-only](LICENSE) ([ADR-0081](docs/decisions/ADR-0081.md)).
 
 ## Current state (2026-10-29)
 
