@@ -13,7 +13,7 @@
 //! # File Layout
 //!
 //! Model files are expected in the following structure under the models directory:
-//! 
+//!
 //! ```text
 //! assets/models/all-MiniLM-L6-v2/
 //!   config.json          # Model configuration
@@ -26,7 +26,9 @@
 //! Uses `candle-core` for tensor operations. The full `candle` crate is not
 //! needed as we don't use GPU acceleration in the base configuration.
 
-use crate::{Embedding, EmbeddingError, EmbeddingProvider, EmbeddingProviderType, MAX_INPUT_TOKENS};
+use crate::{
+    Embedding, EmbeddingError, EmbeddingProvider, EmbeddingProviderType, MAX_INPUT_TOKENS,
+};
 use bp_security::Policy;
 use std::path::Path;
 use std::sync::Arc;
@@ -77,10 +79,7 @@ impl LocalProvider {
             && (model_dir.join("model.safetensors").exists()
                 || model_dir.join("model.bin").exists());
 
-        Self {
-            config,
-            is_loaded,
-        }
+        Self { config, is_loaded }
     }
 
     /// Create a new local provider with default configuration.
@@ -106,9 +105,10 @@ impl LocalProvider {
         // Check again if files exist
         let model_dir = Path::new(&self.config.model_path);
         if !model_dir.exists() {
-            return Err(EmbeddingError::ModelUnavailable(
-                format!("Model directory not found: {}", self.config.model_path),
-            ));
+            return Err(EmbeddingError::ModelUnavailable(format!(
+                "Model directory not found: {}",
+                self.config.model_path
+            )));
         }
 
         // Placeholder: actual implementation would load the model here

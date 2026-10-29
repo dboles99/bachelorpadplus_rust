@@ -178,9 +178,7 @@ pub fn provider_for_policy(
 ) -> Arc<dyn EmbeddingProvider> {
     match embeddings_policy {
         EmbeddingsPolicy::None => Arc::new(NullProvider),
-        EmbeddingsPolicy::Local => {
-            local_provider.unwrap_or_else(|| Arc::new(NullProvider))
-        }
+        EmbeddingsPolicy::Local => local_provider.unwrap_or_else(|| Arc::new(NullProvider)),
         EmbeddingsPolicy::Cloud => {
             if network_policy == NetworkPolicy::Allowed {
                 cloud_provider.unwrap_or_else(|| Arc::new(NullProvider))
@@ -235,12 +233,8 @@ mod tests {
 
     #[test]
     fn provider_for_policy_returns_null_for_none() {
-        let provider = provider_for_policy(
-            EmbeddingsPolicy::None,
-            NetworkPolicy::Allowed,
-            None,
-            None,
-        );
+        let provider =
+            provider_for_policy(EmbeddingsPolicy::None, NetworkPolicy::Allowed, None, None);
         let result = provider.embed("test", &test_policy()).unwrap();
         assert!(result.is_none());
     }
