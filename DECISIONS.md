@@ -77,6 +77,7 @@ ADR-0017 and not to ADR-0018, which *was* a defect and is fixed below.
 | BP-ADR-0083 | 2026-09-11 | Wire `Buffer::access` to file permissions so read-only files refuse edits at the rope level, not at save time | Accepted | [ADR-0083](docs/decisions/ADR-0083.md) |
 | BP-ADR-0084 | 2026-09-11 | Status bar reports line and column in both editor surfaces, now that `TextInput`'s caret is readable | Accepted | [ADR-0084](docs/decisions/ADR-0084.md) |
 | BP-ADR-0085 | 2026-09-11 | Warn once per session when a plaintext recovery journal would receive a document that contains secrets | Accepted | [ADR-0085](docs/decisions/ADR-0085.md) |
+| BP-ADR-0091 | 2026-10-29 | Hosted CI runs the gate script on every push and is the gate; the local gate is the fallback for a GitHub outage or a blocked Actions bill -- ADR-0082's scoping reopened by the repository going public | Accepted | [ADR-0091](docs/decisions/ADR-0091.md) |
 | BP-ADR-0017 | amended 2026-08-22 | Half of the renderer revert condition is now a number rather than a feeling: per-frame row building, and its independence from document size | Accepted, amended | [ADR-0017](docs/decisions/ADR-0017.md) |
 | BP-ADR-0018 | amended 2026-08-22 | D2 re-asked and reaffirmed: `--editor-view` stays opt-in and unchanged. Neither re-ask condition has been met, and the parity tax *fell* from five features to four | Accepted, amended | [ADR-0018](docs/decisions/ADR-0018.md) |
 

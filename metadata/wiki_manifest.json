@@ -6,8 +6,8 @@
       "page": "Overview",
       "kind": "mirror",
       "source": "README.md",
-      "source_sha256": "ee5a1d7749e438fef4d240e9fb7ec7f9f58263789382c5f372cbfd9bca7c2995",
-      "page_sha256": "4e6f976ec46be138e8cd24ef944afb658c9b4b6cd319799eaa6da5cfb84cb281"
+      "source_sha256": "61615c6b921da89f131b6754ee5562834ee62dfabb99f070b0436f7a1934e701",
+      "page_sha256": "0642b3b7d7d309209b00724b6fca1fdb02ed1fc798b7124f3416ca1fe3bb9e8e"
     },
     {
       "page": "Product-Spec",
@@ -69,22 +69,22 @@
       "page": "Decision-Register-and-Lessons",
       "kind": "mirror",
       "source": "DECISIONS.md",
-      "source_sha256": "586d3bd900f526cbfc145d718a0b91b21f2ef1a7508fb36dc91e6a32e0ef3be8",
-      "page_sha256": "42a12e7a7beff64b3c7646a8f46ff5f1696edcf305c18cfd81a03f6702ad3b15"
+      "source_sha256": "5d8c1574f5130dc884501f593091fd1186e945837b95c853d4a168aaa229b1d8",
+      "page_sha256": "e2d82a6dd689ad2c520b53e575e094875772b46b264b819c12c7808f6f109441"
     },
     {
       "page": "Project-Memory",
       "kind": "mirror",
       "source": "PROJECT_MEMORY.md",
       "source_sha256": "27f26622c0c4f982a75d847a6a788cea62c56e16ffd668e3b5c56c8aa82abaf9",
-      "page_sha256": "2394ae680fc46204de5fcb1005e134a3a4165f82fe5b055f689505a18280f6a0"
+      "page_sha256": "639bc72890d1193aa641e894c099c8477687faaa92f6a6c7ebbda1c00942d276"
     },
     {
       "page": "Local-CI",
       "kind": "mirror",
       "source": "docs/governance/LOCAL_CI.md",
-      "source_sha256": "4aa7416c2e0c59411494e15b8682af85591f13333cb33415b46711bd5317785f",
-      "page_sha256": "86c9a875a789d74bb0c7fe4a26e2301b683979fa22c107c06fce81d82598a012"
+      "source_sha256": "29dde205b28ad21140f4775f382a51be63687b34fa115dcc22b7ede2bad04182",
+      "page_sha256": "2b8783a4f273364a0f3d42e7666c5d1473332fab4740516ebe4347f9015ed669"
     },
     {
       "page": "Work-Model",
@@ -103,16 +103,16 @@
     {
       "page": "Agents",
       "kind": "mirror",
-      "source": "AGENTS.md",
-      "source_sha256": "662dfbba81c637380876487e46de64739298a0d2e0b28621c7e4344bfef15dd6",
-      "page_sha256": "436c337fae54b7a344b5f3d6bdea061326cf95d3b773e698f47f1dd825093dd6"
+      "source": "CLAUDE.md",
+      "source_sha256": "c0d3e2f7bdc55bf5e59cae3d0bd6bd9ebfb87ecf6d21ede08e21a59a54d91213",
+      "page_sha256": "a8835ec5957a97b8c22fdc02a3e751e619138c4b308be15942e6025c669c2f8c"
     },
     {
       "page": "Wiki-Sync",
       "kind": "mirror",
       "source": "docs/governance/WIKI_SYNC.md",
-      "source_sha256": "b0c1d531a31c1a2bf9baa3c4c1326a4fa0ba4ae7d08df6b18570e93a63e68d3b",
-      "page_sha256": "b65f57f7c703196bf339bb0aab4ed3643d879ce1d602c0330d1da001c41342a9"
+      "source_sha256": "e78d45674ffcf0763b8e54365a4cf781b4ea5869759ce0b66f3c6059666a09e5",
+      "page_sha256": "c9dfa257bf7993a47217ccffac00ebbf0519b374d963518c9b52ad7b9923ec06"
     },
     {
       "page": "Crates",
@@ -125,8 +125,8 @@
       "page": "Decision-Records",
       "kind": "derived",
       "source": "docs/decisions/ADR-*.md",
-      "source_sha256": "a73e7b1434f00ebbe9a5da1f8df5ae842490e5548882c0e55e27176545510aaa",
-      "page_sha256": "f8b5af225d44f1250e12b245e0b4c520a744d0028665b6884383707f193f5f05"
+      "source_sha256": "c9b96a78b6d6b0bf8e75f1659c6a9eb13546dd6d9dc2b6e0095b31d44b87aeee",
+      "page_sha256": "25526212fc37c1f0472f24cc54416bb5171bef1dbe42caa37e4f260d75acfd88"
     }
   ]
 }

@@ -50,7 +50,9 @@ $mirrors = @(
     @{ Group = 'Working on it'; Page = 'Local-CI';      Src = 'docs/governance/LOCAL_CI.md' },
     @{ Group = 'Working on it'; Page = 'Work-Model';    Src = 'docs/governance/WORK_MODEL.md' },
     @{ Group = 'Working on it'; Page = 'Definition-of-Done'; Src = 'docs/governance/DEFINITION_OF_DONE.md' },
-    @{ Group = 'Working on it'; Page = 'Agents';        Src = 'AGENTS.md' },
+    # CLAUDE.md, not AGENTS.md: AGENTS.md is a gitignored local copy, so a blob
+    # link to it 404s on GitHub and the mirror would depend on an untracked file.
+    @{ Group = 'Working on it'; Page = 'Agents';        Src = 'CLAUDE.md' },
     @{ Group = 'Working on it'; Page = 'Wiki-Sync';     Src = 'docs/governance/WIKI_SYNC.md' }
 )
 # Pages derived from the tree rather than mirrored from one file.

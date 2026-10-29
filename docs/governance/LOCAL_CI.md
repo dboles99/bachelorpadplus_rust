@@ -1,7 +1,11 @@
 # Local CI
 
-BachelorPad+ has no hosted CI. GitHub Actions is unavailable to this project,
-so the gate is local and it is the only gate. See ADR-0016.
+BachelorPad+ has hosted CI, and it is the gate: `.github/workflows/ci.yml` runs
+`scripts/Invoke-LocalCI.ps1` on Windows and Ubuntu on every push and pull
+request ([ADR-0091](../decisions/ADR-0091.md)). This page is about running that
+same script by hand, which is the **fallback** for when GitHub is unavailable or
+Actions is blocked because a bill is unpaid, and the quick way to get an answer
+before pushing. See also ADR-0016, whose original premise no longer holds.
 
 ## Setup, once per clone
 
@@ -146,24 +150,17 @@ Timing measured under WSLg is *not* representative — the compositor adds
 overhead a native desktop does not. Use it to verify correctness, not
 performance.
 
-## The dormant workflow
+## The hosted workflow
 
-`.github/workflows/ci.yml` is kept and kept correct, set to
-`workflow_dispatch` only so that pushes do not queue runs that cannot execute.
-It exists so hosted CI can be switched back on without rebuilding it.
+`.github/workflows/ci.yml` runs on every push and pull request, and on manual
+dispatch. It runs `Invoke-LocalCI.ps1` itself rather than a list of its steps,
+so there is nothing to keep in step: one gate run in two places cannot disagree
+with itself ([ADR-0091](../decisions/ADR-0091.md)). On Windows the script runs its
+native leg; the Ubuntu job is what the WSL leg (`-Linux`) stands in for.
 
-Actions is also **disabled at the repository level**, because editing the
-trigger only protects branches carrying the edit — pushing an older branch
-still queued a run. To re-enable hosted CI later you need both:
-
-```bash
-gh api -X PUT repos/:owner/:repo/actions/permissions -F enabled=true
-# then restore `on: push` / `on: pull_request` in the workflow
-```
-
-**Keep it in step with `Invoke-LocalCI.ps1`.** Two gates that disagree are
-worse than one.
-
+Actions is enabled at the repository level. If it is ever blocked again (an
+unpaid bill, an outage), this page is the fallback: run `-Linux` here and treat
+its green as the gate until it comes back.
 ## A note on this machine
 
 `core.hooksPath` is set globally here, which normally makes git ignore every
