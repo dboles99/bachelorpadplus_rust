@@ -35,6 +35,8 @@ export component StatusBar inherits Rectangle {
     in property <string> size-label;
     in property <string> location;
     in property <string> error-message;
+    /// Comma-separated list of active experimental flags, shown only when non-empty.
+    in property <string> experimental-label;
 
     callback cycle-theme();
 
@@ -98,6 +100,13 @@ export component StatusBar inherits Rectangle {
                         root.cycle-theme();
                     }
                 }
+            }
+            // Experimental flags are shown after theme, marked as developmental.
+            if root.experimental-label != "": Text {
+                text: "│ Dev: " + root.experimental-label;
+                color: Palette.accent;
+                font-size: 12px;
+                vertical-alignment: center;
             }
         }
 

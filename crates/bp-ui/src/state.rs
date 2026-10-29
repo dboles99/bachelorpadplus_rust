@@ -159,6 +159,8 @@ pub struct AppState {
     /// reports it; nothing here asks the platform directly.
     pub(crate) system_dark: Option<bool>,
     pub(crate) error: Option<String>,
+    /// Comma-separated list of active experimental flags.
+    pub(crate) experimental_flags: String,
     /// Whether the "document contains secrets in plaintext journal" warning
     /// has been shown this session. One shot per session to avoid spam.
     pub(crate) secrets_warning_shown: std::cell::Cell<bool>,
@@ -342,6 +344,7 @@ impl AppState {
             follow_system_theme: false,
             system_dark: None,
             error: None,
+            experimental_flags: String::new(),
             secrets_warning_shown: std::cell::Cell::new(false),
             gutter: String::new(),
             gutter_lines: usize::MAX,
@@ -1838,12 +1841,17 @@ pub(crate) fn new_window_command() -> std::io::Result<std::process::Command> {
 /// state to reach into. Deliberately silent about what is inside those
 /// directories -- a passphrase, a document, a file listing -- this reports
 /// what the paths resolve to, not what is in them.
-pub(crate) fn diagnostics_report() -> String {
+pub(crate) fn diagnostics_report(state: &AppState) -> String {
     let named = |dir: Option<PathBuf>| {
         dir.map_or_else(|| "not available".to_owned(), |p| p.display().to_string())
     };
+    let exp_section = if state.experimental_flags.is_empty() {
+        String::new()
+    } else {
+        format!("\n\nExperimental flags: {}", state.experimental_flags)
+    };
     format!(
-        "BachelorPad+ {}\n\nRenderer: {}\n\nConfig file: {}\nState directory: {}\nData directory: {}",
+        "BachelorPad+ {}\n\nRenderer: {}\n\nConfig file: {}\nState directory: {}\nData directory: {}{}",
         env!("CARGO_PKG_VERSION"),
         std::env::var("SLINT_BACKEND").unwrap_or_else(|_| "software".to_owned()),
         named(bp_config::config_path()),
@@ -1851,6 +1859,7 @@ pub(crate) fn diagnostics_report() -> String {
         named(bp_platform::dirs::host_directory(
             bp_platform::DirKind::Data
         )),
+        exp_section
     )
 }
 
@@ -3089,7 +3098,8 @@ mod tests {
 
     #[test]
     fn the_diagnostics_report_names_the_version_and_every_resolved_directory() {
-        let report = diagnostics_report();
+        let state = AppState::new();
+        let report = diagnostics_report(&state);
         assert!(report.contains(env!("CARGO_PKG_VERSION")), "got {report}");
         assert!(report.contains("Config file:"), "got {report}");
         assert!(report.contains("State directory:"), "got {report}");

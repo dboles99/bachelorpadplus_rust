@@ -12,7 +12,9 @@ use bp_platform::editor::{Consent, InstallRefusal, RegistrationPlan};
 use bp_theme::ThemeId;
 
 use crate::menus::{self, action};
-use crate::state::{AppState, NoteOutcome, PushText, SaveResult, secret_scan_report};
+use crate::state::{
+    AppState, NoteOutcome, PushText, SaveResult, diagnostics_report, secret_scan_report,
+};
 use crate::{AppWindow, set_os_clipboard};
 
 const SHORTCUTS: &str = "\
@@ -953,7 +955,8 @@ pub fn handle_menu_action(
         }
 
         action::DIAGNOSTICS => {
-            show_info("Diagnostics", &crate::state::diagnostics_report());
+            let report = diagnostics_report(&state.borrow());
+            show_info("Diagnostics", &report);
             push = PushText::No;
         }
 

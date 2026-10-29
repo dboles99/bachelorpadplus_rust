@@ -480,6 +480,8 @@ pub struct RunOptions {
     /// care -- `run()`, and every test -- gets the size the editor has always
     /// drawn at.
     pub font_size: Option<u8>,
+    /// Comma-separated list of active experimental flags for the status bar.
+    pub experimental_label: String,
 }
 
 /// Run the BachelorPad+ shell.
@@ -565,6 +567,7 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
     }
 
     initial.editor_view = options.editor_view;
+    initial.experimental_flags = options.experimental_label.clone();
     let state = Rc::new(RefCell::new(initial));
     // The starting value only. `refresh` owns this property from here on and
     // recomputes it per document, because ADR-0030 makes the answer depend on
@@ -575,6 +578,11 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
     // as a literal: `WINDOWS_PER_TICK` and this interval only mean something
     // together, and they must not be a file apart.
     ui.set_scan_tick_ms(i32::try_from(bp_search::STREAM_TICK.as_millis()).unwrap_or(16));
+
+    // Experimental flags for status bar display. Set once at startup and
+    // never changed -- unlike the document-dependent labels, these are
+    // session-wide configuration.
+    ui.set_experimental_label(options.experimental_label.into());
 
     let mut reported = false;
     let measure_exit = options.measure_exit;

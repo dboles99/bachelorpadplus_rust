@@ -73,6 +73,8 @@ export component AppWindow inherits Window {
     in property <string> security-profile;
     in property <string> size-label;
     in property <string> error-message;
+    /// Comma-separated list of active experimental flags.
+    in property <string> experimental-label;
     /// What the desktop's appearance setting says, reported to Rust so
     /// `bp_theme::ThemeId::for_system` can resolve it.
     ///
@@ -991,6 +993,7 @@ export component AppWindow inherits Window {
                 security-label: root.security-profile;
                 size-label: root.size-label;
                 theme-name: root.theme-name;
+                experimental-label: root.experimental-label;
                 location: root.location;
                 error-message: root.error-message;
 

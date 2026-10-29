@@ -981,7 +981,7 @@ mod tests {
         assert_eq!(found.kind, MetadataKind::OrganizationName);
         assert_eq!(found.exposure, Exposure::Identifying);
 
-        let found = single("generator: BachelorPad+ 0.1.0");
+        let found = single("generator: BachelorPad+ 1.1.1");
         assert_eq!(found.kind, MetadataKind::ToolFingerprint);
         assert_eq!(found.exposure, Exposure::Circumstantial);
         assert!(found.exposure < Exposure::Identifying);
