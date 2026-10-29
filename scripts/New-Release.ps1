@@ -216,7 +216,12 @@ else {
 
 Write-Step 'checksums'
 $archives = @($windowsArchive, $bareExe)
-if ($linuxArchive) { $archives += $linuxArchive }
+if ($linuxArchive) { 
+    $archives += $linuxArchive
+    # Also include the Linux zip file
+    $linuxZip = Join-Path $Out "$stem-linux-x86_64.zip"
+    if (Test-Path $linuxZip) { $archives += $linuxZip }
+}
 
 $lines = foreach ($archive in $archives) {
     $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
