@@ -7,5 +7,5 @@
 - `architecture/` — system, platform, data and security architecture
 - `brand/` — original retro-futurist brand guidance
 - `decisions/` — ADRs
-- `governance/` — work model and definition of done
+- `governance/` — work model, definition of done, and how the GitHub Wiki is generated (`WIKI_SYNC.md`)
 - `product/` — menu and product behavior maps
