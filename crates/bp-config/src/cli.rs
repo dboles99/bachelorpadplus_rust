@@ -375,7 +375,7 @@ mod tests {
 
     const PACKAGE: Package = Package {
         version: "9.9.9",
-        license: "MIT OR Apache-2.0",
+        license: "GPL-3.0-only",
     };
 
     #[test]
@@ -504,7 +504,7 @@ mod tests {
     fn version_reports_the_version_and_licence_it_was_handed() {
         let rendered = version(PACKAGE);
         assert!(rendered.contains("9.9.9"), "got {rendered}");
-        assert!(rendered.contains("MIT OR Apache-2.0"), "got {rendered}");
+        assert!(rendered.contains("GPL-3.0-only"), "got {rendered}");
     }
 
     #[test]

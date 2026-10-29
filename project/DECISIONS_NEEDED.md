@@ -54,10 +54,10 @@ Full reasoning for each in [V1_1_1_PLAN.md](V1_1_1_PLAN.md) section 1.
 | --- | --- | --- | --- |
 | D17 | ~~`1.1.1` from `0.1.0`, with nothing ever shipped?~~ | **Done.** Version bumped to 1.1.1 in workspace and all crates | -- |
 | D18 | ~~Does an experimental flag survive a restart?~~ | **Done.** Persist via config file and environment variable, displayed in status bar and Help>Diagnostics | -- |
-| D19 | Does a ticket ever leave the machine by itself? | **No, and never** | either |
-| D20 | Where do tickets go? | A pre-filled GitHub issue URL | Daniel |
+| D19 | ~~Does a ticket ever leave the machine by itself?~~ | **Done.** No, and never. Report Issue menu opens browser with pre-filled URL | -- |
+| D20 | ~~Where do tickets go?~~ | **Done.** Pre-filled GitHub issue URL via Help>Report an Issue | -- |
 | D21 | ~~Does `--editor-view` survive 1.1.1?~~ | **Done.** Flag retired, custom surface is now default. CJK input limitation notice added ([D21_D25_FINDINGS.md](../project/D21_D25_FINDINGS.md)) | -- |
-| D22 | Unsigned at 1.1.1? | Ship unsigned and say so; start a certificate now if you want one for 1.2 | Daniel |
+| D22 | ~~Unsigned at 1.1.1?~~ | **Done.** README documents Windows SmartScreen click-through ([ADR-0055](../docs/decisions/ADR-0055.md)) | -- |
 | D23 | ~~The icon~~ | **Answered by looking.** It exists downstream, and so does the reason it must be a PNG | -- |
 | D24 | ~~Installer or zip?~~ | **Answered by looking.** Downstream ADR-0067: no installer | -- |
 | D25 | ~~Hosted CI, against ADR-0016?~~ | **Answered yes.** Actions enabled via API, scoped to pull requests and main ([ADR-0082](../docs/decisions/ADR-0082.md)). Repository setting flipped 2026-10-29 | -- |
