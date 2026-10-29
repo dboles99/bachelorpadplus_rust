@@ -6393,10 +6393,7 @@ mod tests {
 
         assert_eq!(findings.len(), 1);
         let notice = state.error.clone().expect("a status message");
-        assert!(
-            notice.contains('1'),
-            "the count belongs in it"
-        );
+        assert!(notice.contains('1'), "the count belongs in it");
         assert!(
             notice.contains("AWS access key ID"),
             "the kind belongs in it"
@@ -6420,10 +6417,7 @@ mod tests {
             secret_scan_summary(&findings),
             secret_scan_report(&findings),
         ] {
-            assert!(
-                !line.contains(LEAKED),
-                "the credential is back on screen"
-            );
+            assert!(!line.contains(LEAKED), "the credential is back on screen");
         }
     }
 
@@ -6440,7 +6434,10 @@ mod tests {
 
         let summary = secret_scan_summary(&findings);
         assert!(summary.contains('5'), "the summary has the finding count");
-        assert!(summary.contains("and 2 more"), "the summary names omitted findings");
+        assert!(
+            summary.contains("and 2 more"),
+            "the summary names omitted findings"
+        );
     }
 
     #[test]
@@ -6448,7 +6445,10 @@ mod tests {
         let findings = bp_secrets::scan(LEAKY);
         let report = secret_scan_report(&findings);
         assert_eq!(report.lines().count(), findings.len());
-        assert!(report.contains("line 2, column"), "the report includes the finding position");
+        assert!(
+            report.contains("line 2, column"),
+            "the report includes the finding position"
+        );
     }
 
     // --- Hash, sign, verify ------------------------------------------------
@@ -7433,10 +7433,7 @@ a = 2
         let outcome = state.error.clone().expect("a status message");
 
         for line in [planned, consent, outcome, plan.refusal()] {
-            assert!(
-                !line.contains(LEAKED),
-                "the credential is back on screen"
-            );
+            assert!(!line.contains(LEAKED), "the credential is back on screen");
         }
     }
 
@@ -7455,8 +7452,14 @@ a = 2
             "there is nothing here this can safely destroy"
         );
         let notice = state.error.clone().expect("a status message");
-        assert!(notice.contains("nothing was redacted"), "the redaction explains its refusal");
-        assert!(notice.contains("private key"), "the redaction identifies the private key");
+        assert!(
+            notice.contains("nothing was redacted"),
+            "the redaction explains its refusal"
+        );
+        assert!(
+            notice.contains("private key"),
+            "the redaction identifies the private key"
+        );
         assert!(
             notice.contains("BEGIN"),
             "the user has to know why, or they will read it as a bug"
@@ -7489,8 +7492,14 @@ a = 2
         state.decline_redaction(&plan);
         let notice = state.error.clone().expect("a status message");
 
-        assert!(notice.contains("nothing was redacted"), "the refusal is reported");
-        assert!(notice.contains("still in this document"), "the surviving credential is reported");
+        assert!(
+            notice.contains("nothing was redacted"),
+            "the refusal is reported"
+        );
+        assert!(
+            notice.contains("still in this document"),
+            "the surviving credential is reported"
+        );
         assert_eq!(state.active_text(), LEAKY);
     }
 
@@ -7510,7 +7519,10 @@ a = 2
             "stale offsets must not be applied"
         );
         let notice = state.error.clone().expect("a status message");
-        assert!(notice.contains("nothing was redacted"), "the refusal is reported");
+        assert!(
+            notice.contains("nothing was redacted"),
+            "the refusal is reported"
+        );
         assert!(
             notice.contains("changed while the dialog was open"),
             "the stale plan explains why it was refused"
@@ -7541,12 +7553,18 @@ a = 2
         assert!(state.apply_redaction(&plan));
         let notice = state.error.clone().expect("a status message");
         assert!(notice.starts_with('⚠'), "the survivor warning is shown");
-        assert!(notice.contains("still occurs elsewhere"), "the survivor warning explains the result");
+        assert!(
+            notice.contains("still occurs elsewhere"),
+            "the survivor warning explains the result"
+        );
         assert!(
             notice.contains("line 1"),
             "the survivor is reported by position, never by text"
         );
-        assert!(!notice.contains(LEAKED), "the survivor warning does not include the credential");
+        assert!(
+            !notice.contains(LEAKED),
+            "the survivor warning does not include the credential"
+        );
     }
 
     #[test]
