@@ -1039,17 +1039,13 @@ mod tests {
 
     #[test]
     fn a_flag_owned_elsewhere_is_accepted_in_silence() {
-        // --measure-exit and --self-check belong to the shell and
-        // --editor-view to bp-ui. This crate must neither act on them nor
-        // complain about them -- and it can only tell them from a typo
-        // because `cli::FLAGS` lists all of them.
+        // --measure-exit, --self-check and --latency-probe belong to the shell.
         let (c, n) = resolve(
             None,
             &Env::default(),
             &args(&[
                 "--measure-exit",
                 "--self-check",
-                "--editor-view",
                 "--latency-probe",
                 "file.txt",
             ]),
@@ -1082,10 +1078,10 @@ mod tests {
 
     #[test]
     fn a_switch_typed_with_a_value_is_reported() {
-        // `--editor-view=true` reads as though it works and does nothing:
+        // `--measure-exit=true` reads as though it works and does nothing:
         // the shell compares the whole argument, so the value stops it
         // matching. Silence here is what made that a five-minute puzzle.
-        let (c, n) = resolve(None, &Env::default(), &args(&["--editor-view=true"]));
+        let (c, n) = resolve(None, &Env::default(), &args(&["--measure-exit=true"]));
         assert_eq!(c, Config::default());
         let said = n.first().map(ToString::to_string).unwrap_or_default();
         assert!(said.contains("takes no value"), "got {said}");

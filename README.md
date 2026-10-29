@@ -53,7 +53,6 @@ authoritative gate and runs from `pre-commit` and `pre-push`. See
 ```powershell
 cargo run --release            # the app
 cargo run --release -- --help  # every flag it accepts
-cargo run --release -- --editor-view   # with the custom editor view (ADR-0018)
 ./scripts/Measure-Startup.ps1  # startup and idle memory vs specs.md §22
 ./scripts/New-Release.ps1 -Linux       # archives for both targets, with checksums
 ```
@@ -114,10 +113,11 @@ Things that do not work, with the reason. Where the reason is "Slint
 citation is in `project/WORK_QUEUE.md`, and the point of it is that nobody
 should spend an afternoon on these before checking the version changed.
 
-- **Input-method composition does not work under `--editor-view`, and cannot
-  on this Slint.** `FocusScope` rejects `UpdateComposition` and
+- **Input-method composition does not work in the default editor surface**,
+  and cannot on this Slint.** `FocusScope` rejects `UpdateComposition` and
   `CommitComposition` in both its handlers and exposes no callback for either;
-  `TextInput` is the only item in the toolkit that consumes them. Without it
+  `TextInput` is the only item in the toolkit that consumes them. A startup
+  notice is shown to warn users of this limitation.
   CJK entry does not work at all, so the default stays `TextInput`. **This was
   the second of two parity conditions, and it is now a blocker rather than a
   task** -- see `project/WORK_QUEUE.md`.
@@ -127,10 +127,11 @@ should spend an afternoon on these before checking the version changed.
   `DataTransfer` carries only plain text or an image, so there is no channel a
   dropped file's path could arrive through. Blocked on Slint, not on effort.
 
-- **No feature needs `--editor-view` any more, and thirteen menu rows stopped
-  being greyed** ([ADR-0080](docs/decisions/ADR-0080.md)). This entry read
-  *"four features are enabled only under `--editor-view`… they need to know
-  where the caret is, and `TextInput` will not say"* until 2026-09-10. It
+- **The `--editor-view` flag is retired; the custom editor surface is now
+  the default** ([ADR-0080](docs/decisions/ADR-0080.md)). Thirteen menu rows
+  stopped being greyed once the caret was found to be readable. CJK input
+  composition is the one capability still unavailable; a startup notice warns
+  users.
   says: `cursor-position-byte-offset`, an `out` property in Slint's own
   `builtins.slint`, confirmed by compiling. Duplicate and move line, the five
   date and time stamps and the five Markdown constructs are live in the build
@@ -206,7 +207,7 @@ lesson told in two places is a lesson corrected in one.
 - A 2 GB file opens, and costs 0.8 MiB.
 - Signing works, and the key is sealed rather than protected.
 - Somebody has now typed into the custom editor view, and it works.
-- Word wrap now works under `--editor-view`.
+- Word wrap now works in the custom editor surface.
 - The command line answers `--help` and `--version`, and reports a typo.
 - `--line=427 server.log` opens the file already at the line.
 

@@ -75,10 +75,14 @@ fn main() -> anyhow::Result<()> {
     let line = match bp_config::cli::line(&args) {
         Ok(line) => line,
         Err(typed) => {
-            notices.push(format!("'{typed}' is not a line number; ignored"));
+            notices.push(format!("{typed} is not a line number; ignored"));
             None
         }
     };
+
+    // CJK input limitation: custom editor surface does not support input-method
+    // composition on Slint 1.17.1. This is the trade for retiring --editor-view.
+    notices.push("CJK input composition is not supported in this build (Slint 1.17.1 limitation)".to_string());
 
     for notice in &notices {
         tracing::warn!("config: {notice}");
@@ -126,12 +130,9 @@ fn main() -> anyhow::Result<()> {
         }),
         font_size: Some(loaded.config.font_size),
         measure_exit: args.iter().any(|a| a == "--measure-exit"),
-        // Opt-in while the custom editor surface reaches parity with the
-        // widget it replaces (word wrap, input-method composition). Parsed
-        // here beside the other switches rather than through the config
-        // precedence, because it is a thing to try rather than a preference
-        // to keep.
-        editor_view: args.iter().any(|a| a == "--editor-view"),
+        // Custom editor surface is now the default. CJK input composition
+        // is not supported on Slint 1.17.1 (notice shown at startup).
+        editor_view: true,
     })?;
     Ok(())
 }

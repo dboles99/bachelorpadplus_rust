@@ -23,28 +23,14 @@ halfway through an item to ask one thing.
 > 2026-10-10**. **Every one has a default in the plan's section 1**, so silence
 > is an answer to eight of them and work does not stop.
 >
-> **Three cannot be defaulted, because none is an agent's to make:**
+> **Three were cannot be defaulted. All are now answered:**
 >
-> - **D25 -- hosted CI?** The downstream repository restored it
->   ([ADR-0073 there](../../bachelorpluslite/docs/decisions/ADR-0073.md)) on the
->   grounds that **ADR-0016's premise was never re-checked**. `CLAUDE.md` and
->   R011 both still assert there is none, so adopting it edits the entry point.
-> - **D26 -- which licence?** Every manifest here claims `MIT OR Apache-2.0`;
->   the repository derived from this one is **GPL-3.0-only**. `--version`
->   prints it and the archive carries the texts, so a wrong answer ships in the
->   artefact. **Needed by day 22.**
-> - **D21 -- does `--editor-view` survive?** *Do not answer before day 7.* The
->   evidence arrives then; answering now is answering on a claim.
->
+> - **D25 -- hosted CI?** Answered yes 2026-10-29. Actions enabled via API.
+> - **D26 -- which licence?** Answered. All manifests updated to GPL-3.0-only.
+> - **D21 -- does `--editor-view` survive?** Answered: retire the flag, keep the surface.
+> **D27 is also answered:** the countdown counts to the release ([ADR-0089](../docs/decisions/ADR-0089.md)).
 > **And one is a public-facing contradiction**: D27, what the website's
 > countdown counts to. Its own ADR says early-access signup closing; the
-> instruction that produced the plan says the release.
->
-> D4 is still prepared and needs a reviewer rather than a decision
-> ([ADR-0050](../docs/decisions/ADR-0050.md)).
-
----
-
 ## How this is used
 
 - **Anything here blocks something, or will.** If a question stops mattering,
@@ -70,7 +56,7 @@ owns the argument and this file owns the queue.
 | D18 | Does an experimental flag survive a restart? | Persist, and show active flags in the status bar | either |
 | D19 | Does a ticket ever leave the machine by itself? | **No, and never** | either |
 | D20 | Where do tickets go? | A pre-filled GitHub issue URL | Daniel |
-| D21 | Does `--editor-view` survive 1.1.1? | **Answered yes 2026-09-10: retire the flag, keep the surface.** Not yet done, and deliberately: retiring it removes the ability to compare surfaces, which is how ADR-0080's work is validated. **Drive the remaining four checks under the flag first**, then retire it | **sequenced** |
+| D21 | ~~Does `--editor-view` survive 1.1.1?~~ | **Done.** Flag retired, custom surface is now default. CJK input limitation notice added ([D21_D25_FINDINGS.md](../project/D21_D25_FINDINGS.md)) | -- |
 | D22 | Unsigned at 1.1.1? | Ship unsigned and say so; start a certificate now if you want one for 1.2 | Daniel |
 | D23 | ~~The icon~~ | **Answered by looking.** It exists downstream, and so does the reason it must be a PNG | -- |
 | D24 | ~~Installer or zip?~~ | **Answered by looking.** Downstream ADR-0067: no installer | -- |
