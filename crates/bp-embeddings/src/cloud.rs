@@ -28,7 +28,9 @@
 //!
 //! Each would have its own client implementation.
 
-use crate::{Embedding, EmbeddingError, EmbeddingProvider, EmbeddingProviderType, MAX_INPUT_TOKENS};
+use crate::{
+    Embedding, EmbeddingError, EmbeddingProvider, EmbeddingProviderType, MAX_INPUT_TOKENS,
+};
 use bp_security::Policy;
 use reqwest::Client;
 use serde::Deserialize;
@@ -271,7 +273,9 @@ pub fn cloud_provider() -> Result<Arc<dyn EmbeddingProvider>, EmbeddingError> {
 }
 
 /// Create a cloud provider with a specific API key.
-pub fn cloud_provider_with_key(api_key: String) -> Result<Arc<dyn EmbeddingProvider>, EmbeddingError> {
+pub fn cloud_provider_with_key(
+    api_key: String,
+) -> Result<Arc<dyn EmbeddingProvider>, EmbeddingError> {
     let mut provider = CloudProvider::with_defaults()?;
     provider.set_api_key(api_key);
     Ok(Arc::new(provider))
@@ -296,10 +300,7 @@ mod tests {
     }
 
     /// Helper to create a policy with specific settings
-    fn policy_with(
-        embeddings: bp_security::Embeddings,
-        network: bp_security::Network,
-    ) -> Policy {
+    fn policy_with(embeddings: bp_security::Embeddings, network: bp_security::Network) -> Policy {
         Policy {
             embeddings,
             network,
