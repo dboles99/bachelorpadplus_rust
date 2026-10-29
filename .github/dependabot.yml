@@ -1,0 +1,27 @@
+version: 2
+updates:
+  # Root workspace: apps/bachelorpad, every crates/bp-*, and tests/integration
+  # share one Cargo.lock, so one entry covers them all.
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      rust-minor-and-patch:
+        update-types: ["minor", "patch"]
+
+  # fuzz/ declares its own [workspace] and has its own lockfile,
+  # so the root entry does not see it.
+  - package-ecosystem: "cargo"
+    directory: "/fuzz"
+    schedule:
+      interval: "weekly"
+    groups:
+      fuzz-minor-and-patch:
+        update-types: ["minor", "patch"]
+
+  # .github/workflows/ci.yml
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
