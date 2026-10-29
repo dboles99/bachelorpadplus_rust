@@ -234,7 +234,8 @@ See `docs/governance/WORK_MODEL.md`.
 
 ## Licence
 
-Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at
-your option — which every crate manifest has claimed since the scaffold
-commit and neither file backed until 2026-08-23
-([ADR-0054](docs/decisions/ADR-0054.md)).
+Licensed under [GPL-3.0-only](LICENSE). The licence was changed from the
+original `MIT OR Apache-2.0` claim on 2026-10-29 because Slint is distributed
+under `GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0`,
+and a work statically linking GPL-3.0-only code cannot be distributed under
+MIT ([ADR-0081](docs/decisions/ADR-0081.md)).

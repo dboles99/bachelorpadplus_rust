@@ -55,7 +55,7 @@ chmod 755 "$DIR/bachelorpad"
 # a symlink from Windows needs a privilege this release should not want.
 ln -s bachelorpad "$DIR/bpad"
 
-cp README.md LICENSE-MIT LICENSE-APACHE "$DIR/"
+cp README.md LICENSE "$DIR/"
 
 # Icon files (ADR-0068): the icon ships beside the executable.
 # io.github.dboles99.BachelorPadPlus.png for the Slint window icon.
@@ -81,12 +81,12 @@ BachelorPad+ $VERSION
 commit:   $COMMIT
 target:   linux-x86_64
 signed:   no -- see ADR-0055
-licence:  MIT OR Apache-2.0; both texts are in this archive
+licence:  GPL-3.0-only; text is in this archive
 BUILDINFO
 
 # Modes an extracting user should get, set here because here they stick.
 chmod 755 "$DIR" "$DIR/bachelorpad"
-chmod 644 "$DIR/README.md" "$DIR/LICENSE-MIT" "$DIR/LICENSE-APACHE" "$DIR/BUILD.txt"
+chmod 644 "$DIR/README.md" "$DIR/LICENSE" "$DIR/BUILD.txt"
 
 mkdir -p "$OUT"
 rm -f "$OUT/$NAME.tar.gz"

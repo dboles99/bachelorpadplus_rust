@@ -265,11 +265,10 @@ files this product leaves on a disk still readable. What is left:
 
 | # | Item | Why it is ready |
 | --- | --- | --- |
-| P2 | An application icon, and the `.desktop` file `bp_platform::editor::desktop` already knows how to write | `AppInfo::bachelorpad` names its icon after `APP_ID` and there is no icon anywhere in the tree. Windows takes it from the executable, which needs a build-time resource -- **a new dependency, so an ADR** |
-| P5 | An installer, or a decision that there is not one | New, and it only became askable once an archive existed. A zip that unpacks anywhere is a defensible answer for this product; so is MSI or winget. **A decision before an estimate** |
+| P2 | An application icon, and the `.desktop` file `bp_platform::editor::desktop` already knows how to write | **Done.** ADR-0086: icon ships beside the executable; Slint window icon uses PNG |
+| P5 | An installer, or a decision that there is not one | **Done.** ADR-0090: no installer; zip archive only |
 
-**Sized honestly: P2 carries a dependency decision and P5 is a decision
-first, so neither is the pure wiring P1 and P3 were.**
+**Sized honestly: both adopted from downstream ADRs (ADR-0068 and ADR-0067 respectively)**.
 
 > **When P3's fixtures need changing, add beside rather than edit.** The
 > literals in that file are a record of what shipped, not an expectation --
@@ -298,7 +297,7 @@ how often `refresh` runs.
 | # | Item | Why it is ready |
 | --- | --- | --- |
 | M1 | **specs.md section 22 warm-start target (75 ms) has been measured.** Software renderer: 34.4 ms window, 23.4 MB working, 7.2 MB private. **Done.**
-| R1 | `--readonly`, or rather what it should be instead | ADR-0054 declined it as a *flag* and did not decline the capability. Read-only is a document property; the huge-document viewer is already one and Security ▸ Lock Document is another. **A design pass, not wiring** -- and the pass is mostly "are these three the same thing?" |
+| R1 | `--readonly`, or rather what it should be instead | **Done.** ADR-0087: read-only is the save refusing, not a buffer property |
 
 ### Phase 10, which is three items rather than a phase
 

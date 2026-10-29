@@ -38,8 +38,6 @@ returns fifty thousand hits nobody scrolls through:
 
 ## Outstanding
 
-- **Replace preview.** specs.md wants the changes shown before they are
-  applied. Replace All currently just does it — undoable, but not previewed.
 - **Fuzzy search.** Not started.
 - **Search within a selection**, and **replace in files** across a directory.
 - **Streaming search** for files too large to hold in memory. Belongs with the
