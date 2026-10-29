@@ -30,8 +30,9 @@ halfway through an item to ask one thing.
 > - **D21 -- does `--editor-view` survive?** Answered: retire the flag, keep the surface.
 >
 > **D18 (experimental flags) is also answered:** persist via config file and environment, displayed in status bar and Help>Diagnostics.
+> **D19/D20 (tickets) are also answered:** Report Issue menu opens pre-filled GitHub URL.
+> **D22 (unsigned) is also answered:** README documents Windows SmartScreen click-through.
 > **D27 is also answered:** the countdown counts to the release ([ADR-0089](../docs/decisions/ADR-0089.md)).
-> countdown counts to. Its own ADR says early-access signup closing; the
 ## How this is used
 
 - **Anything here blocks something, or will.** If a question stops mattering,
@@ -47,8 +48,10 @@ halfway through an item to ask one thing.
 
 ## Open
 
-**Most rows from the 2026-09-10 batch are now answered or done.** Remaining items are tracked below.
+**All eleven rows from the 2026-09-10 v1.1.1 batch are now answered or done.**
 Full reasoning for each in [V1_1_1_PLAN.md](V1_1_1_PLAN.md) section 1.
+
+Remaining items below are from earlier plans and kept for context.
 
 | # | Question | Default in the plan | Whose |
 | --- | --- | --- | --- |
