@@ -92,5 +92,29 @@ mkdir -p "$OUT"
 rm -f "$OUT/$NAME.tar.gz" "$OUT/$NAME.zip"
 tar czf "$OUT/$NAME.tar.gz" -C "$STAGE" "$NAME"
 # Also create a zip variation for Linux users who prefer it
-(cd "$STAGE" && zip -r "$OUT/$NAME.zip" "$NAME")
+# Use Python's zipfile module if zip command is not available
+if command -v zip >/dev/null 2>&1; then
+    (cd "$STAGE" && zip -r "$OUT/$NAME.zip" "$NAME")
+else
+    # Fallback: use Python to create zip
+    python3 -c "
+import zipfile
+import os
+import shutil
+
+name = '$NAME'
+stage_dir = '$STAGE'
+out_dir = '$OUT'
+out_zip = os.path.join(out_dir, name + '.zip')
+
+os.makedirs(out_dir, exist_ok=True)
+
+with zipfile.ZipFile(out_zip, 'w', zipfile.ZIP_DEFLATED) as zf:
+    for root, dirs, files in os.walk(os.path.join(stage_dir, name)):
+        for file in files:
+            file_path = os.path.join(root, file)
+            arcname = os.path.relpath(file_path, os.path.join(stage_dir, name))
+            zf.write(file_path, arcname)
+"
+fi
 echo "staged $NAME.tar.gz and $NAME.zip"
