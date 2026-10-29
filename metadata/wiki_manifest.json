@@ -1,0 +1,132 @@
+{
+  "generator": "scripts/Sync-Wiki.ps1",
+  "ref": "feat/phase-01-foundation-ui",
+  "pages": [
+    {
+      "page": "Overview",
+      "kind": "mirror",
+      "source": "README.md",
+      "source_sha256": "082c9f65f340510f2da3b1f249b8dc03ee5f4a089717dfc7f55e2aefba69eab3",
+      "page_sha256": "7cbb6c287b7bb6a7b83b119120152b8b2c35b19db7484a0941e58a9d7f3a6367"
+    },
+    {
+      "page": "Product-Spec",
+      "kind": "mirror",
+      "source": "specs.md",
+      "source_sha256": "766a78bcf633306018a7dc303fd24fc5d9f8c72f9de72ac345e5b55a176984a9",
+      "page_sha256": "569b5eebd06a136d8e685f2b63f7d43fdfde695e1293fa3f5616188d546ed3e9"
+    },
+    {
+      "page": "Latest-Release",
+      "kind": "mirror",
+      "source": "RELEASE_SUMMARY_v1.1.1.md",
+      "source_sha256": "3008a9ea811accc37961d3e585a973fa9f5d072dee60a97d5c86c6508f5b0980",
+      "page_sha256": "aa65e52f174a7a30656b09a864882e62b366731fa02d60d28dda14553c605f94"
+    },
+    {
+      "page": "Roadmap",
+      "kind": "mirror",
+      "source": "ROADMAP.md",
+      "source_sha256": "a6c839cbb22433a51aee847ff8dd2d847435df23f9fc5edf1b6b5833c0e42c5c",
+      "page_sha256": "bde0b27c6aad8ba3e68bee3b8078b704e7ae8c5c56434b998f4085881a62d5c1"
+    },
+    {
+      "page": "Architecture",
+      "kind": "mirror",
+      "source": "docs/architecture/ARCHITECTURE.md",
+      "source_sha256": "a5d09cb7e934fdc4f3808571da5215c34164022c02d0a4f2fa78d33593c03a76",
+      "page_sha256": "c8d54de0dcc76ff2fa131d9648725f53c328dd32f140618d972730fbace70466"
+    },
+    {
+      "page": "Security-Model",
+      "kind": "mirror",
+      "source": "docs/architecture/SECURITY_MODEL.md",
+      "source_sha256": "565b506b5e3ddcdff679b1ef983c2fac8890a2d4cc709376c54d6af9d4b01e89",
+      "page_sha256": "17fb9332e4d95858a1b95b199d70741f03f6d0f0fec91f26b527ffa1ae0e619a"
+    },
+    {
+      "page": "Platform-Matrix",
+      "kind": "mirror",
+      "source": "docs/architecture/PLATFORM_MATRIX.md",
+      "source_sha256": "d72e80840fa68b797f8bd0cc9d6e0c0c0b02e72606c817bfc1639bad48c35d09",
+      "page_sha256": "6c6a5d081c0d9740c8af416075bf62b767a1161b7de3b2c3f2868952a8494160"
+    },
+    {
+      "page": "Data-Model",
+      "kind": "mirror",
+      "source": "docs/architecture/DATA_MODEL.md",
+      "source_sha256": "4a627d25faab634529cd9bb0fc14a0a28136d5af438201c87dd368aea54e19ae",
+      "page_sha256": "8370c0c080ccdae83218a3d42b3040ef8cf29388e9442e9947ba8955d226afc0"
+    },
+    {
+      "page": "Menu-Map",
+      "kind": "mirror",
+      "source": "docs/product/MENU_MAP.md",
+      "source_sha256": "8aec6354c48cc097399a50940b41b3d925ba549b4df60ca05def42dafb8997db",
+      "page_sha256": "92fe8ee09bb631991a47c2da074c6ba543a770e2e0a5a3d1d0b9dd221caf33cc"
+    },
+    {
+      "page": "Decision-Register-and-Lessons",
+      "kind": "mirror",
+      "source": "DECISIONS.md",
+      "source_sha256": "586d3bd900f526cbfc145d718a0b91b21f2ef1a7508fb36dc91e6a32e0ef3be8",
+      "page_sha256": "42a12e7a7beff64b3c7646a8f46ff5f1696edcf305c18cfd81a03f6702ad3b15"
+    },
+    {
+      "page": "Project-Memory",
+      "kind": "mirror",
+      "source": "PROJECT_MEMORY.md",
+      "source_sha256": "27f26622c0c4f982a75d847a6a788cea62c56e16ffd668e3b5c56c8aa82abaf9",
+      "page_sha256": "2394ae680fc46204de5fcb1005e134a3a4165f82fe5b055f689505a18280f6a0"
+    },
+    {
+      "page": "Local-CI",
+      "kind": "mirror",
+      "source": "docs/governance/LOCAL_CI.md",
+      "source_sha256": "4aa7416c2e0c59411494e15b8682af85591f13333cb33415b46711bd5317785f",
+      "page_sha256": "86c9a875a789d74bb0c7fe4a26e2301b683979fa22c107c06fce81d82598a012"
+    },
+    {
+      "page": "Work-Model",
+      "kind": "mirror",
+      "source": "docs/governance/WORK_MODEL.md",
+      "source_sha256": "24423c37dd2f6a34406868fbbfcf3fadd0603a9c0a77c01f596fad5d8aba59fc",
+      "page_sha256": "563122c561df2e4e783421d269e66252b3f827ecf4e131284c6a43bed2b5f842"
+    },
+    {
+      "page": "Definition-of-Done",
+      "kind": "mirror",
+      "source": "docs/governance/DEFINITION_OF_DONE.md",
+      "source_sha256": "477429f1340b585869af99641445c67fa9a731c3b3265aefcca5727a5409d149",
+      "page_sha256": "d7968602d13f6aa0a6c68693b834ac657cc28f82bb455642c8453709b502aad2"
+    },
+    {
+      "page": "Agents",
+      "kind": "mirror",
+      "source": "AGENTS.md",
+      "source_sha256": "662dfbba81c637380876487e46de64739298a0d2e0b28621c7e4344bfef15dd6",
+      "page_sha256": "436c337fae54b7a344b5f3d6bdea061326cf95d3b773e698f47f1dd825093dd6"
+    },
+    {
+      "page": "Wiki-Sync",
+      "kind": "mirror",
+      "source": "docs/governance/WIKI_SYNC.md",
+      "source_sha256": "b0c1d531a31c1a2bf9baa3c4c1326a4fa0ba4ae7d08df6b18570e93a63e68d3b",
+      "page_sha256": "b65f57f7c703196bf339bb0aab4ed3643d879ce1d602c0330d1da001c41342a9"
+    },
+    {
+      "page": "Crates",
+      "kind": "derived",
+      "source": "crates/*/src/{lib,main}.rs",
+      "source_sha256": "4ca4cadb0ef765b41b6e217fbd25f3decd2db895df97559e61f2b268331ddd4a",
+      "page_sha256": "7b5d5486066c588fec6979187ab11dedcf2c4c6781035617b6c491c1a72353d5"
+    },
+    {
+      "page": "Decision-Records",
+      "kind": "derived",
+      "source": "docs/decisions/ADR-*.md",
+      "source_sha256": "a73e7b1434f00ebbe9a5da1f8df5ae842490e5548882c0e55e27176545510aaa",
+      "page_sha256": "f8b5af225d44f1250e12b245e0b4c520a744d0028665b6884383707f193f5f05"
+    }
+  ]
+}
