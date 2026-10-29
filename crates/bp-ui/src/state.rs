@@ -6,13 +6,13 @@
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
 use bp_config::Recent;
 use bp_core::{Document, DocumentId, Encoding, LineEnding, UNTITLED, Workspace};
 use bp_files::{
-    DiskState, EncodeError, FileStamp, LineEndingPolicy, SaveOptions, atomic_write,
-    load_with_limit, try_encode,
+    DiskState, EncodeError, FileStamp, LineEndingPolicy, load_with_limit, try_encode,
 };
 use bp_formats::Format;
 use bp_naming::SemanticName;
@@ -502,18 +502,16 @@ impl AppState {
             match_index: 0,
             find_status: String::new(),
             goto_status: String::new(),
-            // Relative fallbacks for an environment naming no directory at
-            // all, which is what these were before they had a home.
-            journal: bp_history::Journal::new(
-                locations
-                    .recovery
-                    .clone()
-                    .unwrap_or_else(|| PathBuf::from(bp_config::locations::RECOVERY_DIR)),
-            ),
+            // No recovery persistence when the environment names no private
+            // directory; never fall back to the process working directory.
+            journal: locations
+                .recovery
+                .clone()
+                .map_or_else(bp_history::Journal::disabled, bp_history::Journal::new),
             audit_path: locations
                 .security_history
                 .clone()
-                .unwrap_or_else(|| PathBuf::from(bp_config::locations::SECURITY_HISTORY_FILE)),
+                .unwrap_or_default(),
             profiles,
             profiles_path: locations.profiles.clone(),
             signing_key: locations.signing_key.clone(),
@@ -1420,8 +1418,9 @@ impl AppState {
             }
         };
 
-        match atomic_write(&target, &bytes, SaveOptions::default()) {
-            Ok(_) => {
+        let temporary_files = doc.security().policy_under(self.privacy).temporary_files;
+        match write_document_bytes(&target, &bytes, temporary_files) {
+            Ok(()) => {
                 let mut moved_to = None;
                 if let Some(doc) = self.workspace.get_mut(id) {
                     if doc.path() != Some(target.as_path()) {
@@ -1507,8 +1506,9 @@ impl AppState {
             }
         };
 
-        match atomic_write(target, &bytes, SaveOptions::default()) {
-            Ok(_) => {
+        let temporary_files = doc.security().policy_under(self.privacy).temporary_files;
+        match write_document_bytes(target, &bytes, temporary_files) {
+            Ok(()) => {
                 // Reported, because a write that leaves no trace anywhere in
                 // the window is indistinguishable from one that did not
                 // happen -- the tab does not change, and neither does the
@@ -1578,9 +1578,17 @@ impl AppState {
     /// on disk is older than this" are the same fact as far as a digest or a
     /// signature over these bytes is concerned.
     fn active_differs_from_disk(&self) -> bool {
-        self.workspace
-            .active()
-            .is_some_and(|doc| doc.is_dirty() || doc.path().is_none())
+        self.workspace.active().is_some_and(|doc| {
+            if doc.is_dirty() {
+                return true;
+            }
+            let Some(path) = doc.path() else {
+                return true;
+            };
+            self.stamps.get(&doc.id()).is_none_or(|stamp| {
+                bp_files::FileStamp::of(path).as_ref() != Some(stamp)
+            })
+        })
     }
 
     /// Scan the active document for credentials, reporting into the status
@@ -1780,6 +1788,14 @@ impl AppState {
             return false;
         };
 
+        if self.active_differs_from_disk() {
+            self.error = Some(
+                "cannot verify — the file changed since it was loaded; reload it first"
+                    .to_owned(),
+            );
+            return false;
+        }
+
         // A missing *document* is an error and a missing *signature* is a
         // verdict -- and a failing one. `bp-integrity` draws that line, and
         // the shell does not get to soften it: an unsigned document must not
@@ -1792,6 +1808,13 @@ impl AppState {
                 return false;
             }
         };
+        if self.active_differs_from_disk() {
+            self.error = Some(
+                "cannot verify — the file changed while it was being checked; try again"
+                    .to_owned(),
+            );
+            return false;
+        }
 
         let verified = verification.is_verified();
         // The flag rather than only the fact of a check: `Event` makes the
@@ -1908,9 +1931,13 @@ impl AppState {
             .active_id()
             .and_then(|id| self.passphrases.get(&id))
             .and_then(|p| bp_audit::PassphraseSealer::new(p).ok());
+        let destination = bp_audit::Destination::for_policy(policy);
+        if !destination.writes_to_disk() || self.audit_path.as_os_str().is_empty() {
+            return;
+        }
 
         let mut log = match bp_audit::AuditLog::open(
-            self.audit_path.clone(),
+            self.audit_path_for(destination),
             sealer.as_ref().map(|s| s as &dyn bp_audit::Sealer),
         ) {
             Ok(log) => log,
@@ -1948,6 +1975,11 @@ impl AppState {
     /// status bar -- a sealed history with no passphrase to hand is the
     /// common case, and it is a real answer rather than a failure.
     pub(crate) fn security_history(&mut self) -> Option<String> {
+        let destination = bp_audit::Destination::for_policy(self.policy());
+        if !destination.writes_to_disk() || self.audit_path.as_os_str().is_empty() {
+            self.error = Some("security history is disabled for this profile".to_owned());
+            return None;
+        }
         let sealer = self
             .workspace
             .active_id()
@@ -1955,7 +1987,7 @@ impl AppState {
             .and_then(|p| bp_audit::PassphraseSealer::new(p).ok());
 
         match bp_audit::AuditLog::open(
-            self.audit_path.clone(),
+            self.audit_path_for(destination),
             sealer.as_ref().map(|s| s as &dyn bp_audit::Sealer),
         ) {
             Ok(log) => {
@@ -2043,6 +2075,22 @@ impl AppState {
         self.security().policy_under(self.privacy)
     }
 
+    fn audit_path_for(&self, destination: bp_audit::Destination) -> PathBuf {
+        if destination != bp_audit::Destination::Sealed {
+            return self.audit_path.clone();
+        }
+        let Some(id) = self.workspace.active_id() else {
+            return self.audit_path.clone();
+        };
+        let mut path = self.audit_path.clone();
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("security-history");
+        path.set_file_name(format!("{name}.sealed-{}", id.get()));
+        path
+    }
+
     pub(crate) fn security(&self) -> bp_security::Security {
         self.workspace
             .active()
@@ -2060,10 +2108,15 @@ impl AppState {
         let Some(id) = self.workspace.active_id() else {
             return;
         };
-        let Some(doc) = self.workspace.get_mut(id) else {
-            return;
+        let (previous, document_path) = {
+            let Some(doc) = self.workspace.get_mut(id) else {
+                return;
+            };
+            (
+                doc.set_security(security),
+                doc.path().map(Path::to_path_buf),
+            )
         };
-        let previous = doc.set_security(security);
         if previous == security {
             return;
         }
@@ -2073,11 +2126,19 @@ impl AppState {
         // Remembered for the file, so reopening a Confidential document is
         // Confidential. An untitled document has no file to remember it
         // for yet; its first save does it.
-        if let Some(path) = doc.path().map(Path::to_path_buf) {
-            self.keep_profile(&path, security);
+        if let Some(path) = document_path.as_deref() {
+            self.keep_profile(path, security);
         }
 
         let policy = security.policy_under(self.privacy);
+        if policy.metadata == bp_security::Metadata::Disabled
+            && let Some(path) = document_path.as_deref()
+        {
+            self.recent.remove(path);
+            if let Some(file) = &self.recent_file {
+                bp_config::save_recent(file, &self.recent);
+            }
+        }
         if self.clips.enforce(policy.clipboard) {
             self.error = Some("clipboard history cleared to match this profile".to_owned());
         }
@@ -2097,7 +2158,7 @@ impl AppState {
         // into an actual deletion rather than waiting up to the autosave
         // interval with plaintext still on disk.
         let entry = bp_history::Checkpoint {
-            path: doc_path(&self.workspace, id),
+            path: document_path,
             name: self.display_name(id),
             text: self.text_of(id).to_owned(),
             written_at: bp_history::now_unix(),
@@ -2306,13 +2367,30 @@ impl AppState {
     /// (decision 15). Without it `bp_crypto::open` refuses one, which also
     /// covers a file replaced by a costlier one since it was asked about.
     fn unlock(&mut self, path: PathBuf, passphrase: &str, agreed_cost: bool) -> bool {
-        let bytes = match std::fs::read(&path) {
-            Ok(bytes) => bytes,
+        let mut file = match std::fs::File::open(&path) {
+            Ok(file) => file,
             Err(e) => {
                 self.error = Some(e.to_string());
                 return false;
             }
         };
+        let mut bytes = Vec::new();
+        if let Err(e) = file
+            .by_ref()
+            .take(self.editable_limit.saturating_add(1))
+            .read_to_end(&mut bytes)
+        {
+            self.error = Some(e.to_string());
+            return false;
+        }
+        if bytes.len() as u64 > self.editable_limit {
+            self.error = Some(format!(
+                "{} is too large to edit (limit {} bytes)",
+                path.display(),
+                self.editable_limit
+            ));
+            return false;
+        }
 
         let opened = if agreed_cost {
             bp_crypto::open_confirmed(&bytes, passphrase)
@@ -2321,14 +2399,26 @@ impl AppState {
         };
         match opened {
             Ok(plain) => {
-                // Lossy rather than refusing: a document that decrypted and
-                // authenticated is the user's own text, and refusing to show
-                // it because one byte is not UTF-8 would strand it inside a
-                // file only this program can open.
-                let text = String::from_utf8_lossy(&plain).into_owned();
+                let file = match bp_files::decode_bytes(&path, plain) {
+                    Ok(file) => file,
+                    Err(e) => {
+                        self.error = Some(e.to_string());
+                        return false;
+                    }
+                };
+                let bp_files::LoadedFile {
+                    text,
+                    encoding,
+                    line_ending,
+                    ..
+                } = file;
                 let id = self.workspace.open_path(path.clone(), created_at(&path));
                 self.give_default_profile(id);
                 self.recall_profile(id, &path);
+                if let Some(doc) = self.workspace.get_mut(id) {
+                    doc.set_encoding(encoding);
+                    doc.set_line_ending(line_ending);
+                }
 
                 // Unsaved work from a crashed session, if there is any. This
                 // is the only moment it can be read: the journal is sealed
@@ -2347,6 +2437,7 @@ impl AppState {
                     .insert(id, zeroize::Zeroizing::new(passphrase.to_owned()));
                 self.mark_in_step(id, &path);
                 self.passphrase_status.clear();
+                self.record_security_event(bp_audit::Event::DocumentUnlocked);
 
                 if recovered.is_some() {
                     // Marked modified, because what is on screen is *not*
@@ -2376,6 +2467,7 @@ impl AppState {
                 // The bar stays up. A wrong passphrase is the expected
                 // failure, and it is indistinguishable from a damaged file --
                 // see `bp_crypto`'s docs for why nothing can do better.
+                self.record_security_event(bp_audit::Event::UnlockFailed { attempt: 1 });
                 self.passphrase_status = e.to_string();
                 self.ask = Some(crate::passphrase::Ask::Unlock { path, agreed_cost });
                 true
@@ -2385,6 +2477,13 @@ impl AppState {
 
     /// Seal `id`'s text to `target` and let the tab adopt it.
     fn encrypt(&mut self, id: DocumentId, target: &Path, passphrase: &str) -> bool {
+        let Some(temporary_files) = self
+            .workspace
+            .get(id)
+            .map(|doc| doc.security().policy_under(self.privacy).temporary_files)
+        else {
+            return false;
+        };
         let sealed = match bp_crypto::seal(
             self.text_of(id).as_bytes(),
             passphrase,
@@ -2397,8 +2496,8 @@ impl AppState {
             }
         };
 
-        match atomic_write(target, &sealed, SaveOptions::default()) {
-            Ok(_) => {
+        match write_document_bytes(target, &sealed, temporary_files) {
+            Ok(()) => {
                 // The tab adopts the encrypted file, so later saves stay
                 // encrypted. Recording the passphrase is what makes the
                 // document encrypted as far as the rest of the shell is
@@ -2550,6 +2649,12 @@ impl AppState {
     }
 
     fn sign(&mut self, document: &Path, key: &bp_crypto::SigningKey) {
+        if self.active_differs_from_disk() {
+            self.error = Some(
+                "cannot sign — the file changed since it was loaded; reload it first".to_owned(),
+            );
+            return;
+        }
         match bp_integrity::sign_file(document, key) {
             Ok(sidecar) => {
                 self.record_security_event(bp_audit::Event::SignatureMade);
@@ -2940,6 +3045,31 @@ fn read_prefix(path: &Path, len: u64) -> std::io::Result<Vec<u8>> {
         .take(len)
         .read_to_end(&mut head)?;
     Ok(head)
+}
+
+fn write_document_bytes(
+    path: &Path,
+    bytes: &[u8],
+    temporary_files: bp_security::TemporaryFiles,
+) -> Result<(), String> {
+    if temporary_files == bp_security::TemporaryFiles::Allowed {
+        return bp_files::atomic_write(path, bytes, bp_files::SaveOptions::default())
+            .map(|_| ())
+            .map_err(|e| e.to_string());
+    }
+
+    use std::io::Write as _;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path).map_err(|e| e.to_string())?;
+    file.write_all(bytes).map_err(|e| e.to_string())?;
+    file.flush().map_err(|e| e.to_string())?;
+    file.sync_all().map_err(|e| e.to_string())
 }
 
 /// Status-bar save state, per specs.md section 3.

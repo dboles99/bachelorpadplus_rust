@@ -91,6 +91,7 @@ pub const SIDECAR_SUFFIX: &str = ".sig";
 /// and so the version is a value in one place rather than a string retyped
 /// wherever somebody writes a reader.
 pub const SIDECAR_MAGIC: &str = "BachelorPad+ signature v1";
+const MAX_SIDECAR_BYTES: u64 = 1024;
 
 /// The only algorithm this version names, spelled the way the standard does.
 const ALGORITHM_NAME: &str = "ed25519";
@@ -230,6 +231,9 @@ impl Sidecar {
 /// draws when it refuses a short signature by length rather than by verdict.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum MalformedSidecar {
+    #[error("this signature file is larger than the supported format")]
+    TooLarge,
+
     /// A `.sig` file is text; this one is not, so it was never one of ours.
     #[error("this is not a text file, so it is not a signature this product wrote")]
     NotText,
@@ -435,10 +439,16 @@ pub fn verify_file(document: &Path, expect: &Expectation) -> Result<Verification
     // file that is not there either.
     let bytes = std::fs::read(document).map_err(IntegrityError::read(document))?;
 
-    let raw = match std::fs::read(&path) {
+    let raw = match read_capped(&path) {
         Ok(raw) => raw,
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
             return Ok(Verification::SignatureMissing { expected_at: path });
+        }
+        Err(e) if e.kind() == io::ErrorKind::InvalidData => {
+            return Ok(Verification::SignatureMalformed {
+                path,
+                reason: MalformedSidecar::TooLarge,
+            });
         }
         Err(e) => return Err(IntegrityError::read(&path)(e)),
     };
@@ -459,6 +469,22 @@ pub fn verify_file(document: &Path, expect: &Expectation) -> Result<Verification
         return Ok(Verification::DoesNotMatch {
             named_signer: sidecar.key,
         });
+    }
+
+    fn read_capped(path: &Path) -> io::Result<Vec<u8>> {
+        use std::io::Read as _;
+
+        let file = std::fs::File::open(path)?;
+        let mut raw = Vec::new();
+        file.take(MAX_SIDECAR_BYTES.saturating_add(1))
+            .read_to_end(&mut raw)?;
+        if raw.len() as u64 > MAX_SIDECAR_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "signature file is too large",
+            ));
+        }
+        Ok(raw)
     }
 
     match expect {

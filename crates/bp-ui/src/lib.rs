@@ -756,7 +756,7 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
     {
         let cell = Rc::clone(&state);
         let weak = ui.as_weak();
-        ui.on_copied_from_editor(move |text, anchor, cursor, cut| {
+        ui.on_copied_from_editor(move |text, anchor, cursor, _cut| {
             let Some(ui) = weak.upgrade() else {
                 return false;
             };
@@ -766,13 +766,10 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
             let copied_privately = {
                 let mut s = cell.borrow_mut();
                 s.record_copy(selected);
-                // A cut is left to the widget: `TextInput` has no way to
-                // delete a selection from outside that keeps its own undo
-                // history intact. So a private *cut* in this view reaches
-                // the OS clipboard unmarked -- a known gap, recorded in the
-                // release plan, closed when the default view's editing moves
-                // to Rust.
-                !cut && s.keep_clipboard_private() && set_os_clipboard(selected, true)
+                // The widget still performs the deletion for a cut, but a
+                // private cut must replace its unmarked clipboard entry with
+                // one carrying the same privacy flag as a copy.
+                s.keep_clipboard_private() && set_os_clipboard(selected, true)
             };
             refresh(&ui, &mut cell.borrow_mut(), state::PushText::No);
             copied_privately

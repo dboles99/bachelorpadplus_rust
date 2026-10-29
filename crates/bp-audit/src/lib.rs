@@ -44,7 +44,7 @@ mod passphrase;
 
 pub use passphrase::PassphraseSealer;
 
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions, TryLockError};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -735,6 +735,7 @@ pub enum AuditError {
 pub struct AuditLog {
     path: PathBuf,
     records: Vec<Record>,
+    lock: File,
 }
 
 impl AuditLog {
@@ -760,8 +761,55 @@ impl AuditLog {
     /// or [`AuditError::OutOfOrder`] if it has been damaged or edited, and
     /// [`AuditError::Sealed`] if it holds sealed lines and no key was given.
     pub fn open(path: PathBuf, sealer: Option<&dyn Sealer>) -> Result<Self, AuditError> {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent).map_err(|source| AuditError::Io {
+                path: path.clone(),
+                source,
+            })?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+                    .map_err(|source| AuditError::Io {
+                        path: path.clone(),
+                        source,
+                    })?;
+            }
+        }
+        let lock_path = path.with_extension("lock");
+        let mut lock_options = OpenOptions::new();
+        lock_options.read(true).write(true).create(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            lock_options.mode(0o600);
+        }
+        let lock = lock_options.open(&lock_path).map_err(|source| AuditError::Io {
+            path: lock_path.clone(),
+            source,
+        })?;
+        match lock.try_lock() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => {
+                return Err(AuditError::Io {
+                    path: path.clone(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::WouldBlock,
+                        "another process is writing the security history",
+                    ),
+                });
+            }
+            Err(TryLockError::Error(source)) => {
+                return Err(AuditError::Io {
+                    path: lock_path,
+                    source,
+                });
+            }
+        }
         let records = Self::read(&path, sealer)?;
-        Ok(Self { path, records })
+        Ok(Self { path, records, lock })
     }
 
     /// Where the history is kept, so the UI can say.
@@ -870,11 +918,20 @@ impl AuditLog {
         {
             std::fs::create_dir_all(parent).map_err(io)?;
         }
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)
-            .map_err(io)?;
+        let mut options = OpenOptions::new();
+        options.create(true).append(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&self.path).map_err(io)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(0o600))
+                .map_err(io)?;
+        }
 
         let mut bytes = String::with_capacity(line.len() + 1);
         bytes.push_str(line);
@@ -1297,7 +1354,7 @@ mod tests {
         for secret in secrets {
             assert!(
                 !written.contains(secret),
-                "the audit file contains {secret:?}"
+                "the audit file contains a test fixture"
             );
         }
     }

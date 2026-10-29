@@ -65,6 +65,11 @@ pub fn directory() -> Option<PathBuf> {
 /// to start an editor.
 pub fn open_log(dir: &Path) -> Option<File> {
     std::fs::create_dir_all(dir).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).ok()?;
+    }
     let path = dir.join(LOG_FILE);
     if std::fs::metadata(&path).is_ok_and(|m| m.len() > ROTATE_AT_BYTES) {
         let mut previous = path.as_os_str().to_owned();
@@ -72,7 +77,20 @@ pub fn open_log(dir: &Path) -> Option<File> {
         // Losing the older of two logs is the rotation working.
         let _ = std::fs::rename(&path, PathBuf::from(previous));
     }
-    OpenOptions::new().create(true).append(true).open(path).ok()
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(&path).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).ok()?;
+    }
+    Some(file)
 }
 
 /// Send `tracing` output to the console and, when there is one, the log file.
@@ -135,6 +153,11 @@ pub fn install_crash_hook(dir: Option<PathBuf>) {
 /// Write one crash report and return where it went.
 fn write_crash_report(dir: &Path, info: &std::panic::PanicHookInfo<'_>) -> Option<PathBuf> {
     std::fs::create_dir_all(dir).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).ok()?;
+    }
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
@@ -160,7 +183,14 @@ fn write_crash_report(dir: &Path, info: &std::panic::PanicHookInfo<'_>) -> Optio
         .unwrap_or("unnamed")
         .to_owned();
 
-    let mut file = File::create(&path).ok()?;
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&path).ok()?;
     let _ = writeln!(
         file,
         "BachelorPad+ {version} crashed\n\

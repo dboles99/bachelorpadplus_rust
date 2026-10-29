@@ -350,6 +350,19 @@ fn doi_body_len(text: &str) -> Option<usize> {
 /// identifier as `10.1000/(a)b`.
 fn trim_trailing_punctuation(text: &str) -> &str {
     let mut end = text.len();
+    let mut opens = [0usize; 3];
+    let mut closes = [0usize; 3];
+    for ch in text.chars() {
+        match ch {
+            '(' => opens[0] += 1,
+            ')' => closes[0] += 1,
+            '[' => opens[1] += 1,
+            ']' => closes[1] += 1,
+            '{' => opens[2] += 1,
+            '}' => closes[2] += 1,
+            _ => {}
+        }
+    }
     loop {
         let slice = &text[..end];
         let Some(last) = slice.chars().next_back() else {
@@ -357,13 +370,19 @@ fn trim_trailing_punctuation(text: &str) -> &str {
         };
         let drop = match last {
             '.' | ',' | ';' | ':' | '"' | '\'' => true,
-            ')' => slice.matches('(').count() < slice.matches(')').count(),
-            ']' => slice.matches('[').count() < slice.matches(']').count(),
-            '}' => slice.matches('{').count() < slice.matches('}').count(),
+            ')' => opens[0] < closes[0],
+            ']' => opens[1] < closes[1],
+            '}' => opens[2] < closes[2],
             _ => false,
         };
         if !drop {
             return slice;
+        }
+        match last {
+            ')' => closes[0] -= 1,
+            ']' => closes[1] -= 1,
+            '}' => closes[2] -= 1,
+            _ => {}
         }
         end -= last.len_utf8();
     }

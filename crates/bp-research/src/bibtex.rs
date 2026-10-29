@@ -32,7 +32,7 @@
 //! `bp-secrets`: one linear pass with no backtracking, so a pathological
 //! `.bib` cannot become a hang.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write as _;
 
 use crate::model::{Entry, EntryKind, Reference};
@@ -197,6 +197,7 @@ const BUILTIN_MACROS: &[(&str, &str)] = &[
 pub fn parse(source: &str) -> Result<Bibliography, BibtexError> {
     let mut scanner = Scanner::new(source);
     let mut bibliography = Bibliography::default();
+    let mut keys = HashSet::new();
 
     while scanner.skip_to_entry() {
         let at = scanner.position();
@@ -227,11 +228,11 @@ pub fn parse(source: &str) -> Result<Bibliography, BibtexError> {
             }
             _ => {
                 let entry = scanner.parse_entry(EntryKind::parse(&name), &bibliography.macros)?;
-                if let Some(existing) = bibliography.entry(&entry.key) {
+                if !keys.insert(entry.key.clone()) {
                     return Err(BibtexError {
                         at,
                         kind: BibtexErrorKind::DuplicateKey {
-                            key: existing.key.clone(),
+                            key: entry.key.clone(),
                         },
                     });
                 }
