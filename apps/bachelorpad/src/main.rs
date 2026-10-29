@@ -82,7 +82,10 @@ fn main() -> anyhow::Result<()> {
 
     // CJK input limitation: custom editor surface does not support input-method
     // composition on Slint 1.17.1. This is the trade for retiring --editor-view.
-    notices.push("CJK input composition is not supported in this build (Slint 1.17.1 limitation)".to_string());
+    notices.push(
+        "CJK input composition is not supported in this build (Slint 1.17.1 limitation)"
+            .to_string(),
+    );
 
     for notice in &notices {
         tracing::warn!("config: {notice}");
@@ -113,6 +116,14 @@ fn main() -> anyhow::Result<()> {
         .collect();
 
     tracing::info!("starting BachelorPad+");
+
+    // Build experimental label for status bar if any flags are active
+    let experimental_label = if loaded.config.experimental.is_empty() {
+        String::new()
+    } else {
+        loaded.config.experimental.join(", ")
+    };
+
     bp_ui::run_with(bp_ui::RunOptions {
         files,
         line,
@@ -133,6 +144,7 @@ fn main() -> anyhow::Result<()> {
         // Custom editor surface is now the default. CJK input composition
         // is not supported on Slint 1.17.1 (notice shown at startup).
         editor_view: true,
+        experimental_label,
     })?;
     Ok(())
 }

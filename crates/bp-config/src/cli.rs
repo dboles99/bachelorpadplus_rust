@@ -188,6 +188,12 @@ pub const FLAGS: &[Flag] = &[
         section: Section::Development,
     },
     Flag {
+        names: &["experimental"],
+        value: Some("flag"),
+        summary: "Enable an experimental feature by name.",
+        section: Section::Development,
+    },
+    Flag {
         names: &["latency-probe"],
         value: None,
         summary: "Run the input-latency probe, then exit.",
@@ -287,6 +293,20 @@ pub fn line(args: &[String]) -> Result<Option<usize>, String> {
         Ok(n) if n >= 1 => Ok(Some(n)),
         _ => Err(value.to_owned()),
     }
+}
+
+/// Extract the list of experimental flags from `--experimental=` arguments.
+pub fn experimental(args: &[String]) -> Vec<String> {
+    let mut flags = Vec::new();
+    for arg in args {
+        if selector(arg) != Some("experimental") {
+            continue;
+        }
+        if let Some((_, value)) = arg.split_once('=') {
+            flags.extend(value.split(',').map(str::to_string));
+        }
+    }
+    flags
 }
 
 /// One line for `--version`, plus the product's description and licence.

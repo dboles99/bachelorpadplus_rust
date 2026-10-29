@@ -138,6 +138,8 @@ pub struct Config {
     /// through everywhere, and the `TAB_WIDTH` constant `bp-ui` currently
     /// hard-codes.
     pub tab_width: u8,
+    /// Experimental flags that persist across restarts.
+    pub experimental: Vec<String>,
     /// Whether the Tab key inserts spaces instead of a literal tab
     /// character.
     pub indent_spaces: bool,
@@ -158,6 +160,7 @@ impl Default for Config {
             // kind of surprise that promise rules out, so opting into spaces
             // is something the user must ask for.
             indent_spaces: false,
+            experimental: Vec::new(),
         }
     }
 }
@@ -246,6 +249,8 @@ pub struct Env {
     /// Kept as text for the same reason as `font_size` -- see
     /// [`apply_indent_spaces`].
     pub indent_spaces: Option<String>,
+    /// Comma-separated list of experimental flags from `BACHELORPAD_EXPERIMENTAL`.
+    pub experimental: Option<String>,
     /// `BACHELORPAD_CONFIG` overrides the config file location.
     pub config_path: Option<String>,
 }
@@ -261,6 +266,7 @@ impl Env {
             font_size: get("BACHELORPAD_FONT_SIZE"),
             tab_width: get("BACHELORPAD_TAB_WIDTH"),
             indent_spaces: get("BACHELORPAD_INDENT_SPACES"),
+            experimental: get("BACHELORPAD_EXPERIMENTAL"),
             config_path: get("BACHELORPAD_CONFIG"),
         }
     }
@@ -284,6 +290,7 @@ struct FileConfig {
     font_size: Option<i64>,
     tab_width: Option<i64>,
     indent_spaces: Option<bool>,
+    experimental: Option<Vec<String>>,
 }
 
 /// Outcome of loading configuration.
@@ -387,6 +394,9 @@ pub fn resolve(file: Option<&str>, env: &Env, args: &[String]) -> (Config, Vec<N
                 if let Some(s) = parsed.indent_spaces {
                     apply_indent_spaces(&mut config, &s.to_string(), &mut notices);
                 }
+                if let Some(e) = parsed.experimental {
+                    config.experimental = e;
+                }
                 // Report keys we ignored, so a typo is visible instead of
                 // silently doing nothing.
                 if let Ok(table) = toml::from_str::<toml::Table>(text) {
@@ -399,6 +409,7 @@ pub fn resolve(file: Option<&str>, env: &Env, args: &[String]) -> (Config, Vec<N
                                 | "font_size"
                                 | "tab_width"
                                 | "indent_spaces"
+                                | "experimental"
                         ) {
                             notices.push(Notice::UnknownKey { key: key.clone() });
                         }
@@ -431,6 +442,9 @@ pub fn resolve(file: Option<&str>, env: &Env, args: &[String]) -> (Config, Vec<N
     if let Some(s) = &env.indent_spaces {
         apply_indent_spaces(&mut config, s, &mut notices);
     }
+    if let Some(e) = &env.experimental {
+        config.experimental = e.split(',').map(str::to_string).collect();
+    }
 
     // --- command line (highest) ----------------------------------------
     //
@@ -439,6 +453,9 @@ pub fn resolve(file: Option<&str>, env: &Env, args: &[String]) -> (Config, Vec<N
     // The lookup covers the flags the shell and `bp-ui` own as well as the
     // six applied here -- which is the only reason it can tell a typo from a
     // flag somebody else acts on.
+    // Collect experimental flags from command line first, as they can appear multiple times
+    let experimental_flags = cli::experimental(args);
+
     for arg in args {
         // Not a flag at all: a file to open, which the shell collects.
         let Some(name) = cli::selector(arg) else {
@@ -473,12 +490,19 @@ pub fn resolve(file: Option<&str>, env: &Env, args: &[String]) -> (Config, Vec<N
             "font-size" => apply_font_size(&mut config, value, &mut notices),
             "tab-width" => apply_tab_width(&mut config, value, &mut notices),
             "indent-spaces" => apply_indent_spaces(&mut config, value, &mut notices),
+            "experimental" => {}
             // A setting-shaped flag `cli` knows and this match does not. It
             // cannot happen while both live in this crate, and if it ever
             // does, silence is the right answer rather than a notice blaming
             // the user for a gap of ours.
             _ => {}
         }
+    }
+
+    // Apply experimental flags from command line (highest precedence)
+    // Override any file or env experimental flags
+    if !experimental_flags.is_empty() {
+        config.experimental = experimental_flags;
     }
 
     (config, notices)

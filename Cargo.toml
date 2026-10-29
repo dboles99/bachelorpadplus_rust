@@ -62,7 +62,7 @@ todo = "warn"
 unimplemented = "warn"
 
 [workspace.package]
-version = "0.1.0"
+version = "1.1.1"
 edition = "2024"
 license = "GPL-3.0-only"
 authors = ["BachelorPad+ contributors"]

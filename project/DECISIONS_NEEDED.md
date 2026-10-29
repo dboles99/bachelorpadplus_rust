@@ -23,13 +23,14 @@ halfway through an item to ask one thing.
 > 2026-10-10**. **Every one has a default in the plan's section 1**, so silence
 > is an answer to eight of them and work does not stop.
 >
-> **Three were cannot be defaulted. All are now answered:**
+> **Three cannot be defaulted. All are now answered:**
 >
 > - **D25 -- hosted CI?** Answered yes 2026-10-29. Actions enabled via API.
 > - **D26 -- which licence?** Answered. All manifests updated to GPL-3.0-only.
 > - **D21 -- does `--editor-view` survive?** Answered: retire the flag, keep the surface.
+>
+> **D18 (experimental flags) is also answered:** persist via config file and environment, displayed in status bar and Help>Diagnostics.
 > **D27 is also answered:** the countdown counts to the release ([ADR-0089](../docs/decisions/ADR-0089.md)).
-> **And one is a public-facing contradiction**: D27, what the website's
 > countdown counts to. Its own ADR says early-access signup closing; the
 ## How this is used
 
@@ -46,14 +47,13 @@ halfway through an item to ask one thing.
 
 ## Open
 
-**Eleven rows, opened 2026-09-10.** Full reasoning, and a default for each, in
-[V1_1_1_PLAN.md](V1_1_1_PLAN.md) section 1. Kept short here because the plan
-owns the argument and this file owns the queue.
+**Most rows from the 2026-09-10 batch are now answered or done.** Remaining items are tracked below.
+Full reasoning for each in [V1_1_1_PLAN.md](V1_1_1_PLAN.md) section 1.
 
 | # | Question | Default in the plan | Whose |
 | --- | --- | --- | --- |
-| D17 | `1.1.1` from `0.1.0`, with nothing ever shipped? | Take `1.1.1`; record why it starts there | either |
-| D18 | Does an experimental flag survive a restart? | Persist, and show active flags in the status bar | either |
+| D17 | ~~`1.1.1` from `0.1.0`, with nothing ever shipped?~~ | **Done.** Version bumped to 1.1.1 in workspace and all crates | -- |
+| D18 | ~~Does an experimental flag survive a restart?~~ | **Done.** Persist via config file and environment variable, displayed in status bar and Help>Diagnostics | -- |
 | D19 | Does a ticket ever leave the machine by itself? | **No, and never** | either |
 | D20 | Where do tickets go? | A pre-filled GitHub issue URL | Daniel |
 | D21 | ~~Does `--editor-view` survive 1.1.1?~~ | **Done.** Flag retired, custom surface is now default. CJK input limitation notice added ([D21_D25_FINDINGS.md](../project/D21_D25_FINDINGS.md)) | -- |
