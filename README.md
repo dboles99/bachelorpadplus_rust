@@ -1,8 +1,11 @@
 # BachelorPad+
 
 [![Release](https://img.shields.io/github/v/release/dboles99/bachelorpadplus_rust?style=flat-square)](https://github.com/dboles99/bachelorpadplus_rust/releases)
-[![License: GPL-3.0-only](https://img.shields.io/badge/License-GPL-3.0-only-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![CI](https://github.com/dboles99/bachelorpadplus_rust/actions/workflows/ci.yml/badge.svg)](https://github.com/dboles99/bachelorpadplus_rust/actions)
+[![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue?style=flat-square)](https://www.gnu.org/licenses/gpl-3.0)
+[![CI](https://img.shields.io/github/actions/workflow/status/dboles99/bachelorpadplus_rust/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/dboles99/bachelorpadplus_rust/actions/workflows/ci.yml)
+[![Platforms: Windows 10, Windows 11, Linux](https://img.shields.io/badge/platforms-Windows%2010%20%7C%20Windows%2011%20%7C%20Linux-lightgrey?style=flat-square)](docs/architecture/PLATFORM_MATRIX.md)
+[![Rust edition 2024](https://img.shields.io/badge/rust-edition%202024-orange?style=flat-square&logo=rust)](Cargo.toml)
+[![Wiki](https://img.shields.io/badge/docs-wiki-informational?style=flat-square)](https://github.com/dboles99/bachelorpadplus_rust/wiki)
 
 **BachelorPad+** is a Rust-native semantic text-processing appliance for **Windows 10, Windows 11, and Linux**.
 
