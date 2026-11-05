@@ -149,6 +149,10 @@ impl Refusal {
             ),
         }
     }
+
+    fn disabled(&self) -> bool {
+        self.dir.as_os_str().is_empty()
+    }
 }
 
 /// Where checkpoints are kept, and which of them are this instance's to
@@ -463,6 +467,15 @@ const LEGACY_LOCK: &str = "legacy.lock";
 const OWNER_FILE: &str = "owner";
 
 impl Journal {
+    /// A journal that deliberately cannot persist anything.
+    ///
+    /// Used when the platform did not provide a private state directory.
+    /// An empty path makes every write fail before a relative fallback can
+    /// create sensitive recovery files in the process working directory.
+    pub fn disabled() -> Self {
+        Self::new(PathBuf::new())
+    }
+
     /// Use `dir` for checkpoints.
     ///
     /// Touches nothing on disk. The instance lock is taken by the first
@@ -536,13 +549,15 @@ impl Journal {
             Err(TryLockError::Error(_)) => {}
         }
         std::fs::create_dir_all(&own_dir)?;
+        restrict_directory(&self.dir)?;
+        restrict_directory(&own_dir)?;
         let owner = format!(
             "pid {}\nstarted {}\ninstance {}\n",
             std::process::id(),
             now_unix(),
             instance.name
         );
-        std::fs::write(own_dir.join(OWNER_FILE), owner)?;
+        write_private(&own_dir.join(OWNER_FILE), owner.as_bytes())?;
         Ok(own_dir)
     }
 
@@ -554,6 +569,13 @@ impl Journal {
     /// whatever the caller does with it. Only [`Journal::pending`] keeps it
     /// beyond that; everything else goes through [`Journal::glance`].
     fn survey(&self) -> Survey {
+        if self.disabled() {
+            return Survey {
+                mine: Vec::new(),
+                elsewhere: Vec::new(),
+                fresh: Vec::new(),
+            };
+        }
         let mut instance = self.instance();
         let own = Place {
             files: self.dir.join(&instance.name),
@@ -783,6 +805,9 @@ impl Journal {
     /// The file work of a commit. Only ever called with the ticket book
     /// held.
     fn apply(&self, prepared: Prepared) -> std::io::Result<Written> {
+        if self.disabled() {
+            return Ok(Written::Refused(Refusal::ProfileForbidsIt));
+        }
         let id = prepared.ticket.id;
         if prepared.discard_plain {
             remove_if_present(&self.file_for(id))?;
@@ -879,6 +904,10 @@ impl Journal {
     /// and not yet committed: see [`Journal::commit`]. One begun after it is
     /// new work and is written.
     pub fn discard_sealed_for(&self, path: &Path) -> std::io::Result<()> {
+        if self.disabled() {
+            self.tickets().fence(sealed_name(path));
+            return Ok(());
+        }
         let name = sealed_name(path);
         // Fence and removal under one hold of the ticket book, so no commit
         // can slip between them.
@@ -938,6 +967,10 @@ impl Journal {
     /// thrown away. The sealed file itself is keyed by path, so it is
     /// [`Journal::discard_sealed_for`] that removes it.
     pub fn discard(&self, id: u64) -> std::io::Result<()> {
+        if self.disabled() {
+            self.tickets().revoke(id);
+            return Ok(());
+        }
         // Revoke and remove under one hold of the ticket book, so no commit
         // can slip between them.
         let mut tickets = self.tickets();
@@ -1001,6 +1034,9 @@ impl Journal {
     /// work only in memory; never discarding would offer it again at every
     /// launch.
     pub fn discard_recovered(&self) -> std::io::Result<()> {
+        if self.disabled() {
+            return Ok(());
+        }
         self.glance(|survey| self.discard_plaintext(&survey.mine[1..]))
     }
 
@@ -1141,8 +1177,67 @@ fn invalid_data(e: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> std::
 /// leaves the previous file intact. A journal that can be half-written is
 /// worse than no journal, because it looks recoverable.
 fn write_atomically(target: &Path, temp: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    std::fs::write(temp, bytes)?;
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = match options.open(temp) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            let mut unique = temp.as_os_str().to_owned();
+            unique.push(format!("-{:016x}", temp_nonce()));
+            let unique = PathBuf::from(unique);
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut file = options.open(&unique)?;
+            file.write_all(bytes)?;
+            file.sync_all()?;
+            std::fs::rename(unique, target)?;
+            return Ok(());
+        }
+        Err(e) => return Err(e),
+    };
+    file.write_all(bytes)?;
+    file.sync_all()?;
     std::fs::rename(temp, target)
+}
+
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()
+}
+
+fn restrict_directory(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+fn temp_nonce() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let mut hasher = RandomState::new().build_hasher();
+    hasher.write_u64(NEXT.fetch_add(1, Ordering::Relaxed));
+    hasher.write_u64(std::process::id().into());
+    hasher.finish()
 }
 
 fn open_lock(path: &Path) -> std::io::Result<File> {
@@ -1184,7 +1279,9 @@ fn is_checkpoint_file(path: &Path) -> bool {
 }
 
 fn is_temporary(path: &Path) -> bool {
-    path.extension().is_some_and(|e| e == "tmp")
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".tmp") || name.contains(".tmp-"))
 }
 
 fn count_matching(dir: &Path, matches: fn(&Path) -> bool) -> usize {

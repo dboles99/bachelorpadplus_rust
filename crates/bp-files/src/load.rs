@@ -208,6 +208,14 @@ pub fn load(path: &Path) -> Result<LoadedFile, LoadError> {
     load_with_limit(path, EDITABLE_LIMIT_BYTES)
 }
 
+/// Decode bytes that have already been obtained by a caller.
+///
+/// Encrypted documents use this after authentication so their original
+/// encoding is preserved instead of being forced through UTF-8.
+pub fn decode_bytes(path: &Path, bytes: Vec<u8>) -> Result<LoadedFile, LoadError> {
+    decode(path, bytes)
+}
+
 /// [`load`], against a limit other than [`EDITABLE_LIMIT_BYTES`].
 ///
 /// For the shell to pass a limit from Settings, and for tests to exercise

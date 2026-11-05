@@ -200,6 +200,34 @@ pub fn find_all(text: &str, query: &Query) -> Result<Vec<Match>, SearchError> {
         .collect())
 }
 
+/// Find at most `limit` matches, reporting whether more were present.
+pub fn find_all_limited(
+    text: &str,
+    query: &Query,
+    limit: usize,
+) -> Result<(Vec<Match>, bool), SearchError> {
+    if query.is_empty() || limit == 0 {
+        return Ok((Vec::new(), false));
+    }
+    let regex = query.compile()?;
+    let offsets = Offsets::of(text);
+    let mut matches: Vec<Match> = regex
+        .find_iter(text)
+        .take(limit.saturating_add(1))
+        .map(|m| {
+            let start = offsets.char_at(m.start());
+            Match {
+                range: start..offsets.char_at(m.end()),
+                line: offsets.line_at(start),
+                text: m.as_str().to_owned(),
+            }
+        })
+        .collect();
+    let truncated = matches.len() > limit;
+    matches.truncate(limit);
+    Ok((matches, truncated))
+}
+
 /// Count matches without materialising them.
 pub fn count(text: &str, query: &Query) -> Result<usize, SearchError> {
     if query.is_empty() {

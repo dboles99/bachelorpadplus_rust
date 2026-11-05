@@ -63,6 +63,10 @@ impl Recent {
         self.paths.retain(|p| p.exists());
     }
 
+    pub fn remove(&mut self, path: &Path) {
+        self.paths.retain(|p| p != path);
+    }
+
     pub fn parse(text: &str) -> Self {
         // A corrupt list is an empty list. There is nothing here worth
         // interrupting the user over.
@@ -111,11 +115,35 @@ pub fn load_recent(path: &Path) -> Recent {
 pub fn save_recent(path: &Path, recent: &Recent) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(
+                parent,
+                std::fs::Permissions::from_mode(0o700),
+            );
+        }
     }
     let mut temporary = path.as_os_str().to_owned();
     temporary.push(".tmp");
     let temporary = PathBuf::from(temporary);
-    if std::fs::write(&temporary, recent.to_toml()).is_err()
+    let write = {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        options
+            .open(&temporary)
+            .and_then(|mut file| {
+                use std::io::Write as _;
+                file.write_all(recent.to_toml().as_bytes())?;
+                file.sync_all()
+            })
+    };
+    if write.is_err()
         || std::fs::rename(&temporary, path).is_err()
     {
         let _ = std::fs::remove_file(&temporary);
