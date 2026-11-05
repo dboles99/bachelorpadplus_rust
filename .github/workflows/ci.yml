@@ -33,7 +33,7 @@ jobs:
         os: [windows-latest, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # About's commit line and the build script's dirty flag read git.
           fetch-depth: 0
