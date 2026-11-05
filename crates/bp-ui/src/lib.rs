@@ -1059,6 +1059,7 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
             std::time::Duration::from_millis(1200),
             move || {
                 let Some(text) = read_os_clipboard() else {
+                    last_seen = None;
                     return;
                 };
                 // The active document's policy, because you copy out of the
@@ -1079,7 +1080,10 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
                     // document check is the fallback for an in-app copy that
                     // took a path nobody wired; it runs only when the
                     // clipboard has changed, which is what `last_seen` is for.
-                    let added = if last_seen.as_deref() == Some(text.as_str()) {
+                    let added = if matches!(policy, bp_security::Clipboard::Disabled) {
+                        last_seen = None;
+                        false
+                    } else if last_seen.as_deref() == Some(text.as_str()) {
                         false
                     } else {
                         let origin = if s.active_text().contains(text.as_str()) {
@@ -1091,7 +1095,9 @@ pub fn run_with(options: RunOptions) -> Result<(), UiError> {
                         s.clips
                             .observe(&text, policy, origin, record_other_programs)
                     };
-                    last_seen = Some(text);
+                    if !matches!(policy, bp_security::Clipboard::Disabled) {
+                        last_seen = Some(text);
+                    }
                     cleared || added
                 };
                 // Only rebuild the menus when the history actually changed.
