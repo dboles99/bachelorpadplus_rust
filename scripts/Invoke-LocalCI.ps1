@@ -224,7 +224,9 @@ try {
         cargo build --workspace --quiet
         if ($LASTEXITCODE -ne 0) { throw "build failed" }
 
-        $exe = Join-Path $Root 'target/debug/bachelorpad.exe'
+        # Only Windows gives the binary an extension.
+        $exeName = if ($IsWindows) { 'bachelorpad.exe' } else { 'bachelorpad' }
+        $exe = Join-Path $Root "target/debug/$exeName"
         $out = Join-Path ([System.IO.Path]::GetTempPath()) "bpad-selfcheck-$PID.txt"
 
         $proc = Start-Process -FilePath $exe -ArgumentList '--self-check' `
